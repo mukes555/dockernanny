@@ -17,6 +17,16 @@ cd "$repo_dir"
 # rustc applies the last matching remap, so the general one goes first.
 export RUSTFLAGS="--remap-path-prefix=$HOME=/home --remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$repo_dir=/dockernanny"
 
+# The updater artifacts must be signed with the key installed apps trust.
+# It lives outside the repository; CI has the same key as a secret.
+key="${TAURI_KEY_FILE:-$HOME/.tauri/dockernanny.key}"
+if [ ! -f "$key" ]; then
+  echo "no updater signing key at $key (set TAURI_KEY_FILE); the release workflow on GitHub signs with the repository secret instead" >&2
+  exit 1
+fi
+export TAURI_SIGNING_PRIVATE_KEY="$(cat "$key")"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat "$key.password" 2>/dev/null || true)"
+
 echo "==> building with path remapping"
 pnpm tauri build
 

@@ -39,6 +39,9 @@ pub struct Settings {
     /// The small image that reads and writes volumes during a copy; it must
     /// be pullable on both ends (or already there, for offline machines).
     pub helper_image: String,
+    /// Ask the GitHub release for a newer version at start and twice a day.
+    /// Only the version file is fetched; installing always waits for the user.
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -54,6 +57,7 @@ impl Default for Settings {
             pairing_port: pairing::PORT,
             script_port: guide::SERVE_PORT,
             helper_image: DEFAULT_HELPER_IMAGE.into(),
+            check_updates: true,
         }
     }
 }

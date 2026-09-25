@@ -5,6 +5,7 @@ import { HelpPage } from "./app/HelpPage";
 import { NoticeStack } from "./app/NoticeStack";
 import { Welcome } from "./app/Welcome";
 import { TopBar } from "./app/TopBar";
+import { UpdateDialog } from "./app/UpdateDialog";
 import { PrepareGuide } from "./guide/PrepareGuide";
 import { ComputerPage } from "./computer/ComputerPage";
 import { watchFileDrop } from "./lib/dragdrop";
@@ -86,6 +87,18 @@ export default function App() {
     return unsubscribe;
   }, [load, loadSettings, loadHost, loadComputerInfo, setStats, pushDoctorRow, setStatus, setForward, appendOutput, appendLog, setScriptFetched, setHost, appendHostLog, setCopyProgress, appendContainerLog, pushNotice]);
 
+  // A newer release is looked for at start and twice a day, when the setting
+  // allows; offline or failing checks stay quiet (Help has a check that reports).
+  const checkUpdates = useStore((state) => state.settings?.check_updates ?? false);
+  const setUpdate = useStore((state) => state.setUpdate);
+  useEffect(() => {
+    if (!checkUpdates) return;
+    const look = () => void api.checkUpdate().then(setUpdate).catch((err) => console.warn("update check", errorMessage(err)));
+    look();
+    const timer = window.setInterval(look, 12 * 60 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [checkUpdates, setUpdate]);
+
   // A new page starts at its top; the main area is one scroller shared by every page.
   useEffect(() => {
     mainRef.current?.scrollTo({ top: 0 });
@@ -128,6 +141,7 @@ export default function App() {
           </main>
         </div>
         <Welcome />
+        <UpdateDialog />
         <DropOverlay />
         <DropSheet />
         <CopySheet />
