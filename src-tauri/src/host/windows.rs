@@ -1,14 +1,19 @@
-//! Windows: Docker lives inside WSL2 Ubuntu, so everything the other
-//! computer needs is reached through `wsl.exe`. Probes here, steps in
-//! `windows_steps.rs`.
+//! Windows: Docker lives inside a WSL 2 distribution (the one chosen in
+//! Settings), so everything the other computer needs is reached through
+//! `wsl.exe`. Probes here, steps in `windows_steps.rs`.
 
 use std::path::PathBuf;
 use std::process::Child;
 
-use super::platform::{host_key_from_pub, row, run, Installed, NetworkProfile, Outcome, Output, Picture, Platform, Row, Say, SetupOptions, State};
-use super::{windows_steps, DISTRO, MIN_WINDOWS_BUILD, WSL_SSH_PORT};
+use super::platform::{host_key_from_pub, parse_ipconfig, parse_rule, row, run, FirewallRules, Installed, NetworkProfile, Outcome, Output, Picture, Platform, Row, Rule, Say, SetupOptions, State};
+use super::{windows_steps, MIN_WINDOWS_BUILD};
 
-pub struct Windows;
+pub struct Windows {
+    /// The WSL distribution that runs Docker and sshd.
+    pub distro: String,
+    /// Where sshd inside it listens.
+    pub ssh_port: u16,
+}
 
 impl Windows {
     pub fn wsl(&self, args: &[&str]) -> Output {
@@ -17,12 +22,18 @@ impl Windows {
 
     /// A POSIX shell script inside the distro as root, delivered on stdin.
     pub fn in_distro_as_root(&self, script: &str) -> Output {
-        run("wsl.exe", &["-d", DISTRO, "-u", "root", "--", "sh"], Some(script), &[("WSL_UTF8", "1")])
+        run("wsl.exe", &["-d", &self.distro, "-u", "root", "--", "sh"], Some(script), &[("WSL_UTF8", "1")])
     }
 
     /// The same as the distro's default user, with a login shell for PATH.
     pub fn in_distro(&self, script: &str) -> Output {
-        run("wsl.exe", &["-d", DISTRO, "--", "sh", "-l"], Some(script), &[("WSL_UTF8", "1")])
+        run("wsl.exe", &["-d", &self.distro, "--", "sh", "-l"], Some(script), &[("WSL_UTF8", "1")])
+    }
+
+    /// Whether `wsl -l -q` lists the chosen distribution.
+    /// WSL matches distribution names without regard to case, and so does this.
+    pub fn has_distro(&self) -> bool {
+        self.wsl(&["-l", "-q"]).stdout.lines().any(|l| l.trim().eq_ignore_ascii_case(&self.distro))
     }
 
     pub fn powershell(&self, script: &str) -> Output {
@@ -38,12 +49,35 @@ impl Windows {
     }
 
     pub fn distro_user(&self) -> Option<String> {
-        let user = self.wsl(&["-d", DISTRO, "--", "whoami"]).text();
+        let user = self.wsl(&["-d", &self.distro, "--", "whoami"]).text();
         (!user.is_empty() && user != "root").then_some(user)
     }
 
     pub fn firewall_rule_exists(&self, name: &str) -> bool {
         run("netsh", &["advfirewall", "firewall", "show", "rule", &format!("name={name}")], None, &[]).ok
+    }
+
+    /// This app's two firewall rules, read in one PowerShell call without
+    /// admin rights (PowerShell objects, because netsh's text is translated).
+    /// When PowerShell cannot answer, netsh still tells whether each exists.
+    pub fn firewall_rules(&self) -> FirewallRules {
+        let script = "foreach ($name in 'dockerNanny SSH', 'dockerNanny Pair') { $rule = Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue; if ($rule) { $port = ($rule | Get-NetFirewallPortFilter | Select-Object -First 1).LocalPort; \"$name=$port\" } else { \"$name=\" } }";
+        let out = self.powershell(script);
+        let answered = out.ok && out.stdout.contains("dockerNanny SSH=");
+        if !answered {
+            let fallback = |name: &str| if self.firewall_rule_exists(name) { Rule::Open(None) } else { Rule::Missing };
+            return FirewallRules { ssh: fallback("dockerNanny SSH"), pairing: fallback("dockerNanny Pair") };
+        }
+        FirewallRules {
+            ssh: parse_rule(&out.stdout, "dockerNanny SSH"),
+            pairing: parse_rule(&out.stdout, "dockerNanny Pair"),
+        }
+    }
+
+    /// Both rules there and, as far as can be read, on the ports asked for.
+    pub fn firewall_matches(&self, pairing_port: u16) -> bool {
+        let rules = self.firewall_rules();
+        rules.ssh.opens(self.ssh_port) && rules.pairing.opens(pairing_port)
     }
 
     fn total_memory_gb(&self) -> u32 {
@@ -70,10 +104,11 @@ impl Platform for Windows {
 
     fn probe(&self) -> Picture {
         let mut picture = Picture {
-            ssh_port: WSL_SSH_PORT,
+            ssh_port: self.ssh_port,
             total_memory_gb: self.total_memory_gb(),
             ..Default::default()
         };
+        let port = self.ssh_port;
         let build = self.windows_build();
         picture.rows.push(row("Windows", build >= MIN_WINDOWS_BUILD, if build == 0 { "version unknown".into() } else { format!("build {build}") }));
 
@@ -85,8 +120,9 @@ impl Platform for Windows {
             return picture;
         }
 
-        let has_distro = self.wsl(&["-l", "-q"]).stdout.lines().any(|l| l.trim() == DISTRO);
-        picture.rows.push(row("Ubuntu", has_distro, if has_distro { "installed" } else { "not installed (Set up installs it)" }));
+        let has_distro = self.has_distro();
+        let distro_detail = if has_distro { format!("{} installed", self.distro) } else { format!("{} not installed (Set up installs it)", self.distro) };
+        picture.rows.push(row("Linux distribution", has_distro, distro_detail));
         if !has_distro {
             return picture;
         }
@@ -99,16 +135,23 @@ impl Platform for Windows {
         let docker_ok = docker.ok && !docker.text().is_empty();
         picture.rows.push(row("Docker Engine", docker_ok, if docker_ok { docker.text() } else { "not running or not installed".into() }));
 
-        let listening = self.in_distro("ss -ltn 2>/dev/null").stdout.contains(&format!(":{WSL_SSH_PORT} "));
+        let listening = self.in_distro("ss -ltn 2>/dev/null").stdout.contains(&format!(":{port} "));
         picture.sshd_listening = listening;
-        picture.rows.push(row("SSH server", listening, if listening { format!("listening on {WSL_SSH_PORT}") } else { format!("not listening on {WSL_SSH_PORT}") }));
+        picture.rows.push(row("SSH server", listening, if listening { format!("listening on {port}") } else { format!("not listening on {port}") }));
 
         let rsync = self.in_distro("command -v rsync");
         picture.rows.push(row("rsync", rsync.ok && !rsync.text().is_empty(), if rsync.ok { "installed" } else { "missing" }));
 
-        let firewall_open = self.firewall_rule_exists("dockerNanny SSH") && self.firewall_rule_exists("dockerNanny Pair");
+        // Pairing may listen once both rules exist; a port changed since only needs Set up again.
+        let rules = self.firewall_rules();
+        let firewall_open = rules.ssh != Rule::Missing && rules.pairing != Rule::Missing;
         picture.ready_for_pairing = firewall_open;
-        picture.rows.push(row("Firewall", firewall_open, if firewall_open { "ports open" } else { "ports closed (Set up opens them)" }));
+        let firewall_detail = match (&rules.ssh, firewall_open) {
+            (_, false) => "ports closed (Set up opens them)".to_string(),
+            (Rule::Open(Some(open)), true) if *open != port => format!("open for {open}, not {port} (Set up again updates it)"),
+            _ => "ports open".to_string(),
+        };
+        picture.rows.push(row("Firewall", firewall_open && rules.ssh.opens(port), firewall_detail));
 
         picture.network = self.network_profile();
         if let Some(network) = &picture.network {
@@ -135,14 +178,14 @@ impl Platform for Windows {
     }
 
     fn install_key(&self, key: &str) -> Result<Installed, String> {
-        let user = self.distro_user().ok_or("Ubuntu has no user yet; run Set up first")?;
+        let user = self.distro_user().ok_or_else(|| format!("{} has no user yet; run Set up first", self.distro))?;
         let out = self.in_distro_as_root(&super::platform::authorized_keys_script(&user, key));
         if !out.ok || !out.stdout.contains("dockernanny-key-ok") {
             return Err(format!("could not write authorized_keys: {}", out.stderr.trim()));
         }
         Ok(Installed {
             user,
-            port: WSL_SSH_PORT,
+            port: self.ssh_port,
             hostname: self.hostname(),
             host_key: self.host_key(),
         })
@@ -151,7 +194,7 @@ impl Platform for Windows {
     fn spawn_keepalive(&self) -> Result<Option<Child>, String> {
         use std::os::windows::process::CommandExt;
         let child = std::process::Command::new("wsl.exe")
-            .args(["-d", DISTRO, "-e", "sleep", "infinity"])
+            .args(["-d", &self.distro, "-e", "sleep", "infinity"])
             .creation_flags(0x0800_0000)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -163,7 +206,7 @@ impl Platform for Windows {
 
     fn established_peers(&self, port: u16) -> Vec<String> {
         // sshd lives inside the distro, so its connection table is there too.
-        super::paired::parse_established(&self.wsl(&["-d", DISTRO, "--", "ss", "-tn"]).stdout, port)
+        super::paired::parse_established(&self.wsl(&["-d", &self.distro, "--", "ss", "-tn"]).stdout, port)
     }
 
     fn lan_ipv4(&self) -> Vec<String> {
@@ -173,28 +216,4 @@ impl Platform for Windows {
     fn hostname(&self) -> String {
         std::env::var("COMPUTERNAME").unwrap_or_else(|_| "windows".into())
     }
-}
-
-/// `   IPv4 Address. . . . . . . . . . . : 192.0.2.15` lines from ipconfig,
-/// skipping the virtual adapters that only matter to WSL itself.
-pub fn parse_ipconfig(text: &str) -> Vec<String> {
-    let mut addresses = Vec::new();
-    let mut in_virtual_adapter = false;
-    for line in text.lines() {
-        let is_adapter_header = !line.starts_with(' ') && line.contains("adapter");
-        if is_adapter_header {
-            in_virtual_adapter = line.contains("vEthernet") || line.contains("Hyper-V") || line.contains("VirtualBox") || line.contains("VMware");
-            continue;
-        }
-        if in_virtual_adapter || !line.contains("IPv4") {
-            continue;
-        }
-        let Some(address) = line.rsplit(':').next().map(str::trim) else { continue };
-        let address = address.trim_end_matches("(Preferred)").trim();
-        let usable = address.contains('.') && !address.starts_with("127.") && !address.starts_with("169.254.");
-        if usable && !addresses.iter().any(|a| a == address) {
-            addresses.push(address.to_string());
-        }
-    }
-    addresses
 }

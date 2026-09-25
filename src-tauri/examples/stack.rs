@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 use dockernanny_lib::compose;
 use dockernanny_lib::machine::Machine;
-use dockernanny_lib::ssh::{Line, Ssh};
+use dockernanny_lib::job::Line;
+use dockernanny_lib::ssh::Ssh;
 use dockernanny_lib::stack::{shell_quote, Stack};
 use dockernanny_lib::{store, sync};
 
@@ -35,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
         docker_context: false,
         pinned: false,
     };
-    ssh.write_config(std::slice::from_ref(&machine))?;
+    ssh.prepare(std::slice::from_ref(&machine))?;
     let alias = machine.alias();
 
     let project_dir = std::fs::canonicalize(project)?;
@@ -82,6 +83,6 @@ async fn main() -> anyhow::Result<()> {
     println!("  exit {code:?}");
     let removed = ssh.run(&alias, &format!("rm -rf {}", shell_quote(&stack.remote_dir()))).await?;
     println!("  rm exit {:?}", removed.code);
-    ssh.close_master(&alias);
+    ssh.exit_master(&alias, None);
     Ok(())
 }

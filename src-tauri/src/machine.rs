@@ -90,12 +90,16 @@ pub fn context_name(machine: &Machine) -> String {
 /// the generated ssh config. Docker itself resolves the alias, so the user's
 /// `~/.ssh/config` must `Include` that file for the context to work.
 pub async fn set_docker_context(machine: &Machine, enabled: bool) -> anyhow::Result<()> {
+    // Docker on Windows would reach the machine with Windows' own ssh, which
+    // knows neither the alias nor the key; that is left for a later version.
+    let supported = !cfg!(windows);
+    anyhow::ensure!(!enabled || supported, "a Docker context for a machine is not available on Windows yet; use the ssh line from this dialog inside WSL");
     let name = context_name(machine);
-    let _ = tokio::process::Command::new("docker").args(["context", "rm", "-f", &name]).output().await;
+    let _ = crate::tools::native("docker").args(["context", "rm", "-f", &name]).output().await;
     if !enabled {
         return Ok(());
     }
-    let out = tokio::process::Command::new("docker")
+    let out = crate::tools::native("docker")
         .args(["context", "create", &name, "--docker"])
         .arg(format!("host=ssh://{}", machine.alias()))
         .arg("--description")
@@ -124,10 +128,13 @@ pub async fn poll(ssh: &Ssh, machine: &Machine) -> MachineStats {
     }
 }
 
-/// The same probe on this computer, through `sh`.
+/// The same probe on this computer, through `sh`. On Windows that `sh` is
+/// inside WSL, which answers the way a Windows machine does over ssh (the
+/// parsers already read its battery and Windows version lines); memory and
+/// disk are then the WSL VM's.
 pub async fn probe_this_computer() -> Probe {
     use tokio::io::AsyncWriteExt;
-    let spawned = tokio::process::Command::new("sh")
+    let spawned = crate::tools::unix("sh")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())

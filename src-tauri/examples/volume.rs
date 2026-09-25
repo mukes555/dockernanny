@@ -9,7 +9,8 @@ use dockernanny_lib::copy::endpoint::Site;
 use dockernanny_lib::copy::progress::Tracker;
 use dockernanny_lib::copy::transfer::copy_volume;
 use dockernanny_lib::copy::{EndpointRef, Report, Sink};
-use dockernanny_lib::ssh::{Line, Ssh};
+use dockernanny_lib::job::Line;
+use dockernanny_lib::ssh::Ssh;
 use dockernanny_lib::stack::Phase;
 use dockernanny_lib::store;
 
@@ -33,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
         docker_context: false,
         pinned: false,
     };
-    ssh.write_config(std::slice::from_ref(&machine))?;
+    ssh.prepare(std::slice::from_ref(&machine))?;
     let alias = machine.alias();
 
     let docker = |args: &[&str]| {
@@ -69,6 +70,6 @@ async fn main() -> anyhow::Result<()> {
     println!("== cleanup");
     let _ = ssh.run(&alias, "docker volume rm -f dn-example_data >/dev/null").await;
     docker(&["volume", "rm", "-f", "dn-volume-src"])?;
-    ssh.close_master(&alias);
+    ssh.exit_master(&alias, None);
     Ok(())
 }

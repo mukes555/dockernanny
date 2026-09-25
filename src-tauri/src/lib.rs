@@ -8,6 +8,7 @@ pub mod doctor;
 pub mod forward;
 pub mod guide;
 pub mod host;
+pub mod job;
 pub mod machine;
 pub mod copy;
 pub mod pairing;
@@ -17,6 +18,7 @@ pub mod ssh;
 pub mod stack;
 pub mod store;
 pub mod sync;
+pub mod tools;
 pub mod tray;
 
 use std::collections::HashMap;
@@ -27,8 +29,9 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tracing_subscriber::EnvFilter;
 
 use forward::{ForwardState, Forwarder};
+use job::JobHandle;
 use machine::MachineStats;
-use ssh::{JobHandle, Ssh};
+use ssh::Ssh;
 use stack::StackStatus;
 use store::Store;
 
@@ -94,10 +97,13 @@ pub fn run() {
             commands::list_machines,
             commands::machine_stats,
             commands::app_home,
+            commands::terminal_info,
+            commands::wsl_distros,
             commands::computer::computer_name,
             commands::computer::computer_info,
             commands::computer::computer_readiness,
             commands::computer::generate_key,
+            commands::computer::install_wsl_tools,
             commands::computer::diagnostics,
             commands::computer::reveal_app_file,
             commands::new_machine_id,
@@ -151,21 +157,29 @@ pub fn run() {
                 let state = app.state::<AppState>();
                 state.host.stop();
                 forget_stale_forwarders(&state);
-                ssh::kill_all_children();
+                tools::end_all_children();
                 for machine in state.store.machines() {
-                    state.ssh.close_master(&machine.alias());
+                    state.ssh.exit_master(&machine.alias(), None);
                 }
             }
         });
 }
 
-/// Starts or stops what the settings ask for: the sharing role and the
-/// start-at-login entry. Called at launch and after every save.
+/// Starts or stops what the settings ask for: the WSL distribution the
+/// tools use, the sharing role and the start-at-login entry. Called at
+/// launch and after every save.
 pub fn apply_settings(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     let Some(settings) = state.store.settings() else { return };
+    let distro_changed = tools::configure(&settings.wsl_distro);
+    if distro_changed {
+        // The new distribution needs its own config, key copies and socket folders.
+        if let Err(err) = state.ssh.prepare(&state.store.machines()) {
+            tracing::warn!("the tools could not be prepared in WSL {}: {err:#}", settings.wsl_distro);
+        }
+    }
     if settings.share_this_computer {
-        state.host.start(app, settings.pairing_port);
+        state.host.start(app, host::HostConfig::from_settings(&settings));
     } else {
         state.host.stop();
     }
@@ -192,8 +206,12 @@ pub fn forget_stale_forwarders(state: &AppState) {
 fn boot() -> anyhow::Result<AppState> {
     let home = store::home_dir();
     let store = Store::load(&home)?;
+    tools::configure(&store.settings().unwrap_or_default().wsl_distro);
     let ssh = Ssh::new(&home)?;
-    ssh.write_config(&store.machines())?;
+    // Without WSL on Windows this fails; the app still starts and says what is missing.
+    if let Err(err) = ssh.prepare(&store.machines()) {
+        tracing::warn!("the ssh config could not be written: {err:#}");
+    }
     Ok(AppState {
         store,
         ssh,

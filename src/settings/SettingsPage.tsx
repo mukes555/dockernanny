@@ -77,6 +77,7 @@ export function SettingsPage() {
         </Field>
       </Card>
 
+      {os === "windows" ? <WslCard draft={draft} onCommit={commit} /> : null}
       <Card title="Updates" description="Only the version file of the latest GitHub release is fetched; nothing is installed until you choose to.">
         <Toggle checked={draft.check_updates} onChange={(on) => commit({ check_updates: on })} label="Look for a new version at start and twice a day" />
       </Card>
@@ -194,6 +195,37 @@ function ExcludesField({ value, onCommit }: { value: string[]; onCommit: (exclud
     <Field label="Paths not synced" hint="Comma separated. Applied to new stacks; .git and node_modules are the usual suspects.">
       <TextInput value={text} onChange={(e) => setText(e.target.value)} onBlur={() => onCommit(text.split(",").map((part) => part.trim()).filter(Boolean))} className="mono" />
     </Field>
+  );
+}
+
+/** Windows: the WSL distribution the app works through. ssh and rsync run in
+ * it for "Use other machines"; Docker and sshd run in it when shared. */
+function WslCard({ draft, onCommit }: { draft: Settings; onCommit: (change: Partial<Settings>) => void }) {
+  const [installed, setInstalled] = useState<string[] | null>(null);
+  useEffect(() => {
+    void api
+      .wslDistros()
+      .then(setInstalled)
+      .catch(() => setInstalled([]));
+  }, []);
+  // The saved choice stays selectable even when WSL does not list it (yet).
+  const names = installed && !installed.includes(draft.wsl_distro) ? [draft.wsl_distro, ...installed] : (installed ?? [draft.wsl_distro]);
+  const none = installed !== null && installed.length === 0;
+  return (
+    <Card title="WSL" description="ssh and rsync run inside this Linux distribution. When this computer is shared, Docker and the SSH server run there too.">
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Distribution" hint={none ? "WSL lists none. In PowerShell: wsl --install -d Ubuntu" : "Applies at once. When this computer is shared, run Set up again for the new one."}>
+          <Select value={draft.wsl_distro} onChange={(e) => onCommit({ wsl_distro: e.target.value })}>
+            {names.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {draft.share_this_computer ? <PortField label="SSH port when shared" hint="Run Set up again after changing it." value={draft.wsl_ssh_port} onCommit={(wsl_ssh_port) => onCommit({ wsl_ssh_port })} /> : null}
+      </div>
+    </Card>
   );
 }
 

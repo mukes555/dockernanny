@@ -10,9 +10,14 @@ use std::path::{Path, PathBuf};
 /// The fixed list of things the elevated copy may do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Task {
-    /// Windows: firewall rules for sshd and pairing, power settings, and
-    /// optionally one named network marked Private.
-    Firewall { pairing_port: u16, private_network: Option<String> },
+    /// Windows: firewall rules for sshd and pairing, optionally the power
+    /// settings that keep it awake, and optionally one named network marked Private.
+    Firewall {
+        pairing_port: u16,
+        ssh_port: u16,
+        keep_awake: bool,
+        private_network: Option<String>,
+    },
 }
 
 pub fn log_path() -> PathBuf {
@@ -24,10 +29,15 @@ pub fn log_path() -> PathBuf {
 pub fn task_args(task: &Task, log: &Path) -> Vec<String> {
     let mut args = vec!["--privileged".to_string()];
     match task {
-        Task::Firewall { pairing_port, private_network } => {
+        Task::Firewall { pairing_port, ssh_port, keep_awake, private_network } => {
             args.push("firewall".into());
             args.push("--pairing-port".into());
             args.push(pairing_port.to_string());
+            args.push("--ssh-port".into());
+            args.push(ssh_port.to_string());
+            if *keep_awake {
+                args.push("--keep-awake".into());
+            }
             if let Some(name) = private_network {
                 args.push("--private-network".into());
                 args.push(name.clone());
@@ -48,6 +58,8 @@ pub fn task_from_args(args: &[String]) -> Option<(Task, PathBuf)> {
     let task = match kind.as_str() {
         "firewall" => Task::Firewall {
             pairing_port: value_after("--pairing-port").and_then(|p| p.parse().ok()).unwrap_or(crate::pairing::PORT),
+            ssh_port: value_after("--ssh-port").and_then(|p| p.parse().ok()).unwrap_or(crate::settings::DEFAULT_WSL_SSH_PORT),
+            keep_awake: args.iter().any(|a| a == "--keep-awake"),
             private_network: value_after("--private-network"),
         },
         _ => return None,
@@ -59,7 +71,7 @@ pub fn task_from_args(args: &[String]) -> Option<(Task, PathBuf)> {
 #[cfg(windows)]
 pub fn run_task(task: &Task, log: &Path) -> i32 {
     match task {
-        Task::Firewall { pairing_port, private_network } => super::windows_steps::elevated_batch(&super::windows::Windows, *pairing_port, private_network.as_deref(), log),
+        Task::Firewall { pairing_port, ssh_port, keep_awake, private_network } => super::windows_steps::elevated_batch(*pairing_port, *ssh_port, *keep_awake, private_network.as_deref(), log),
     }
 }
 
@@ -142,11 +154,13 @@ mod tests {
 
     #[test]
     fn task_arguments_round_trip() {
-        let task = Task::Firewall { pairing_port: 47433, private_network: Some("Home Wi-Fi".into()) };
+        let task = Task::Firewall { pairing_port: 47433, ssh_port: 2200, keep_awake: true, private_network: Some("Home Wi-Fi".into()) };
         let args = task_args(&task, Path::new("/tmp/x.log"));
         let (parsed, log) = task_from_args(&args).unwrap();
         assert_eq!(parsed, task);
         assert_eq!(log, PathBuf::from("/tmp/x.log"));
+        let no_power = Task::Firewall { pairing_port: 47433, ssh_port: 2222, keep_awake: false, private_network: None };
+        assert_eq!(task_from_args(&task_args(&no_power, Path::new("/l"))).unwrap().0, no_power);
         assert!(task_from_args(&["--fake".to_string()]).is_none());
         assert!(task_from_args(&["--privileged".to_string(), "format-disk".to_string()]).is_none());
     }

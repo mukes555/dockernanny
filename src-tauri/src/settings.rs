@@ -39,6 +39,12 @@ pub struct Settings {
     /// The small image that reads and writes volumes during a copy; it must
     /// be pullable on both ends (or already there, for offline machines).
     pub helper_image: String,
+    /// Windows only: the WSL distribution that runs ssh and rsync for this
+    /// computer, and Docker and sshd when it is shared.
+    pub wsl_distro: String,
+    /// Windows only: where sshd inside WSL listens when this computer is
+    /// shared, away from a Windows OpenSSH server on 22.
+    pub wsl_ssh_port: u16,
     /// Ask the GitHub release for a newer version at start and twice a day.
     /// Only the version file is fetched; installing always waits for the user.
     pub check_updates: bool,
@@ -57,12 +63,16 @@ impl Default for Settings {
             pairing_port: pairing::PORT,
             script_port: guide::SERVE_PORT,
             helper_image: DEFAULT_HELPER_IMAGE.into(),
+            wsl_distro: DEFAULT_WSL_DISTRO.into(),
+            wsl_ssh_port: DEFAULT_WSL_SSH_PORT,
             check_updates: true,
         }
     }
 }
 
 pub const DEFAULT_HELPER_IMAGE: &str = "alpine:3";
+pub const DEFAULT_WSL_DISTRO: &str = "Ubuntu";
+pub const DEFAULT_WSL_SSH_PORT: u16 = 2222;
 
 impl Settings {
     /// Trims what the user typed and puts a default in place of a port of 0,
@@ -86,8 +96,20 @@ impl Settings {
         let image = self.helper_image.trim();
         let usable = !image.is_empty() && crate::copy::transfer::safe_image(image);
         self.helper_image = if usable { image.to_string() } else { DEFAULT_HELPER_IMAGE.into() };
+        // The name reaches `wsl.exe -d` and the setup script; only what WSL itself allows.
+        let distro = self.wsl_distro.trim();
+        self.wsl_distro = if safe_distro(distro) { distro.to_string() } else { DEFAULT_WSL_DISTRO.into() };
+        if self.wsl_ssh_port == 0 {
+            self.wsl_ssh_port = DEFAULT_WSL_SSH_PORT;
+        }
         self
     }
+}
+
+/// WSL distribution names are letters, digits, dots, dashes and underscores.
+pub fn safe_distro(name: &str) -> bool {
+    let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_');
+    !name.is_empty() && name.len() <= 64 && name.chars().all(allowed)
 }
 
 #[cfg(test)]
@@ -125,6 +147,16 @@ mod tests {
         assert_eq!(typed(" registry.example.com/tools/alpine:3.20 "), "registry.example.com/tools/alpine:3.20");
         assert_eq!(typed(""), "alpine:3", "empty falls back to the default");
         assert_eq!(typed("alpine; rm -rf /"), "alpine:3", "anything unsafe falls back too");
+    }
+
+    #[test]
+    fn the_wsl_distribution_is_a_plain_name() {
+        let typed = |distro: &str| Settings { wsl_distro: distro.into(), wsl_ssh_port: 0, ..Default::default() }.normalised();
+        assert_eq!(typed(" Ubuntu-24.04 ").wsl_distro, "Ubuntu-24.04");
+        assert_eq!(typed("Debian").wsl_distro, "Debian");
+        assert_eq!(typed("").wsl_distro, "Ubuntu");
+        assert_eq!(typed("Ubuntu; calc").wsl_distro, "Ubuntu", "anything else falls back");
+        assert_eq!(typed("Debian").wsl_ssh_port, 2222);
     }
 
     #[test]

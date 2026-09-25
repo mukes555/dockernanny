@@ -33,13 +33,15 @@ tauri-plugin-clipboard-manager = "2.3.3"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 getrandom = "0.3"
+# Reads the tar `docker cp` writes, so listing a local container folder needs no Unix tools.
+tar = { version = "0.4", default-features = false }
 # Updates from the GitHub release: signed, checked on start, installed when the user says so.
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
-# The elevated helper (UAC relaunch) and its token check.
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_Security", "Win32_System_Threading", "Win32_System_Registry"] }
+# The elevated helper (UAC relaunch) and its token check; the job object that ends children with the app.
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_Security", "Win32_System_Threading", "Win32_System_Registry", "Win32_System_JobObjects", "Win32_Storage_FileSystem"] }
 
 [profile.release]
 codegen-units = 16

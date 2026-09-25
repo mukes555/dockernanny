@@ -30,7 +30,8 @@ use progress::Progress;
 use steps::names;
 
 use crate::compose;
-use crate::ssh::{Line, Ssh, Stream};
+use crate::job::{Line, Stream};
+use crate::ssh::Ssh;
 use crate::stack::Phase;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

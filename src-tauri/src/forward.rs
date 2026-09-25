@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
-use std::path::Path;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,13 +13,13 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::watch;
 
 use crate::compose::ServiceState;
 use crate::ssh::Ssh;
 use crate::stack::Stack;
-use crate::AppState;
+use crate::{tools, AppState};
 
 pub const FORWARD_EVENT: &str = "forward:state";
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(12);
@@ -49,10 +48,12 @@ pub struct ForwardEvent {
     pub state: ForwardState,
 }
 
-/// A running forwarder: what it forwards and how to stop it.
+/// A running forwarder: what it forwards, how to stop it, and its task, so a
+/// replacement can wait until it has fully stopped.
 pub struct Forwarder {
     pub ports: Vec<ForwardPort>,
     cancel: watch::Sender<bool>,
+    task: tauri::async_runtime::JoinHandle<()>,
 }
 
 /// Ports that something on this computer already listens on. Both address families
@@ -99,23 +100,18 @@ pub fn reconcile(app: &AppHandle, stack: &Stack, services: &[ServiceState]) {
     if current == desired {
         return;
     }
-    if let Some(old) = forwarders.remove(&stack.id) {
+    let previous = forwarders.remove(&stack.id).map(|old| {
         let _ = old.cancel.send(true);
-    }
+        old.task
+    });
     if desired.is_empty() {
         publish(app, &stack.id, ForwardState::default());
         return;
     }
     let Some(machine) = state.store.machine(&stack.machine_id) else { return };
     let (cancel, cancelled) = watch::channel(false);
-    tauri::async_runtime::spawn(run(app.clone(), stack.id.clone(), machine.alias(), desired.clone(), cancelled));
-    forwarders.insert(
-        stack.id.clone(),
-        Forwarder {
-            ports: desired,
-            cancel,
-        },
-    );
+    let task = tauri::async_runtime::spawn(run(app.clone(), stack.id.clone(), machine.alias(), desired.clone(), cancelled, previous));
+    forwarders.insert(stack.id.clone(), Forwarder { ports: desired, cancel, task });
 }
 
 pub fn stop(app: &AppHandle, stack_id: &str) {
@@ -133,23 +129,18 @@ pub fn exit_all(ssh: &Ssh, stack_ids: impl Iterator<Item = String>, aliases: &Ha
     for stack_id in stack_ids {
         let socket = ssh.forward_socket(&stack_id);
         if let Some(alias) = aliases.get(&stack_id) {
-            let _ = std::process::Command::new("ssh")
-                .arg("-F")
-                .arg(ssh.config_path())
-                .arg("-S")
-                .arg(&socket)
-                .arg("-O")
-                .arg("exit")
-                .arg(alias)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            ssh.exit_master(alias, Some(&socket));
         }
-        let _ = std::fs::remove_file(&socket);
+        tools::remove_file(&socket);
     }
 }
 
-async fn run(app: AppHandle, stack_id: String, alias: String, ports: Vec<ForwardPort>, mut cancelled: watch::Receiver<bool>) {
+async fn run(app: AppHandle, stack_id: String, alias: String, ports: Vec<ForwardPort>, mut cancelled: watch::Receiver<bool>, previous: Option<tauri::async_runtime::JoinHandle<()>>) {
+    // Both use the same control socket: the old forwarder's final "exit"
+    // must not reach this one, so it finishes stopping first.
+    if let Some(previous) = previous {
+        let _ = previous.await;
+    }
     let ssh = app.state::<AppState>().ssh.clone();
     let socket = ssh.forward_socket(&stack_id);
     let mut attempts: u32 = 0;
@@ -195,8 +186,8 @@ async fn run(app: AppHandle, stack_id: String, alias: String, ports: Vec<Forward
     }
 }
 
-fn spawn_ssh(ssh: &Ssh, alias: &str, socket: &Path, ports: &[ForwardPort]) -> anyhow::Result<Child> {
-    let mut cmd = Command::new("ssh");
+fn spawn_ssh(ssh: &Ssh, alias: &str, socket: &str, ports: &[ForwardPort]) -> anyhow::Result<Child> {
+    let mut cmd = tools::unix("ssh");
     cmd.arg("-F").arg(ssh.config_path());
     // -N: no remote command. -M/-S: be a control master on our own socket so a
     // stale copy can be asked to exit. ExitOnForwardFailure turns a taken
@@ -216,7 +207,7 @@ fn spawn_ssh(ssh: &Ssh, alias: &str, socket: &Path, ports: &[ForwardPort]) -> an
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     let child = cmd.spawn()?;
-    crate::ssh::track_child(&child);
+    tools::track(&child);
     Ok(child)
 }
 
@@ -254,24 +245,24 @@ fn capture_last_line(stderr: Option<tokio::process::ChildStderr>) -> Arc<Mutex<S
 }
 
 /// Kills the forwarder and, should anything still answer on its socket,
-/// asks that to exit too, so the ports are free for the replacement.
-async fn stop_child(child: &mut Child, ssh: &Ssh, alias: &str, socket: &Path) {
+/// asks that to exit too, so the ports are free for the replacement. On
+/// Windows the kill only reaches wsl.exe, so the exit request is what ends
+/// the ssh inside WSL; it is always sent, and is harmless when nothing answers.
+async fn stop_child(child: &mut Child, ssh: &Ssh, alias: &str, socket: &str) {
     let _ = child.start_kill();
     let _ = child.wait().await;
-    if socket.exists() {
-        let _ = Command::new("ssh")
-            .arg("-F")
-            .arg(ssh.config_path())
-            .arg("-S")
-            .arg(socket)
-            .args(["-O", "exit", alias])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-        let _ = std::fs::remove_file(socket);
-    }
+    let _ = tools::unix("ssh")
+        .arg("-F")
+        .arg(ssh.config_path())
+        .arg("-S")
+        .arg(socket)
+        .args(["-O", "exit", alias])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+    tools::remove_file(socket);
 }
 
 fn publish(app: &AppHandle, stack_id: &str, state: ForwardState) {

@@ -1,52 +1,23 @@
 //! Every conversation with a remote goes through here: a generated ssh config
-//! with one Host block per machine, commands built from it, and a streaming
-//! runner that turns child output into lines. Nothing else in the app spawns
-//! ssh or rsync directly.
+//! with one Host block per machine, and commands built from it. Nothing else
+//! in the app spawns ssh directly. The processes themselves are started
+//! through `tools` (inside WSL on Windows) and run as a `Job` or to an `Output`.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use anyhow::Context;
-use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, watch};
-use tokio::task::JoinHandle;
+use tokio::process::Command;
 
+use crate::job::{self, Job, Line, Output};
 use crate::machine::Machine;
+use crate::tools;
 
 const CONFIG_FILE: &str = "ssh_config";
 const KNOWN_HOSTS_FILE: &str = "known_hosts";
-/// A line longer than this is cut: a runaway build log must not eat memory.
-const MAX_LINE_BYTES: usize = 64 * 1024;
-
-/// Every child ssh/rsync still running, so quitting the app can end them:
-/// `kill_on_drop` never fires when the process simply exits.
-static CHILDREN: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
-
-pub fn track_child(child: &Child) {
-    if let Some(pid) = child.id() {
-        CHILDREN.lock().expect("children lock").push(pid);
-    }
-}
-
-fn untrack_child(pid: Option<u32>) {
-    if let Some(pid) = pid {
-        CHILDREN.lock().expect("children lock").retain(|p| *p != pid);
-    }
-}
-
-/// Sends TERM to every tracked child. Called once, at exit.
-pub fn kill_all_children() {
-    let pids: Vec<String> = CHILDREN.lock().expect("children lock").iter().map(|p| p.to_string()).collect();
-    if pids.is_empty() {
-        return;
-    }
-    let _ = std::process::Command::new("kill").args(&pids).stdout(Stdio::null()).stderr(Stdio::null()).status();
-}
 
 #[derive(Clone)]
 pub struct Ssh {
+    /// The app folder on this computer; the tools may see it elsewhere (`tools::home`).
     home: PathBuf,
 }
 
@@ -54,69 +25,70 @@ impl Ssh {
     pub fn new(home: &Path) -> anyhow::Result<Self> {
         // Control sockets live in short paths on purpose: a unix socket path
         // is capped at 104 bytes on macOS, and rsync's `-e` cannot carry spaces.
-        for dir in ["cm", "fwd"] {
-            let path = home.join(dir);
-            std::fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
-            restrict_to_owner(&path);
-        }
         // %C expands to a 40 character hash, and while ssh creates the socket
         // it adds a 17 character temporary suffix; the whole path must stay
         // under 104 bytes or ssh refuses to start.
-        let longest_socket = home.join("cm").as_os_str().len() + 1 + 40 + 17;
+        let tools_home = tools::home(home);
+        let longest_socket = tools_home.len() + "/cm/".len() + 40 + 17;
         anyhow::ensure!(
             longest_socket < 104,
-            "home folder path is too long for ssh control sockets: {} (set DOCKERNANNY_HOME to a shorter path)",
-            home.display()
+            "home folder path is too long for ssh control sockets: {tools_home} (set DOCKERNANNY_HOME to a shorter path)"
         );
-        Ok(Self {
-            home: home.to_path_buf(),
-        })
+        Ok(Self { home: home.to_path_buf() })
     }
 
-    pub fn config_path(&self) -> PathBuf {
-        self.home.join(CONFIG_FILE)
+    /// Makes the tools' folders and writes the config. At start and after
+    /// the WSL distribution changes; on Windows it fails while WSL is missing,
+    /// which the caller logs rather than refusing to start.
+    pub fn prepare(&self, machines: &[Machine]) -> anyhow::Result<()> {
+        tools::make_private_dirs(&self.home, &["cm", "fwd"])?;
+        self.write_config(machines)
     }
 
-    pub fn known_hosts_path(&self) -> PathBuf {
-        self.home.join(KNOWN_HOSTS_FILE)
+    /// The config as ssh reads it (inside WSL on Windows).
+    pub fn config_path(&self) -> String {
+        format!("{}/{CONFIG_FILE}", tools::home(&self.home))
     }
 
     /// Records the host key learned at pairing. One line per machine; a
     /// machine paired again replaces its old line.
     pub fn pin_host_key(&self, machine: &Machine, key_type: &str, blob: &str) -> anyhow::Result<()> {
-        let path = self.known_hosts_path();
-        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        let existing = std::fs::read_to_string(self.home.join(KNOWN_HOSTS_FILE)).unwrap_or_default();
         let text = merge_known_hosts(&existing, &known_hosts_name(machine), key_type, blob);
-        std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
-        restrict_to_owner(&path);
-        Ok(())
+        tools::write_file(&self.home, KNOWN_HOSTS_FILE, &text)
     }
 
-    pub fn forward_socket(&self, stack_id: &str) -> PathBuf {
-        self.home.join("fwd").join(stack_id)
+    /// The control socket a stack's forwarder listens on, as ssh sees it.
+    pub fn forward_socket(&self, stack_id: &str) -> String {
+        format!("{}/fwd/{stack_id}", tools::home(&self.home))
     }
 
     /// Regenerates the whole config from the machine list. The user's own
     /// `~/.ssh/config` is never touched; they may `Include` this file if they
     /// want the same aliases in their terminal.
     pub fn write_config(&self, machines: &[Machine]) -> anyhow::Result<()> {
-        let control_path = self.home.join("cm").join("%C");
-        let known_hosts = self.known_hosts_path();
+        let tools_home = tools::home(&self.home);
+        let places = Places {
+            control: format!("{tools_home}/cm/%C"),
+            known_hosts: format!("{tools_home}/{KNOWN_HOSTS_FILE}"),
+        };
         let mut text = String::from("# Generated by dockerNanny. Edit machines in the app, not here.\n");
         for machine in machines {
-            text.push_str(&host_block(machine, &control_path, &known_hosts));
+            // One unreadable key must not take every other machine's entry with it.
+            let key = tools::key_for_tools(&self.home, &machine.id, &machine.key_path).unwrap_or_else(|err| {
+                tracing::warn!("key for {}: {err:#}", machine.name);
+                tools::path(Path::new(&machine.key_path))
+            });
+            text.push_str(&host_block(machine, &key, &places));
         }
-        let path = self.config_path();
-        std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
-        restrict_to_owner(&path);
-        Ok(())
+        tools::write_file(&self.home, CONFIG_FILE, &text)
     }
 
     /// `ssh -F <config> <alias> sh -l`: the script arrives on stdin, so no
     /// quoting is ever needed, and the login shell gives the remote's real PATH
     /// (docker in /usr/local/bin on a Mac, ~/.local/bin on Linux).
     pub fn command(&self, alias: &str) -> Command {
-        let mut cmd = Command::new("ssh");
+        let mut cmd = tools::unix("ssh");
         cmd.arg("-F").arg(self.config_path()).arg(alias).arg("sh").arg("-l");
         cmd
     }
@@ -128,30 +100,19 @@ impl Ssh {
     pub fn piped_command(&self, alias: &str, remote: &str) -> anyhow::Result<Command> {
         let breaks_quoting = remote.contains('\'') || remote.contains('\n');
         anyhow::ensure!(!breaks_quoting, "remote command contains characters that are not allowed");
-        let mut cmd = Command::new("ssh");
+        let mut cmd = tools::unix("ssh");
         cmd.arg("-F").arg(self.config_path()).arg(alias).arg(format!("sh -lc '{remote}'"));
         Ok(cmd)
     }
 
     /// What rsync's `-e` receives. No spaces anywhere in the path by design.
     pub fn rsync_transport(&self) -> String {
-        format!("ssh -F {}", self.config_path().display())
+        format!("ssh -F {}", self.config_path())
     }
 
     /// Runs one remote script to completion and captures both streams.
     pub async fn run(&self, alias: &str, script: &str) -> anyhow::Result<Output> {
-        let mut cmd = self.command(alias);
-        // A caller that gives up (a poll with a timeout) must take its ssh
-        // session with it, or a stuck remote command leaves sessions piling up.
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
-        let mut child = cmd.spawn().context("spawn ssh")?;
-        feed_stdin(&mut child, script).await?;
-        let out = child.wait_with_output().await.context("wait for ssh")?;
-        Ok(Output {
-            code: out.status.code(),
-            stdout: String::from_utf8_lossy(&out.stdout).trim_end().to_string(),
-            stderr: String::from_utf8_lossy(&out.stderr).trim_end().to_string(),
-        })
+        job::run_with_stdin(self.command(alias), script).await
     }
 
     /// Like `run`, but streams output lines as they arrive and can be cancelled.
@@ -159,18 +120,15 @@ impl Ssh {
         Job::spawn(self.command(alias), Some(script.to_string()), on_line)
     }
 
-    /// Tears down the shared master connection. Used when a machine is removed
-    /// and at exit; ControlPersist would close it on its own a minute later.
-    pub fn close_master(&self, alias: &str) {
-        let _ = std::process::Command::new("ssh")
-            .arg("-F")
-            .arg(self.config_path())
-            .arg("-O")
-            .arg("exit")
-            .arg(alias)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+    /// Asks the master on `socket` (the shared one when None) to exit. Used
+    /// when a machine is removed, at exit, and for stale forwarders.
+    pub fn exit_master(&self, alias: &str, socket: Option<&str>) {
+        let mut cmd = tools::unix_std("ssh");
+        cmd.arg("-F").arg(self.config_path());
+        if let Some(socket) = socket {
+            cmd.arg("-S").arg(socket);
+        }
+        let _ = cmd.args(["-O", "exit", alias]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
     }
 }
 
@@ -191,11 +149,17 @@ pub fn known_hosts_name(machine: &Machine) -> String {
     }
 }
 
-fn host_block(machine: &Machine, control_path: &Path, known_hosts: &Path) -> String {
+/// Where the config points ssh, as ssh sees those paths.
+struct Places {
+    control: String,
+    known_hosts: String,
+}
+
+fn host_block(machine: &Machine, key: &str, places: &Places) -> String {
     // A pinned machine trusts only the key learned at pairing; a hand-added
     // one trusts the first key it sees, the usual ssh behaviour.
     let trust = if machine.pinned {
-        format!("UserKnownHostsFile {}\n  StrictHostKeyChecking yes", known_hosts.display())
+        format!("UserKnownHostsFile {}\n  StrictHostKeyChecking yes", places.known_hosts)
     } else {
         "StrictHostKeyChecking accept-new".to_string()
     };
@@ -219,187 +183,8 @@ fn host_block(machine: &Machine, control_path: &Path, known_hosts: &Path) -> Str
         host = machine.host,
         user = machine.user,
         port = machine.port,
-        key = machine.key_path,
-        control = control_path.display(),
+        control = places.control,
     )
-}
-
-#[cfg(unix)]
-fn restrict_to_owner(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
-}
-
-#[cfg(not(unix))]
-fn restrict_to_owner(_path: &Path) {}
-
-#[derive(Debug, Clone)]
-pub struct Output {
-    pub code: Option<i32>,
-    pub stdout: String,
-    pub stderr: String,
-}
-
-impl Output {
-    pub fn ok(&self) -> bool {
-        self.code == Some(0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Stream {
-    Stdout,
-    Stderr,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Line {
-    pub stream: Stream,
-    pub text: String,
-}
-
-/// A child process whose output is delivered line by line while it runs.
-/// `cancel` kills it; `wait` gives the exit code.
-pub struct Job {
-    cancel: watch::Sender<bool>,
-    done: JoinHandle<anyhow::Result<Option<i32>>>,
-}
-
-/// The part of a job that can be kept in a registry: enough to cancel it and
-/// to tell afterwards whether it was cancelled rather than failed.
-#[derive(Clone)]
-pub struct JobHandle {
-    cancel: watch::Sender<bool>,
-}
-
-impl JobHandle {
-    pub fn cancel(&self) {
-        let _ = self.cancel.send(true);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        *self.cancel.borrow()
-    }
-}
-
-impl Job {
-    pub fn spawn(mut cmd: Command, stdin: Option<String>, on_line: impl FnMut(Line) + Send + 'static) -> anyhow::Result<Self> {
-        let stdin_mode = if stdin.is_some() { Stdio::piped() } else { Stdio::null() };
-        cmd.stdin(stdin_mode)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let child = cmd.spawn().context("spawn process")?;
-        track_child(&child);
-        let (cancel, cancelled) = watch::channel(false);
-        let done = tokio::spawn(async move {
-            let mut child = child;
-            let pid = child.id();
-            if let Some(script) = stdin {
-                feed_stdin(&mut child, &script).await?;
-            }
-            let result = drive(child, cancelled, on_line).await;
-            untrack_child(pid);
-            result
-        });
-        Ok(Self { cancel, done })
-    }
-
-    pub fn handle(&self) -> JobHandle {
-        JobHandle {
-            cancel: self.cancel.clone(),
-        }
-    }
-
-    pub async fn wait(self) -> anyhow::Result<Option<i32>> {
-        self.done.await.context("job task")?
-    }
-}
-
-/// Writes the script and closes the pipe, so the remote shell sees EOF and runs it.
-async fn feed_stdin(child: &mut Child, script: &str) -> anyhow::Result<()> {
-    let mut stdin = child.stdin.take().context("child has no stdin")?;
-    stdin.write_all(script.as_bytes()).await.context("write script")?;
-    stdin.shutdown().await.context("close stdin")?;
-    Ok(())
-}
-
-async fn drive(
-    mut child: Child,
-    mut cancelled: watch::Receiver<bool>,
-    mut on_line: impl FnMut(Line),
-) -> anyhow::Result<Option<i32>> {
-    let (tx, mut rx) = mpsc::channel::<Line>(256);
-    let stdout = tokio::spawn(pump(child.stdout.take(), Stream::Stdout, tx.clone()));
-    let stderr = tokio::spawn(pump(child.stderr.take(), Stream::Stderr, tx));
-
-    let mut code = None;
-    let mut exited = false;
-    // Progress output redraws the same line with `\r`; showing it once is enough.
-    let mut last_text = String::new();
-    loop {
-        tokio::select! {
-            line = rx.recv() => match line {
-                Some(line) => {
-                    if line.text != last_text {
-                        last_text = line.text.clone();
-                        on_line(line);
-                    }
-                }
-                // Both pumps are gone, so every byte has been delivered.
-                None => break,
-            },
-            status = child.wait(), if !exited => {
-                exited = true;
-                code = status.ok().and_then(|s| s.code());
-            }
-            _ = cancelled.changed(), if !exited => {
-                let _ = child.start_kill();
-            }
-        }
-    }
-    let _ = stdout.await;
-    let _ = stderr.await;
-    if !exited {
-        code = child.wait().await.ok().and_then(|s| s.code());
-    }
-    Ok(code)
-}
-
-/// Reads bytes, not lines: `\r` also ends a line so progress bars do not pile
-/// up, and one enormous line is truncated instead of buffered forever.
-async fn pump<R: AsyncRead + Unpin>(reader: Option<R>, stream: Stream, tx: mpsc::Sender<Line>) {
-    let Some(mut reader) = reader else { return };
-    let mut buf = vec![0u8; 8192];
-    let mut line: Vec<u8> = Vec::new();
-    loop {
-        let read = match reader.read(&mut buf).await {
-            Ok(0) | Err(_) => break,
-            Ok(read) => read,
-        };
-        for &byte in &buf[..read] {
-            let ends_line = byte == b'\n' || byte == b'\r';
-            if ends_line {
-                if line.is_empty() {
-                    continue;
-                }
-                let text = String::from_utf8_lossy(&line).into_owned();
-                line.clear();
-                if tx.send(Line { stream, text }).await.is_err() {
-                    return;
-                }
-            } else if line.len() < MAX_LINE_BYTES {
-                line.push(byte);
-            } else if line.len() == MAX_LINE_BYTES {
-                line.extend_from_slice(b" [line truncated]");
-            }
-        }
-    }
-    if !line.is_empty() {
-        let text = String::from_utf8_lossy(&line).into_owned();
-        let _ = tx.send(Line { stream, text }).await;
-    }
 }
 
 #[cfg(test)]
@@ -419,6 +204,13 @@ mod tests {
         }
     }
 
+    fn places() -> Places {
+        Places {
+            control: "/h/cm/%C".into(),
+            known_hosts: "/h/known_hosts".into(),
+        }
+    }
+
     #[test]
     fn known_hosts_names_follow_ssh_convention() {
         assert_eq!(known_hosts_name(&machine(22, true)), "192.0.2.15");
@@ -427,10 +219,11 @@ mod tests {
 
     #[test]
     fn pinned_machines_trust_only_the_pinned_key() {
-        let pinned = host_block(&machine(2222, true), Path::new("/h/cm/%C"), Path::new("/h/known_hosts"));
+        let pinned = host_block(&machine(2222, true), "/k", &places());
         assert!(pinned.contains("StrictHostKeyChecking yes"));
         assert!(pinned.contains("UserKnownHostsFile /h/known_hosts"));
-        let loose = host_block(&machine(2222, false), Path::new("/h/cm/%C"), Path::new("/h/known_hosts"));
+        assert!(pinned.contains("IdentityFile \"/k\""));
+        let loose = host_block(&machine(2222, false), "/k", &places());
         assert!(loose.contains("StrictHostKeyChecking accept-new"));
         assert!(!loose.contains("UserKnownHostsFile"));
     }

@@ -1,18 +1,31 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api, errorMessage } from "../lib/ipc";
-import type { Machine } from "../lib/types";
+import type { Machine, TerminalInfo } from "../lib/types";
 import { useStore } from "../state/store";
 import { Dialog } from "../ui/Dialog";
 import { SpinnerIcon } from "../ui/icons";
 import { Button, CodeBlock } from "../ui/primitives";
 
-/** The same machine from a terminal: the ssh alias, and an optional Docker context. */
+/** The same machine from a terminal: the ssh alias, and an optional Docker
+ * context. On Windows ssh runs inside WSL, so the commands do too, and the
+ * Docker context is not offered yet. */
 export function TerminalDialog({ machine, onClose }: { machine: Machine | null; onClose: () => void }) {
   const appHome = useStore((state) => state.appHome);
+  const os = useStore((state) => state.os);
+  const settings = useStore((state) => state.settings);
   const setMachines = useStore((state) => state.setMachines);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<TerminalInfo | null>(null);
+
+  useEffect(() => {
+    if (!machine) return;
+    void api
+      .terminalInfo()
+      .then(setInfo)
+      .catch(() => setInfo(null));
+  }, [machine]);
 
   const toggle = async (enabled: boolean) => {
     if (!machine) return;
@@ -27,14 +40,37 @@ export function TerminalDialog({ machine, onClose }: { machine: Machine | null; 
     }
   };
 
-  const home = appHome || "~/.dockernanny";
+  const config = info?.ssh_config ?? `${appHome || "~/.dockernanny"}/ssh_config`;
+  // Until the answer arrives (or if it fails), Windows still shows the WSL
+  // commands: the macOS ones do not work there.
+  const distroFromSettings = os === "windows" ? (settings?.wsl_distro ?? "Ubuntu") : null;
+  const wsl = info ? info.wsl_distro : distroFromSettings;
   const contextName = machine ? `dn-${contextSlug(machine.name)}` : "";
+  if (machine && wsl) {
+    return (
+      <Dialog open onClose={onClose} eyebrow="Terminal" title={`Use ${machine.name} from your terminal`} width={520}>
+        <div className="mt-3 space-y-4 text-[13px] text-ink-2">
+          <p>On Windows, dockerNanny runs ssh inside WSL ({wsl}). From PowerShell or any terminal:</p>
+          <CodeBlock code={`wsl -d ${wsl} ssh -F ${config} dn-${machine.id}`} />
+          <p>Inside {wsl}, one line at the top of its ~/.ssh/config makes the short form work there:</p>
+          <CodeBlock code={`Include ${config}`} />
+          <CodeBlock code={`ssh dn-${machine.id}`} />
+          <p className="text-[12px] text-ink-3">A Docker context for this machine is not available on Windows yet.</p>
+          <div className="flex justify-end pt-1">
+            <Button tone="ghost" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+    );
+  }
   return (
     <Dialog open={machine !== null} onClose={onClose} eyebrow="Terminal" title={machine ? `Use ${machine.name} from your terminal` : ""} width={520}>
       {machine ? (
         <div className="mt-3 space-y-4 text-[13px] text-ink-2">
           <p>dockerNanny keeps its ssh settings in its own file and never edits yours. Add one line at the top of ~/.ssh/config and the alias works everywhere:</p>
-          <CodeBlock code={`Include ${home}/ssh_config`} />
+          <CodeBlock code={`Include ${config}`} />
           <CodeBlock code={`ssh dn-${machine.id}`} />
           <p>
             With that line in place, a Docker context lets any terminal talk to the machine's engine directly.{" "}

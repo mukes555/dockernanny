@@ -3,14 +3,17 @@
 # Before this: `wsl --install -d __DISTRO__`, reboot, open __DISTRO__ once and create your user.
 # This script: Docker Engine, sshd on port __PORT__ and rsync inside __DISTRO__ (as root, so no
 # sudo prompts), systemd, that computer's public key, .wslconfig (mirrored networking, VM stays up),
-# firewall rules for the port, lid and sleep settings while plugged in, and a logon task that
-# keeps WSL running. Safe to run again.
+# firewall rules for the port and a logon task that keeps WSL running. Only when chosen in the app:
+# lid and sleep settings while plugged in ($keepAwake), and a Public network marked Private
+# ($makePrivate). Safe to run again.
 
 $ErrorActionPreference = 'Stop'
 $distro = '__DISTRO__'
 $port = __PORT__
 $memory = '__MEMORY__GB'
 $pubkey = '__PUBKEY__'
+$keepAwake = $__KEEP_AWAKE__
+$makePrivate = $__MAKE_PRIVATE__
 
 function Step($text) { Write-Host "`n==> $text" -ForegroundColor Cyan }
 
@@ -74,9 +77,11 @@ memory=$memory
 
 Step "Opening port $port in the firewall"
 $public = Get-NetConnectionProfile | Where-Object { $_.NetworkCategory -eq 'Public' }
-if ($public) {
+if ($public -and $makePrivate) {
   $public | Set-NetConnectionProfile -NetworkCategory Private
   Write-Host "Network '$($public.Name -join ', ')' was marked Public (which blocks everything); it is now Private."
+} elseif ($public) {
+  Write-Host "Network '$($public.Name -join ', ')' is marked Public, which blocks the firewall rule. Mark it Private in Windows settings if you trust it." -ForegroundColor Yellow
 }
 if (-not (Get-NetFirewallRule -DisplayName 'dockerNanny SSH' -ErrorAction SilentlyContinue)) {
   New-NetFirewallRule -DisplayName 'dockerNanny SSH' -Direction Inbound -Protocol TCP -LocalPort $port -Action Allow -Profile Private, Domain | Out-Null
@@ -89,10 +94,14 @@ try {
   Write-Host 'Hyper-V firewall cmdlets are not on this Windows build; skipped.' -ForegroundColor Yellow
 }
 
-Step 'Keeping this machine awake with the lid closed while plugged in'
-powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0 | Out-Null
-powercfg /setactive SCHEME_CURRENT | Out-Null
-powercfg /change standby-timeout-ac 0 | Out-Null
+if ($keepAwake) {
+  Step 'Keeping this machine awake with the lid closed while plugged in'
+  powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0 | Out-Null
+  powercfg /setactive SCHEME_CURRENT | Out-Null
+  powercfg /change standby-timeout-ac 0 | Out-Null
+} else {
+  Write-Host "`nPower settings left as they are: this machine sleeps as it did, and is unreachable while asleep."
+}
 
 Step 'Keeping WSL running after every logon'
 # `-e` instead of `--`: schtasks reads a bare `--` as one of its own options.
@@ -107,7 +116,7 @@ Start-Sleep -Seconds 10
 $listening = (wsl.exe -d $distro -- sh -c "ss -ltn | grep -q ':$port ' && echo yes || echo no").Trim()
 $dockerOk = (wsl.exe -d $distro -- sh -c "docker version --format '{{.Server.Version}}' 2>/dev/null || echo not-running").Trim()
 Write-Host "sshd listening on $port`: $listening    Docker Engine: $dockerOk"
-if ($listening -ne 'yes') { Write-Host 'sshd is not listening yet. Reboot Windows once, then check with: wsl -d Ubuntu -- ss -ltn' -ForegroundColor Yellow }
+if ($listening -ne 'yes') { Write-Host "sshd is not listening yet. Reboot Windows once, then check with: wsl -d $distro -- ss -ltn" -ForegroundColor Yellow }
 
 Step 'Done. In dockerNanny on the other computer, click Add machine and enter:'
 $addresses = Get-NetIPAddress -AddressFamily IPv4 |

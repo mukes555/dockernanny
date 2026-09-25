@@ -111,6 +111,10 @@ pub struct SetupOptions {
     /// Mark this connected Public network as Private (Windows only, with consent).
     #[serde(default)]
     pub make_network_private: Option<String>,
+    /// Change the power settings so the computer stays awake plugged in
+    /// with the lid closed (Windows only; the user can say no).
+    #[serde(default)]
+    pub keep_awake: bool,
     /// The port the firewall opens for pairing; filled from the settings.
     #[serde(default)]
     pub pairing_port: u16,
@@ -194,17 +198,18 @@ pub fn authorized_keys_script(user: &str, key: &str) -> String {
 pub fn host_key_from_pub(text: &str) -> String {
     let mut fields = text.split_whitespace();
     match (fields.next(), fields.next()) {
-        (Some(key_type), Some(blob)) if key_type.starts_with("ssh-") || key_type.starts_with("ecdsa-") => format!("{key_type} {blob}"),
+        // sk- keys live on a hardware security key (FIDO); they are ssh keys too.
+        (Some(key_type), Some(blob)) if key_type.starts_with("ssh-") || key_type.starts_with("ecdsa-") || key_type.starts_with("sk-") => format!("{key_type} {blob}"),
         _ => String::new(),
     }
 }
 
-/// `inet 192.0.2.10 ...` lines from ifconfig, without loopback and link-local.
+/// The address after `inet` in ifconfig, `ip addr` or `ip -o addr` output
+/// (the last puts it mid-line), without loopback and link-local.
 pub fn parse_ifconfig(text: &str) -> Vec<String> {
     let mut addresses = Vec::new();
     for line in text.lines() {
-        let Some(rest) = line.trim_start().strip_prefix("inet ") else { continue };
-        let Some(address) = rest.split_whitespace().next() else { continue };
+        let Some(address) = line.split_whitespace().skip_while(|t| *t != "inet").nth(1) else { continue };
         let address = address.split('/').next().unwrap_or(address);
         let skip = address.starts_with("127.") || address.starts_with("169.254.") || !address.contains('.') || addresses.iter().any(|a| a == address);
         if !skip {
@@ -214,9 +219,101 @@ pub fn parse_ifconfig(text: &str) -> Vec<String> {
     addresses
 }
 
+/// One of the app's Windows firewall rules, as far as it can be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rule {
+    Missing,
+    /// There, opening this port; None when the port could not be read.
+    Open(Option<u16>),
+}
+
+impl Rule {
+    /// Whether it opens `port`. A rule whose port cannot be read is trusted,
+    /// so an unreadable answer never makes Set up ask for admin rights again.
+    pub fn opens(&self, port: u16) -> bool {
+        match self {
+            Rule::Missing => false,
+            Rule::Open(None) => true,
+            Rule::Open(Some(open)) => *open == port,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FirewallRules {
+    pub ssh: Rule,
+    pub pairing: Rule,
+}
+
+/// A `dockerNanny SSH=2222` line from the rules query; an empty value means
+/// there is no such rule, a value that is not one port means it is unreadable.
+pub fn parse_rule(text: &str, name: &str) -> Rule {
+    let prefix = format!("{name}=");
+    let Some(value) = text.lines().find_map(|line| line.trim().strip_prefix(&prefix)) else { return Rule::Missing };
+    if value.trim().is_empty() {
+        return Rule::Missing;
+    }
+    Rule::Open(value.trim().parse().ok())
+}
+
+/// `   IPv4 Address. . . . . . . . . . . : 192.0.2.15` lines from Windows'
+/// ipconfig, skipping the virtual adapters that only matter to WSL itself.
+pub fn parse_ipconfig(text: &str) -> Vec<String> {
+    let mut addresses = Vec::new();
+    let mut in_virtual_adapter = false;
+    for line in text.lines() {
+        let is_adapter_header = !line.starts_with(' ') && line.contains("adapter");
+        if is_adapter_header {
+            in_virtual_adapter = line.contains("vEthernet") || line.contains("Hyper-V") || line.contains("VirtualBox") || line.contains("VMware");
+            continue;
+        }
+        if in_virtual_adapter || !line.contains("IPv4") {
+            continue;
+        }
+        let Some(address) = line.rsplit(':').next().map(str::trim) else { continue };
+        let address = address.trim_end_matches("(Preferred)").trim();
+        let usable = address.contains('.') && !address.starts_with("127.") && !address.starts_with("169.254.");
+        if usable && !addresses.iter().any(|a| a == address) {
+            addresses.push(address.to_string());
+        }
+    }
+    addresses
+}
+
+/// This computer's IPv4 addresses on its networks, whatever the OS.
+pub fn lan_addresses() -> Vec<String> {
+    let text = |program: &str, args: &[&str]| decode(&crate::tools::native_std(program).args(args).output().map(|o| o.stdout).unwrap_or_default());
+    if cfg!(windows) {
+        return parse_ipconfig(&text("ipconfig", &[]));
+    }
+    // Recent Linux distributions ship `ip` and no longer ifconfig.
+    let from_ifconfig = parse_ifconfig(&text("ifconfig", &[]));
+    if !from_ifconfig.is_empty() {
+        return from_ifconfig;
+    }
+    parse_ifconfig(&text("ip", &["-4", "-o", "addr"]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firewall_rules_read_from_one_query() {
+        let text = "dockerNanny SSH=2222\r\ndockerNanny Pair=\r\n";
+        assert_eq!(parse_rule(text, "dockerNanny SSH"), Rule::Open(Some(2222)));
+        assert_eq!(parse_rule(text, "dockerNanny Pair"), Rule::Missing);
+        assert_eq!(parse_rule("dockerNanny SSH=2222,47433\n", "dockerNanny SSH"), Rule::Open(None));
+        assert!(Rule::Open(None).opens(2200), "an unreadable port is trusted");
+        assert!(!Rule::Open(Some(2222)).opens(2200));
+        assert!(!Rule::Missing.opens(2222));
+    }
+
+    #[test]
+    fn ipconfig_skips_virtual_adapters() {
+        let text = "Ethernet adapter vEthernet (WSL):\n\n   IPv4 Address. . . . . . . . . . . : 172.20.0.1\n\nWireless LAN adapter Wi-Fi:\n\n   IPv4 Address. . . . . . . . . . . : 192.0.2.15(Preferred)\n   Autoconfiguration IPv4 Address. . : 169.254.1.1\n";
+        assert_eq!(parse_ipconfig(text), vec!["192.0.2.15".to_string()]);
+    }
 
     #[test]
     fn utf16_and_utf8_both_decode() {
@@ -229,6 +326,7 @@ mod tests {
     fn host_key_keeps_type_and_blob_only() {
         assert_eq!(host_key_from_pub("ssh-ed25519 AAAAC3Nz root@machine\n"), "ssh-ed25519 AAAAC3Nz");
         assert_eq!(host_key_from_pub("garbage"), "");
+        assert_eq!(host_key_from_pub("sk-ssh-ed25519@openssh.com AAAAGnNr alex@studio"), "sk-ssh-ed25519@openssh.com AAAAGnNr");
     }
 
     #[test]
@@ -237,5 +335,7 @@ mod tests {
         assert_eq!(parse_ifconfig(mac), vec!["192.0.2.10".to_string()]);
         let linux = "1: lo\n    inet 127.0.0.1/8 scope host lo\n2: eth0\n    inet 192.0.2.20/24 brd 192.0.2.255 scope global eth0\n    inet6 fe80::1/64 scope link\n";
         assert_eq!(parse_ifconfig(linux), vec!["192.0.2.20".to_string()]);
+        let one_line = "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever\n2: eth0    inet 192.0.2.30/24 brd 192.0.2.255 scope global eth0\\       valid_lft forever\n";
+        assert_eq!(parse_ifconfig(one_line), vec!["192.0.2.30".to_string()]);
     }
 }

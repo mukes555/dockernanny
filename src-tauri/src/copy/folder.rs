@@ -7,12 +7,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use anyhow::Context;
-use tokio::process::Command;
 
 use super::endpoint::{Endpoint, Site};
 use super::Sink;
-use crate::ssh::{Job, Ssh};
+use crate::job::Job;
+use crate::ssh::Ssh;
 use crate::stack::shell_quote;
+use crate::tools;
 
 pub struct Mirrored {
     pub files: u32,
@@ -64,10 +65,11 @@ async fn prepare(ssh: &Ssh, site: &Site) -> anyhow::Result<()> {
 }
 
 /// `dir/` here, `alias:dir/` there. The trailing slash sends the folder's
-/// contents, not the folder itself.
+/// contents, not the folder itself. A local folder is named as rsync sees
+/// it, which on Windows is under `/mnt/<drive>` inside WSL.
 pub fn rsync_path(site: &Site) -> String {
     match &site.endpoint {
-        Endpoint::Local => format!("{}/", site.dir),
+        Endpoint::Local => format!("{}/", tools::path(Path::new(&site.dir))),
         Endpoint::Machine { alias } => format!("{alias}:{}/", site.dir),
     }
 }
@@ -85,7 +87,7 @@ pub fn rsync_args(transport: &str, source: &str, destination: &str, excludes: &[
 }
 
 async fn run_rsync(args: &[String], mut on_line: Sink) -> anyhow::Result<Mirrored> {
-    let mut cmd = Command::new("rsync");
+    let mut cmd = tools::unix("rsync");
     cmd.args(args);
     let files = Arc::new(AtomicU32::new(0));
     let counter = files.clone();

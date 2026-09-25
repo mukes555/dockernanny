@@ -5,6 +5,7 @@ import type { HostSnapshot } from "../lib/types";
 import { useStore } from "../state/store";
 import { SpinnerIcon } from "../ui/icons";
 import { Button, Card, cx, Eyebrow, Toggle } from "../ui/primitives";
+import { SetupChanges } from "./SetupChanges";
 
 /** The sharing role's part of this computer's page: what this computer has,
  * a button that makes it ready, the pairing code for the other computer, and
@@ -64,8 +65,11 @@ export function SharingSections() {
 function StatusSection({ host, onError }: { host: HostSnapshot; onError: (message: string | null) => void }) {
   const settings = useStore((state) => state.settings);
   const saveSettings = useStore((state) => state.saveSettings);
+  const os = useStore((state) => state.os);
   const [memory, setMemory] = useState(0);
   const [makePrivate, setMakePrivate] = useState(false);
+  // Ticked by default because a sleeping computer cannot be reached, but shown before Set up runs.
+  const [keepAwake, setKeepAwake] = useState(true);
   const isWindows = host.os.includes("Windows");
   const allOk = host.rows.every((row) => row.state !== "missing");
   const defaultMemory = host.total_memory_gb > 0 ? Math.max(2, Math.floor(host.total_memory_gb / 2)) : 8;
@@ -81,7 +85,7 @@ function StatusSection({ host, onError }: { host: HostSnapshot; onError: (messag
 
   const setup = () => {
     onError(null);
-    api.hostSetup({ memory_gb: memoryGb, make_network_private: makePrivate ? publicNetwork : null }).catch((err) => onError(errorMessage(err)));
+    api.hostSetup({ memory_gb: memoryGb, make_network_private: makePrivate ? publicNetwork : null, keep_awake: isWindows && keepAwake }).catch((err) => onError(errorMessage(err)));
   };
 
   return (
@@ -102,16 +106,8 @@ function StatusSection({ host, onError }: { host: HostSnapshot; onError: (messag
         <div className={cx("mt-4 whitespace-pre-wrap rounded-lg px-3 py-2 text-[13px] font-medium", host.notice.failed ? "bg-critical/10 text-critical" : "bg-warning/10 text-warning")}>{host.notice.text}</div>
       ) : null}
 
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button tone="primary" onClick={setup} disabled={host.setup_running}>
-          {host.setup_running ? <SpinnerIcon /> : null} {allOk ? "Run set up again" : "Set up this computer"}
-        </Button>
-        {host.setup_running ? <span className="text-[13px] text-ink-2">Working. This can take a few minutes.</span> : null}
-        {settings ? <Toggle checked={settings.start_at_login} onChange={(on) => void saveSettings({ ...settings, start_at_login: on }).catch((err) => onError(errorMessage(err)))} label="Start at login" /> : null}
-      </div>
-
       {isWindows && host.total_memory_gb > 0 ? (
-        <label className="mt-3 flex items-center gap-3 text-[13px] text-ink-2">
+        <label className="mt-4 flex items-center gap-3 text-[13px] text-ink-2">
           <span>
             Docker may use up to {memoryGb} of this computer's {host.total_memory_gb} GB
           </span>
@@ -119,15 +115,15 @@ function StatusSection({ host, onError }: { host: HostSnapshot; onError: (messag
         </label>
       ) : null}
 
-      {publicNetwork ? (
-        <label className="mt-3 flex items-start gap-2 text-[13px] text-ink-2">
-          <input type="checkbox" checked={makePrivate} onChange={(e) => setMakePrivate(e.target.checked)} className="mt-0.5 accent-accent" />
-          <span>
-            Mark the network "{publicNetwork}" as Private. Windows blocks incoming connections on Public networks, so other computers cannot reach this one until then. Only on a
-            network you trust.
-          </span>
-        </label>
-      ) : null}
+      <SetupChanges os={os} open={!allOk} keepAwake={keepAwake} onKeepAwake={setKeepAwake} publicNetwork={publicNetwork} makePrivate={makePrivate} onMakePrivate={setMakePrivate} />
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <Button tone="primary" onClick={setup} disabled={host.setup_running}>
+          {host.setup_running ? <SpinnerIcon /> : null} {allOk ? "Run set up again" : "Set up this computer"}
+        </Button>
+        {host.setup_running ? <span className="text-[13px] text-ink-2">Working. This can take a few minutes.</span> : null}
+        {settings ? <Toggle checked={settings.start_at_login} onChange={(on) => void saveSettings({ ...settings, start_at_login: on }).catch((err) => onError(errorMessage(err)))} label="Start at login" /> : null}
+      </div>
 
       <p className="mt-3 text-[12px] text-ink-3">
         {isWindows ? "Windows asks once for administrator permission. The app is not signed, so it says Unknown publisher; that is expected." : host.os === "macOS" ? "macOS asks for your password once, to turn Remote Login on." : "Anything that needs root is one script, shown here or run through your password prompt."}

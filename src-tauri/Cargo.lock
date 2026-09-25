@@ -918,6 +918,7 @@ dependencies = [
  "notify",
  "serde",
  "serde_json",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
