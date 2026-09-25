@@ -1,0 +1,15 @@
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "8087:80"
+    volumes:
+      - ./html:/usr/share/nginx/html:ro
+  echo:
+    image: hashicorp/http-echo
+    command: ["-text=hello from ${GREETING:-nowhere} ${MISSING_VAR}", "-listen=:5678"]
+    ports:
+      - "8088:5678"
+      - "9099:9099/udp"
+    volumes:
+      - /etc/hosts:/tmp/hosts:ro

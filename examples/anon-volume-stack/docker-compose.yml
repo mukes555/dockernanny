@@ -1,0 +1,16 @@
+# A database that keeps its data in an anonymous volume: the image declares
+# VOLUME /var/lib/postgresql/data and the compose file names none. A plain
+# volume copy would lose every row; a copy must carry the container's own
+# data. Try it: start it, write a row, copy it, read the row over there.
+#
+#   docker compose up -d
+#   docker compose exec db psql -U postgres -c "create table moved(note text); insert into moved values ('hello from before the move');"
+#   ... move it with dockerNanny ...
+#   docker compose exec db psql -U postgres -c "select * from moved;"   # on the machine
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: example
+    ports:
+      - "5499:5432"

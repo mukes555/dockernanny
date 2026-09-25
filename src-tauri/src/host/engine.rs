@@ -1,0 +1,357 @@
+//! The part of the sharing role that keeps working while the window is
+//! hidden: it probes this computer, opens the pairing port when the firewall
+//! allows it, holds the keep-alive, and runs setup on request. It is one
+//! std thread; the page only shows the snapshot it publishes.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use tauri::{AppHandle, Emitter};
+
+use super::keepalive::KeepAlive;
+use super::paired::{self, Connected, PairedComputer};
+use super::pairing_server::{self, Code, Event};
+use super::platform::{Outcome, Picture, Platform, SetupOptions};
+use super::{HostSnapshot, LogLine, Notice, PairingState, LOG_EVENT, SNAPSHOT_EVENT};
+use crate::stack::now_ms;
+use crate::store;
+
+const PROBE_EVERY: Duration = Duration::from_secs(10);
+/// The connection table is cheap to read; inside WSL it is one wsl.exe call.
+const PEERS_EVERY: Duration = Duration::from_secs(5);
+const MAX_LOG_LINES: usize = 600;
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).map(|v| v == "1").unwrap_or(false)
+}
+
+pub enum ToEngine {
+    Probe,
+    Setup(SetupOptions),
+    /// Accept pairing requests for the next ten minutes.
+    ArmPairing,
+    DisarmPairing,
+    Quit,
+}
+
+/// The window's handle on the thread. Dropping it does not stop the thread;
+/// `Quit` does.
+pub struct Engine {
+    pub to_engine: Sender<ToEngine>,
+    pub snapshot: Arc<Mutex<HostSnapshot>>,
+    pub log: Arc<Mutex<Vec<String>>>,
+    stop_listener: Arc<AtomicBool>,
+}
+
+impl Engine {
+    pub fn quit(&self) {
+        let _ = self.to_engine.send(ToEngine::Quit);
+        self.stop_listener.store(true, Ordering::SeqCst);
+    }
+}
+
+pub fn start(app: AppHandle, platform: Arc<dyn Platform>, pairing_port: u16) -> Engine {
+    let (to_engine, requests) = channel::<ToEngine>();
+    let snapshot = Arc::new(Mutex::new(HostSnapshot {
+        os: platform.os_name().to_string(),
+        ..Default::default()
+    }));
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let stop_listener = Arc::new(AtomicBool::new(false));
+    let engine = Engine {
+        to_engine,
+        snapshot: snapshot.clone(),
+        log: log.clone(),
+        stop_listener: stop_listener.clone(),
+    };
+    std::thread::Builder::new()
+        .name("dockernanny-host".into())
+        .spawn(move || {
+            let mut state = Loop {
+                app,
+                platform,
+                pairing_port,
+                snapshot,
+                log,
+                code: Arc::new(Mutex::new(Code::new())),
+                setup_running: Arc::new(AtomicBool::new(false)),
+                keepalive: KeepAlive::new(),
+                picture: Picture::default(),
+                probed: false,
+                addresses: Vec::new(),
+                listening: false,
+                stop_listener,
+                pairing_events: None,
+                pairing_note: None,
+                notice: None,
+                was_armed: false,
+                last_probe: None,
+                published: None,
+                paired: paired::load(&store::home_dir()),
+                connected: Vec::new(),
+                first_seen: HashMap::new(),
+                last_peers: None,
+            };
+            state.run(requests);
+        })
+        .expect("spawn the host thread");
+    engine
+}
+
+struct Loop {
+    app: AppHandle,
+    platform: Arc<dyn Platform>,
+    pairing_port: u16,
+    snapshot: Arc<Mutex<HostSnapshot>>,
+    log: Arc<Mutex<Vec<String>>>,
+    code: Arc<Mutex<Code>>,
+    setup_running: Arc<AtomicBool>,
+    keepalive: KeepAlive,
+    picture: Picture,
+    probed: bool,
+    addresses: Vec<String>,
+    listening: bool,
+    stop_listener: Arc<AtomicBool>,
+    pairing_events: Option<Receiver<Event>>,
+    pairing_note: Option<String>,
+    notice: Option<Notice>,
+    was_armed: bool,
+    last_probe: Option<Instant>,
+    published: Option<HostSnapshot>,
+    paired: Vec<PairedComputer>,
+    connected: Vec<Connected>,
+    /// When each peer address was first seen with a session open, so the
+    /// page can say "since 12:40".
+    first_seen: HashMap<String, u64>,
+    last_peers: Option<Instant>,
+}
+
+impl Loop {
+    fn run(&mut self, requests: Receiver<ToEngine>) {
+        self.say(&format!("sharing started on {}", self.platform.os_name()));
+        self.every_second();
+        loop {
+            match requests.recv_timeout(Duration::from_secs(1)) {
+                Ok(ToEngine::Probe) => self.last_probe = None,
+                Ok(ToEngine::Setup(options)) => self.setup(options),
+                Ok(ToEngine::ArmPairing) => self.arm_pairing(),
+                Ok(ToEngine::DisarmPairing) => self.disarm_pairing(),
+                Ok(ToEngine::Quit) | Err(RecvTimeoutError::Disconnected) => {
+                    self.keepalive.stop();
+                    self.say("sharing stopped");
+                    return;
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+            self.every_second();
+        }
+    }
+
+    fn say(&self, line: &str) {
+        super::log_to_file(line);
+        {
+            let mut log = self.log.lock().expect("host log lock");
+            log.push(line.to_string());
+            if log.len() > MAX_LOG_LINES {
+                let excess = log.len() - MAX_LOG_LINES;
+                log.drain(..excess);
+            }
+        }
+        let _ = self.app.emit(LOG_EVENT, LogLine { line: line.to_string() });
+    }
+
+    fn probe(&mut self) {
+        let started = Instant::now();
+        self.picture = self.platform.probe();
+        self.addresses = self.platform.lan_ipv4();
+        self.probed = true;
+        self.last_probe = Some(Instant::now());
+        let missing: Vec<&str> = self.picture.rows.iter().filter(|r| r.state == super::platform::State::Missing).map(|r| r.name).collect();
+        super::log_to_file(&format!("probe took {:?}; missing: {}", started.elapsed(), if missing.is_empty() { "nothing".to_string() } else { missing.join(", ") }));
+    }
+
+    /// The port opens only once the platform says the firewall allows it.
+    /// Requests are still refused until the user turns pairing on.
+    fn listen_if_ready(&mut self) {
+        if self.listening || !self.picture.ready_for_pairing {
+            return;
+        }
+        let (events_tx, events_rx) = channel::<Event>();
+        let platform = self.platform.clone();
+        let install = move |key: &str| platform.install_key(key);
+        match pairing_server::serve(self.pairing_port, self.code.clone(), install, events_tx, self.stop_listener.clone()) {
+            Ok(_) => {
+                self.listening = true;
+                self.pairing_events = Some(events_rx);
+                self.say(&format!("pairing port {} open; pairing itself is off until you turn it on", self.pairing_port));
+                // Headless tests have no window to click in.
+                if env_flag("DOCKERNANNY_ARM_PAIRING") {
+                    self.arm_pairing();
+                }
+            }
+            Err(err) => self.say(&format!("pairing port {} could not open: {err}", self.pairing_port)),
+        }
+    }
+
+    fn drain_pairing_events(&mut self) {
+        let Some(events) = &self.pairing_events else { return };
+        let notes: Vec<String> = events
+            .try_iter()
+            .map(|event| match event {
+                Event::Paired { name, from, key_type } => {
+                    let computer = PairedComputer { name: name.clone(), address: from.clone(), key_type, paired_at_ms: now_ms() };
+                    match paired::remember(&store::home_dir(), computer) {
+                        Ok(all) => self.paired = all,
+                        Err(err) => super::log_to_file(&format!("paired.json could not be written: {err}")),
+                    }
+                    format!("Paired with {} ({from}). It can use this computer now.", if name.is_empty() { "another computer".into() } else { name })
+                }
+                Event::WrongCode { from, remaining } => format!("Wrong code from {from} ({remaining} tries left before pairing locks)."),
+                Event::Locked { from } => format!("Pairing locked after too many wrong codes from {from}. Turn it on again when you are ready."),
+                Event::Failed(err) => format!("Pairing failed: {err}"),
+            })
+            .collect();
+        for note in notes {
+            self.say(&note);
+            self.pairing_note = Some(note);
+        }
+    }
+
+    fn arm_pairing(&mut self) {
+        let digits = {
+            let mut code = self.code.lock().expect("code lock");
+            code.arm();
+            code.digits.clone()
+        };
+        self.was_armed = true;
+        self.pairing_note = None;
+        self.say(&format!("pairing on for {} minutes", pairing_server::ARMED_FOR.as_secs() / 60));
+        // The code is written to the log only when a test asks for it.
+        if env_flag("DOCKERNANNY_LOG_CODE") {
+            self.say(&format!("pairing code {digits}"));
+        }
+    }
+
+    fn disarm_pairing(&mut self) {
+        self.code.lock().expect("code lock").disarm();
+        self.was_armed = false;
+        self.say("pairing off");
+    }
+
+    fn setup(&mut self, options: SetupOptions) {
+        if self.setup_running.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.notice = None;
+        let platform = self.platform.clone();
+        let flag = self.setup_running.clone();
+        let app = self.app.clone();
+        let log = self.log.clone();
+        let snapshot = self.snapshot.clone();
+        std::thread::spawn(move || {
+            let mut say = move |line: &str| {
+                super::log_to_file(line);
+                log.lock().expect("host log lock").push(line.to_string());
+                let _ = app.emit(LOG_EVENT, LogLine { line: line.to_string() });
+            };
+            let results = platform.setup(&options, &mut say);
+            let notice = results.iter().find_map(|(name, outcome)| match outcome {
+                Outcome::Failed(text) => Some(Notice { text: format!("{name}: {text}"), failed: true }),
+                Outcome::NeedsUser(text) => Some(Notice { text: text.clone(), failed: false }),
+                _ => None,
+            });
+            say(if notice.is_none() { "setup complete" } else { "setup stopped; see the notice" });
+            // The loop picks the notice up on its next tick and probes again.
+            snapshot.lock().expect("host snapshot lock").notice = notice;
+            flag.store(false, Ordering::SeqCst);
+        });
+    }
+
+    fn every_second(&mut self) {
+        let setup_running = self.setup_running.load(Ordering::SeqCst);
+        let probe_due = self.last_probe.map(|t| t.elapsed() >= PROBE_EVERY).unwrap_or(true);
+        if probe_due && !setup_running {
+            self.probe();
+        }
+        if !setup_running {
+            let finished = self.snapshot.lock().expect("host snapshot lock").notice.take();
+            if let Some(notice) = finished {
+                self.notice = Some(notice);
+                self.last_probe = None;
+            }
+        }
+        if self.picture.sshd_listening {
+            if let Some(line) = self.keepalive.tick(self.platform.as_ref()) {
+                self.say(&line);
+            }
+        }
+        self.listen_if_ready();
+        self.drain_pairing_events();
+        self.look_at_peers();
+        let armed = self.code.lock().expect("code lock").is_armed();
+        if self.was_armed && !armed {
+            self.was_armed = false;
+            self.say("pairing off (paired, timed out, or locked)");
+        }
+        self.publish();
+    }
+
+    /// Who has an ssh session open, matched against the paired list for a name.
+    fn look_at_peers(&mut self) {
+        let due = self.last_peers.map(|t| t.elapsed() >= PEERS_EVERY).unwrap_or(true);
+        if !due {
+            return;
+        }
+        self.last_peers = Some(Instant::now());
+        let peers = if self.picture.sshd_listening { self.platform.established_peers(self.picture.ssh_port) } else { Vec::new() };
+        self.first_seen.retain(|address, _| peers.contains(address));
+        self.connected = peers
+            .into_iter()
+            .map(|address| {
+                let since_ms = *self.first_seen.entry(address.clone()).or_insert_with(now_ms);
+                let name = self.paired.iter().find(|p| p.address == address && !p.name.is_empty()).map(|p| p.name.clone());
+                Connected { address, name, since_ms }
+            })
+            .collect();
+    }
+
+    /// Emits the snapshot only when something in it changed.
+    fn publish(&mut self) {
+        let pairing = {
+            let code = self.code.lock().expect("code lock");
+            PairingState {
+                listening: self.listening,
+                armed: code.is_armed(),
+                locked: code.is_locked(),
+                code: code.is_armed().then(|| code.display()),
+                remaining_s: code.remaining().as_secs(),
+                note: self.pairing_note.clone(),
+            }
+        };
+        let fresh = HostSnapshot {
+            os: self.platform.os_name().to_string(),
+            probed: self.probed,
+            rows: self.picture.rows.clone(),
+            user: self.picture.user.clone(),
+            ssh_port: self.picture.ssh_port,
+            ready_for_pairing: self.picture.ready_for_pairing,
+            total_memory_gb: self.picture.total_memory_gb,
+            network: self.picture.network.clone(),
+            addresses: self.addresses.clone(),
+            setup_running: self.setup_running.load(Ordering::SeqCst),
+            notice: self.notice.clone(),
+            pairing,
+            paired: self.paired.clone(),
+            connected: self.connected.clone(),
+        };
+        if self.published.as_ref() == Some(&fresh) {
+            return;
+        }
+        *self.snapshot.lock().expect("host snapshot lock") = fresh.clone();
+        let _ = self.app.emit(SNAPSHOT_EVENT, fresh.clone());
+        self.published = Some(fresh);
+    }
+}

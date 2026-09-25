@@ -1,0 +1,108 @@
+import type { ReactNode } from "react";
+import { AnimatePresence, motion } from "motion/react";
+
+import { api, errorMessage } from "../lib/ipc";
+import { dropTarget, visibleMachines } from "../lib/machines";
+import type { Machine } from "../lib/types";
+import { useStore } from "../state/store";
+import { FolderIcon, LogoMark } from "../ui/icons";
+import { Button } from "../ui/primitives";
+
+function useBrowse() {
+  const readComposeFile = useStore((state) => state.readComposeFile);
+  const pushNotice = useStore((state) => state.pushNotice);
+  return async () => {
+    const chosen = await api.pickComposeFile().catch((err) => {
+      pushNotice(`Could not open the file picker: ${errorMessage(err)}`);
+      return null;
+    });
+    if (chosen) await readComposeFile(chosen);
+  };
+}
+
+/** The machine a drop runs on, the same one everywhere it is named. */
+function useDropTarget(): Machine | undefined {
+  const allMachines = useStore((state) => state.machines);
+  const computerInfo = useStore((state) => state.computerInfo);
+  const stats = useStore((state) => state.stats);
+  const selectedId = useStore((state) => state.selectedMachineId);
+  return dropTarget(visibleMachines(allMachines, computerInfo), stats, selectedId);
+}
+
+/** The empty state: one big target for the first compose file. */
+export function DropHero({ extra }: { extra?: ReactNode }) {
+  const dropError = useStore((state) => state.dropError);
+  const browse = useBrowse();
+  const target = useDropTarget();
+
+  return (
+    <div className="flex h-full items-center justify-center">
+      <div className="w-full max-w-xl rounded-3xl border-2 border-dashed border-hairline bg-surface/40 px-10 py-12 text-center">
+        <LogoMark size={44} className="mx-auto text-accent" />
+        <h1 className="mt-5 text-xl font-semibold tracking-tight text-ink">Drop a docker-compose.yml here</h1>
+        <p className="mx-auto mt-2 max-w-md text-[13px] leading-relaxed text-ink-2">
+          {target ? (
+            <>
+              Or a project folder that has one. The stack runs on <span className="font-medium text-ink">{target.name}</span> and its ports show up on this computer as localhost.
+            </>
+          ) : (
+            <>Or a project folder that has one. Add a machine on the left first, so there is somewhere to run it.</>
+          )}
+        </p>
+        <div className="mt-6 flex justify-center gap-2">
+          <Button onClick={() => void browse()} disabled={!target}>
+            <FolderIcon /> Browse
+          </Button>
+          {extra}
+        </div>
+        {dropError ? <p className="mt-4 text-[12px] text-critical">{dropError}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+/** The slim target shown above existing stacks; named after the machine
+ * whose page is open. */
+export function DropStrip({ machine }: { machine?: Machine }) {
+  const dropError = useStore((state) => state.dropError);
+  const browse = useBrowse();
+  const invitation = machine ? `Drop a compose file or project folder anywhere in the window to run it on ${machine.name}.` : "Drop another compose file or project folder anywhere in the window.";
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-hairline px-4 py-2.5 text-[12px] text-ink-3">
+      <span>{dropError ? <span className="text-critical">{dropError}</span> : invitation}</span>
+      <Button size="sm" tone="ghost" onClick={() => void browse()}>
+        <FolderIcon /> Browse
+      </Button>
+    </div>
+  );
+}
+
+/** Covers the window while a file is dragged over it. */
+export function DropOverlay() {
+  const dragging = useStore((state) => state.dragging);
+  const target = useDropTarget();
+  return (
+    <AnimatePresence>
+      {dragging ? (
+        <motion.div
+          className="pointer-events-none fixed inset-0 z-30 flex items-center justify-center bg-plane/70 backdrop-blur-sm"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+        >
+          <motion.div
+            className="rounded-3xl border-2 border-dashed border-accent bg-surface px-12 py-10 text-center shadow-2xl"
+            initial={{ scale: 0.96 }}
+            animate={{ scale: 1 }}
+            transition={{ type: "spring", stiffness: 380, damping: 30 }}
+          >
+            <LogoMark size={40} className="mx-auto text-accent" />
+            <div className="mt-4 text-lg font-semibold text-ink">{target ? `Drop to run on ${target.name}` : "Drop to preview"}</div>
+            <div className="mt-1 text-[13px] text-ink-2">A compose file, or a folder that has one</div>
+          </motion.div>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
+  );
+}

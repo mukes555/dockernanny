@@ -1,0 +1,186 @@
+@import "tailwindcss";
+
+/* Tokens: surfaces, ink, one accent hue, reserved status colors. Components
+   use these names only, so a theme is one block of variables. */
+:root {
+  color-scheme: dark;
+  --plane: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-2: #222220;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --ink-3: #898781;
+  --hairline: #2c2c2a;
+  --border: rgba(255, 255, 255, 0.1);
+  --accent: #3987e5;
+  --accent-deep: #184f95;
+  --accent-soft: rgba(57, 135, 229, 0.16);
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+}
+
+/* Light tokens twice on purpose: once for the system preference, once for
+   the explicit choice in Settings. Nesting cannot express "or". The grey,
+   green and amber are darker than in the dark theme so small text on the
+   light surface keeps a 4.5:1 contrast. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --plane: #f9f9f7;
+    --surface: #fcfcfb;
+    --surface-2: #f3f2ee;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --ink-3: #6e6d67;
+    --hairline: #e1e0d9;
+    --border: rgba(11, 11, 11, 0.1);
+    --accent: #2a78d6;
+    --accent-deep: #86b6ef;
+    --accent-soft: rgba(42, 120, 214, 0.12);
+    --good: #0a7a0a;
+    --warning: #9a6200;
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --plane: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-2: #f3f2ee;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --ink-3: #6e6d67;
+  --hairline: #e1e0d9;
+  --border: rgba(11, 11, 11, 0.1);
+  --accent: #2a78d6;
+  --accent-deep: #86b6ef;
+  --accent-soft: rgba(42, 120, 214, 0.12);
+  --good: #0a7a0a;
+  --warning: #9a6200;
+}
+
+@theme inline {
+  --color-plane: var(--plane);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-hairline: var(--hairline);
+  --color-line: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-deep: var(--accent-deep);
+  --color-accent-soft: var(--accent-soft);
+  --color-good: var(--good);
+  --color-warning: var(--warning);
+  --color-serious: var(--serious);
+  --color-critical: var(--critical);
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  /* The window never scrolls; panels inside it do. */
+  overflow: hidden;
+  user-select: none;
+}
+
+/* A faint grid and two accent glows give the plane depth without competing with data.
+   Behind everything: a fixed layer without a z-index would paint over buttons and cards. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    radial-gradient(60rem 30rem at 12% -10%, var(--accent-soft), transparent 60%),
+    radial-gradient(40rem 24rem at 100% 110%, var(--accent-soft), transparent 60%),
+    linear-gradient(var(--hairline) 1px, transparent 1px),
+    linear-gradient(90deg, var(--hairline) 1px, transparent 1px);
+  background-size: auto, auto, 48px 48px, 48px 48px;
+  opacity: 0.55;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.35));
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+.selectable {
+  user-select: text;
+}
+/* Every error line uses the critical color; an error is something people
+   copy into a search or an issue, so it can always be selected. */
+[class~="text-critical"] {
+  user-select: text;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--hairline);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--good) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+.pulse {
+  animation: pulse-dot 2.2s ease-out infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+/* Keyboard focus is always visible, in the accent color. In the base layer
+   so a component that draws its own focus (inputs, the dialog panel) wins. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+/* Motion is decoration here; nothing depends on it. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,18 @@
+node_modules
+dist
+dist-ssr
+*.local
+*.log
+
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+
+.tmp/
+target/
+*-handoff.md
+
+# Local editor/agent config, and the private deny-list for scripts/privacy-audit.sh
+.claude/
+.privacy-denylist
