@@ -45,6 +45,9 @@ pub struct Settings {
     /// Windows only: where sshd inside WSL listens when this computer is
     /// shared, away from a Windows OpenSSH server on 22.
     pub wsl_ssh_port: u16,
+    /// Ask the GitHub release for a newer version at start and twice a day.
+    /// Only the version file is fetched; installing always waits for the user.
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -62,6 +65,7 @@ impl Default for Settings {
             helper_image: DEFAULT_HELPER_IMAGE.into(),
             wsl_distro: DEFAULT_WSL_DISTRO.into(),
             wsl_ssh_port: DEFAULT_WSL_SSH_PORT,
+            check_updates: true,
         }
     }
 }
