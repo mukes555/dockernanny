@@ -22,6 +22,7 @@ const defaultSettings = (): Settings => ({
   pairing_port: 47433,
   script_port: 47431,
   helper_image: "alpine:3",
+  check_updates: true,
 });
 
 // A full online reading with a few fields swapped: the shape the backend sends.
@@ -298,6 +299,19 @@ export const mockApi: Api = {
   diagnostics: async () => "dockerNanny 0.3.0 on macos aarch64\nroles: use other machines on, share this computer off\nmachines: 2 (1 online), stacks: 1\nssh: OpenSSH_9.8p1\nrsync: rsync  version 3.2.7\ndocker: 27.3.1\n\n--- end of app.log ---\nINFO copy <this-computer> -> machine-1: done\n",
   revealAppFile: async () => {},
   openLink: async (url) => void window.open(url, "_blank"),
+  // `?update=1` in the address pretends a newer release exists.
+  checkUpdate: async () => {
+    await wait(600);
+    const offered = new URLSearchParams(window.location.search).get("update") === "1";
+    return offered ? { version: "0.3.2", notes: "## Fixed\n\n- A made-up fix, to show the notes.\n- Another one." } : null;
+  },
+  installUpdate: async (onProgress) => {
+    for (let step = 0; step <= 10; step += 1) {
+      await wait(150);
+      onProgress(step / 10);
+    }
+    window.location.reload();
+  },
   doctor: async (machine) => {
     const rows: DoctorRow[] = [
       { key: "ssh", label: "SSH", ok: true, detail: `${machine.user}@${machine.host}:${machine.port} answers`, fix: null },

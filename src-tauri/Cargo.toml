@@ -33,6 +33,9 @@ tauri-plugin-clipboard-manager = "2.3.3"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 getrandom = "0.3"
+# Updates from the GitHub release: signed, checked on start, installed when the user says so.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
 # The elevated helper (UAC relaunch) and its token check.

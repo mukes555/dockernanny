@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import { api, errorMessage } from "../lib/ipc";
-import type { ComputerInfo, CopyProgress, DoctorRow, Fetched, ForwardState, HostOs, HostSnapshot, Machine, MachineStats, OutputLine, Preview, Settings, Stack, StackStatus, Theme } from "../lib/types";
+import type { AvailableUpdate, ComputerInfo, CopyProgress, DoctorRow, Fetched, ForwardState, HostOs, HostSnapshot, Machine, MachineStats, OutputLine, Preview, Settings, Stack, StackStatus, Theme } from "../lib/types";
 
 export type View = "stacks" | "guide" | "settings" | "computer" | "help";
 
@@ -43,6 +43,11 @@ interface State {
   firstRun: boolean;
   /** The welcome, reopened from Help after the first run. */
   welcomeOpen: boolean;
+  /** A newer release the updater found; installing waits for the user. */
+  update: AvailableUpdate | null;
+  updateOpen: boolean;
+  setUpdate: (update: AvailableUpdate | null) => void;
+  setUpdateOpen: (open: boolean) => void;
   /** The Add machine dialog, opened from the rail or from the welcome. */
   addMachineOpen: boolean;
   /** The machine whose page should open with the remove question showing. */
@@ -151,6 +156,8 @@ export const useStore = create<State>((set, get) => ({
   settings: null,
   firstRun: false,
   welcomeOpen: false,
+  update: null,
+  updateOpen: false,
   addMachineOpen: false,
   askRemoveFor: null,
   os: "macos",
@@ -184,6 +191,8 @@ export const useStore = create<State>((set, get) => ({
 
   setView: (view) => set({ view }),
   setWelcomeOpen: (welcomeOpen) => set({ welcomeOpen }),
+  setUpdate: (update) => set({ update }),
+  setUpdateOpen: (updateOpen) => set({ updateOpen }),
   setAddMachineOpen: (addMachineOpen) => set({ addMachineOpen }),
   askRemoveMachine: (id) => set({ askRemoveFor: id, selectedMachineId: id, view: "stacks" }),
   selectMachine: (selectedMachineId) => set({ selectedMachineId, view: "stacks" }),

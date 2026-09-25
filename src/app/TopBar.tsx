@@ -25,6 +25,8 @@ export function TopBar() {
   const view = useStore((state) => state.view);
   const setView = useStore((state) => state.setView);
   const selectMachine = useStore((state) => state.selectMachine);
+  const update = useStore((state) => state.update);
+  const setUpdateOpen = useStore((state) => state.setUpdateOpen);
   // Room for the macOS traffic lights when the native title bar is hidden.
   const leftPad = isTauri && isMac ? "pl-20" : "pl-5";
 
@@ -45,6 +47,11 @@ export function TopBar() {
         <LogoMark className="text-accent" />
         <span className="text-[15px] font-semibold tracking-tight">dockerNanny</span>
         <span className="tabular text-[11px] text-ink-3">v{VERSION}</span>
+        {update ? (
+          <button type="button" onClick={() => setUpdateOpen(true)} className="rounded-full border border-accent bg-accent-soft px-2 py-0.5 text-[11px] font-medium text-accent transition hover:brightness-110" title="See what is new and install it">
+            Update to {update.version}
+          </button>
+        ) : null}
       </div>
       <div data-tauri-drag-region className="flex items-center gap-6">
         <Stat value={`${online}/${machines.length}`} label="machines online" onClick={() => selectMachine(null)} title="Show every machine" />

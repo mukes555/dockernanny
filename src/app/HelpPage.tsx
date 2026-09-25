@@ -43,6 +43,8 @@ export function HelpPage() {
         </div>
       </Card>
 
+      <UpdatesCard />
+
       <Diagnostics onOpenIssue={() => open(`${REPO}/issues/new/choose`)} />
 
       <Card title="Files on this computer" description="Settings, machines, stacks and the log all live in one folder; nothing is kept anywhere else.">
@@ -77,6 +79,46 @@ export function HelpPage() {
         </div>
       </Card>
     </div>
+  );
+}
+
+/** The check the automatic one does quietly, with its answer shown. */
+function UpdatesCard() {
+  const update = useStore((state) => state.update);
+  const setUpdate = useStore((state) => state.setUpdate);
+  const setUpdateOpen = useStore((state) => state.setUpdateOpen);
+  const [checking, setChecking] = useState(false);
+  const [answer, setAnswer] = useState<string | null>(null);
+
+  const checkNow = async () => {
+    setChecking(true);
+    setAnswer(null);
+    try {
+      const found = await api.checkUpdate();
+      setUpdate(found);
+      setAnswer(found ? null : `dockerNanny ${VERSION} is the latest version.`);
+    } catch (err) {
+      setAnswer(`Could not check: ${errorMessage(err)}`);
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <Card title="Updates" description={`This is dockerNanny ${VERSION}. New versions come from the project's GitHub releases.`}>
+      <div className="flex flex-wrap items-center gap-3">
+        {update ? (
+          <Button tone="primary" onClick={() => setUpdateOpen(true)}>
+            See what is new in {update.version}
+          </Button>
+        ) : (
+          <Button onClick={() => void checkNow()} disabled={checking}>
+            {checking ? <SpinnerIcon /> : null} Check for updates
+          </Button>
+        )}
+        {answer ? <span className="text-[12px] text-ink-2">{answer}</span> : null}
+      </div>
+    </Card>
   );
 }
 

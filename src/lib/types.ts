@@ -320,9 +320,18 @@ export interface Settings {
   script_port: number;
   /** The image that reads and writes volumes during a copy. */
   helper_image: string;
+  /** Look for a newer release at start and twice a day. */
+  check_updates: boolean;
 }
 
 export type HostOs = "macos" | "windows" | "linux";
+
+/** A newer release found by the updater, not installed yet. */
+export interface AvailableUpdate {
+  version: string;
+  /** The release notes, as written on the GitHub release. */
+  notes: string;
+}
 
 export interface SettingsView {
   settings: Settings;
