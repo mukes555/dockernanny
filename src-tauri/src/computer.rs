@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
 use crate::doctor::DoctorRow;
-use crate::store;
+use crate::{store, tools};
 
 /// The key the user chose in Settings, or the first common one in `~/.ssh`,
 /// or where a new one would go.
@@ -25,27 +25,60 @@ pub fn default_key_path(chosen: &str) -> PathBuf {
     ssh_dir.join("id_ed25519")
 }
 
+/// The version lines of the tools this computer uses, None for what does
+/// not run. ssh and rsync are asked where they run (inside WSL on Windows).
+pub struct Versions {
+    pub ssh: Option<String>,
+    pub rsync: Option<String>,
+    pub docker: Option<String>,
+}
+
+pub async fn versions() -> Versions {
+    let mut ssh = tools::unix("ssh");
+    ssh.arg("-V");
+    let mut rsync = tools::unix("rsync");
+    rsync.arg("--version");
+    let mut docker = tools::native("docker");
+    docker.args(["version", "--format", "{{.Server.Version}}"]);
+    Versions {
+        ssh: version_line(ssh).await,
+        rsync: version_line(rsync).await,
+        docker: version_line(docker).await,
+    }
+}
+
 /// One row each for what the controller role needs here. The tools run with
 /// no side effects: only their version lines are read.
 pub async fn readiness(key_path: &Path) -> Vec<DoctorRow> {
-    let ssh = version_line("ssh", &["-V"]).await;
-    let rsync = version_line("rsync", &["--version"]).await;
-    let docker = version_line("docker", &["version", "--format", "{{.Server.Version}}"]).await;
+    let Versions { ssh, rsync, docker } = versions().await;
     let key_present = key_path.exists();
     let key_detail = if key_present { key_path.display().to_string() } else { format!("no key at {}", key_path.display()) };
     let docker_detail = docker.clone().map(|v| format!("Docker {v}")).unwrap_or_else(|| "not running or not installed".into());
-    vec![
-        row("ssh", "SSH client", ssh.clone(), ssh.is_some(), install_hint("an OpenSSH client", "openssh-client")),
-        row("rsync", "rsync", rsync.clone(), rsync.is_some(), install_hint("rsync", "rsync")),
-        row("key", "SSH key", Some(key_detail), key_present, "Create one with the button below, or choose an existing key in Settings.".into()),
-        row(
-            "docker",
-            "Docker here",
-            Some(docker_detail),
-            docker.is_some(),
-            "Only needed to preview a dropped compose file and to copy this computer's own projects. Install Docker Desktop, OrbStack or Docker Engine and start it.".into(),
-        ),
-    ]
+    let mut rows = Vec::new();
+    if let Some(distro) = tools::wsl_distro() {
+        rows.push(wsl_row(&distro).await);
+    }
+    rows.push(row("ssh", "SSH client", ssh.clone(), ssh.is_some(), install_hint("an OpenSSH client", "openssh-client")));
+    rows.push(row("rsync", "rsync", rsync.clone(), rsync.is_some(), install_hint("rsync", "rsync")));
+    rows.push(row("key", "SSH key", Some(key_detail), key_present, "Create one with the button below, or choose an existing key in Settings.".into()));
+    rows.push(row(
+        "docker",
+        "Docker here",
+        Some(docker_detail),
+        docker.is_some(),
+        "Only needed to preview a dropped compose file and to copy this computer's own projects. Install Docker Desktop, OrbStack or Docker Engine and start it.".into(),
+    ));
+    rows
+}
+
+/// Windows: whether the chosen WSL distribution answers at all.
+async fn wsl_row(distro: &str) -> DoctorRow {
+    let mut uname = tools::unix("uname");
+    uname.arg("-sr");
+    let answer = version_line(uname).await;
+    let detail = answer.as_ref().map(|kernel| format!("{distro}, {kernel}")).unwrap_or_else(|| format!("{distro} does not answer"));
+    let fix = format!("Install WSL 2 with a distribution: in PowerShell run `wsl --install -d {distro}`, restart, open it once to create a user. Another distribution can be chosen in Settings.");
+    row("wsl", "WSL", Some(detail), answer.is_some(), fix)
 }
 
 /// A readiness row; the fix is only shown for what is missing.
@@ -64,7 +97,7 @@ fn install_hint(tool: &str, debian_package: &str) -> String {
     if cfg!(target_os = "macos") {
         format!("{tool} ships with macOS; if it is missing, run `xcode-select --install`.")
     } else if cfg!(windows) {
-        format!("On Windows, dockerNanny runs {tool} inside WSL; see Prepare another machine.")
+        format!("dockerNanny runs {tool} inside WSL: open the distribution and run `sudo apt install {debian_package}`.")
     } else {
         format!("Install {tool} with your package manager, for example `sudo apt install {debian_package}`.")
     }
@@ -72,14 +105,34 @@ fn install_hint(tool: &str, debian_package: &str) -> String {
 
 /// The first line a tool prints about itself, or None when it does not run.
 /// `ssh -V` prints to stderr, the others to stdout.
-pub(crate) async fn version_line(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program).args(args).output().await.ok()?;
+pub(crate) async fn version_line(mut cmd: Command) -> Option<String> {
+    let out = cmd.stdin(std::process::Stdio::null()).output().await.ok()?;
     if !out.status.success() {
         return None;
     }
     let text = if out.stdout.is_empty() { out.stderr } else { out.stdout };
     let first = String::from_utf8_lossy(&text).lines().next().unwrap_or("").trim().to_string();
     (!first.is_empty()).then_some(first)
+}
+
+/// Windows: the OpenSSH client and rsync inside the WSL distribution,
+/// installed with apt-get as its root user; Windows itself is not changed.
+/// A distribution without apt-get gets a sentence saying what to install.
+pub async fn install_wsl_tools() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        use anyhow::Context;
+        const SCRIPT: &str = "command -v apt-get >/dev/null 2>&1 || { echo 'This distribution has no apt-get; install openssh-client and rsync with its package manager.' >&2; exit 3; }\n\
+                              export DEBIAN_FRONTEND=noninteractive\n\
+                              apt-get update -qq && apt-get install -y -qq openssh-client rsync\n";
+        let out = tools::unix_as_root("sh").args(["-c", SCRIPT]).stdin(std::process::Stdio::null()).output().await.context("start wsl.exe")?;
+        let stderr = crate::host::platform::decode(&out.stderr);
+        let last_lines: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).rev().take(3).collect();
+        anyhow::ensure!(out.status.success(), "{}", last_lines.into_iter().rev().collect::<Vec<_>>().join("\n"));
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    anyhow::bail!("only Windows keeps ssh and rsync inside WSL")
 }
 
 /// Makes an ed25519 key without a passphrase at `path`, never over an
@@ -89,7 +142,8 @@ pub async fn generate_key(path: &Path) -> anyhow::Result<PathBuf> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let out = Command::new("ssh-keygen")
+    // Native on every OS: Windows ships ssh-keygen and gives the key the right ACL.
+    let out = tools::native("ssh-keygen")
         .args(["-t", "ed25519", "-N", "", "-C", "dockernanny", "-f"])
         .arg(path)
         .output()

@@ -7,7 +7,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::diagnostics::{self, Facts, Replacement};
 use crate::doctor::DoctorRow;
-use crate::{computer, machine, pairing, store, AppState};
+use crate::{computer, machine, pairing, store, tools, AppState};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -55,6 +55,12 @@ pub async fn generate_key(state: State<'_, AppState>) -> CmdResult<String> {
     Ok(public.display().to_string())
 }
 
+/// Windows: ssh and rsync installed inside WSL, for "Use other machines".
+#[tauri::command]
+pub async fn install_wsl_tools() -> CmdResult<()> {
+    computer::install_wsl_tools().await.map_err(|err| format!("{err:#}"))
+}
+
 /// The redacted report for a bug report; see `diagnostics.rs`.
 #[tauri::command]
 pub async fn diagnostics(state: State<'_, AppState>) -> CmdResult<String> {
@@ -64,15 +70,16 @@ pub async fn diagnostics(state: State<'_, AppState>) -> CmdResult<String> {
         let stats = state.stats.lock().expect("stats lock");
         machines.iter().filter(|m| stats.get(&m.id).is_some_and(|s| s.online)).count()
     };
+    let versions = computer::versions().await;
     let facts = Facts {
         use_machines: settings.use_machines,
         share_this_computer: settings.share_this_computer,
         machines: machines.len(),
         machines_online: online,
         stacks: state.store.stacks().len(),
-        ssh: computer::version_line("ssh", &["-V"]).await,
-        rsync: computer::version_line("rsync", &["--version"]).await,
-        docker: computer::version_line("docker", &["version", "--format", "{{.Server.Version}}"]).await,
+        ssh: versions.ssh,
+        rsync: versions.rsync,
+        docker: versions.docker,
     };
 
     let mut private: Vec<Replacement> = vec![
@@ -80,7 +87,7 @@ pub async fn diagnostics(state: State<'_, AppState>) -> CmdResult<String> {
         (user_name(), "<you>".into()),
         (pairing::computer_name().await, "<this-computer>".into()),
     ];
-    if let Some(host) = computer::version_line("hostname", &[]).await {
+    if let Some(host) = computer::version_line(tools::native("hostname")).await {
         private.push((host, "<this-computer>".into()));
     }
     for (index, machine) in machines.iter().enumerate() {

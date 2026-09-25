@@ -8,8 +8,10 @@ use std::process::Stdio;
 use anyhow::Context;
 use tokio::process::Command;
 
-use crate::ssh::{Job, Line, Output, Ssh};
+use crate::job::{Job, Line, Output};
+use crate::ssh::Ssh;
 use crate::stack::{compose_script, shell_quote};
+use crate::tools;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Endpoint {
@@ -127,11 +129,12 @@ impl Endpoint {
         }
     }
 
-    /// A shell script to completion: `sh` here, the login shell there.
+    /// A shell script to completion: `sh` here (inside WSL on Windows), the
+    /// login shell there.
     pub async fn run_script(&self, ssh: &Ssh, script: &str) -> anyhow::Result<Output> {
         match self {
             Endpoint::Local => {
-                let mut cmd = Command::new("sh");
+                let mut cmd = tools::unix("sh");
                 cmd.arg("-c").arg(script);
                 local_output(cmd).await
             }
@@ -141,8 +144,9 @@ impl Endpoint {
 }
 
 /// Docker on this computer, whatever context the user's shell has selected.
+/// Native on every OS: Docker Desktop on Windows reads Windows paths.
 pub fn local_docker(args: &[&str]) -> Command {
-    let mut cmd = Command::new("docker");
+    let mut cmd = tools::native("docker");
     cmd.args(args).env("DOCKER_CONTEXT", "default");
     cmd
 }

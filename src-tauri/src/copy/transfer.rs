@@ -12,7 +12,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::discover::{self, NamedVolume};
 use super::endpoint::Site;
 use super::Report;
-use crate::ssh::{self, Ssh};
+use crate::ssh::Ssh;
+use crate::tools;
 
 /// Relayed a piece at a time, so the bytes can be counted on the way.
 const CHUNK: usize = 64 * 1024;
@@ -129,12 +130,48 @@ async fn stream_path(ssh: &Ssh, from: &Site, to: &Site, from_container: &str, pa
 
 /// The direct entries of a directory inside the source container, read from
 /// the tar `docker cp` produces: its first component is the directory
-/// itself, the second a child.
+/// itself, the second a child. On a machine the tar is read there and only
+/// the names travel; here it is read in Rust, so Windows needs no Unix tools.
 async fn children(ssh: &Ssh, from: &Site, container: &str, path: &str) -> anyhow::Result<Vec<String>> {
+    if from.is_local() {
+        let source = format!("{container}:{path}");
+        return tokio::task::spawn_blocking(move || local_children(&source)).await.context("list the folder")?;
+    }
     let script = format!("docker cp -a {container}:{path} - | tar t | awk -F/ 'NF > 1 && $2 != \"\" {{ print $2 }}' | sort -u");
     let out = from.endpoint.run_script(ssh, &script).await?;
     anyhow::ensure!(out.ok(), "could not list {path} on {}: {}", from.label, out.stderr);
     Ok(out.stdout.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+}
+
+fn local_children(source: &str) -> anyhow::Result<Vec<String>> {
+    let mut child = tools::native_std("docker")
+        .args(["cp", "-a", source, "-"])
+        .env("DOCKER_CONTEXT", "default")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("run docker cp")?;
+    let stdout = child.stdout.take().context("no stdout")?;
+    // Reading to the end (or dropping the pipe on an error) lets docker finish.
+    let names = names_below_top(stdout);
+    let out = child.wait_with_output().context("wait for docker cp")?;
+    anyhow::ensure!(out.status.success(), "could not list {source} on this computer: {}", String::from_utf8_lossy(&out.stderr).trim());
+    names.context("read the tar docker cp wrote")
+}
+
+/// The second path component of every entry, each once and sorted.
+pub fn names_below_top(reader: impl std::io::Read) -> std::io::Result<Vec<String>> {
+    let mut names = std::collections::BTreeSet::new();
+    for entry in tar::Archive::new(reader).entries()? {
+        let entry = entry?;
+        let path = entry.path()?;
+        let child = path.components().filter(|c| matches!(c, std::path::Component::Normal(_))).nth(1);
+        if let Some(child) = child {
+            names.insert(child.as_os_str().to_string_lossy().into_owned());
+        }
+    }
+    Ok(names.into_iter().collect())
 }
 
 /// Runs `reader` with its stdout relayed into `writer`'s stdin, a chunk at a
@@ -143,10 +180,10 @@ async fn children(ssh: &Ssh, from: &Site, container: &str, path: &str) -> anyhow
 /// them. Returns the bytes that went through.
 pub async fn pipe(from: &Site, to: &Site, mut reader: tokio::process::Command, mut writer: tokio::process::Command, report: &Report<'_>) -> anyhow::Result<u64> {
     let mut reader = reader.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null()).spawn().with_context(|| format!("start the stream on {}", from.label))?;
-    ssh::track_child(&reader);
+    tools::track(&reader);
     let mut stdout = reader.stdout.take().context("no stdout")?;
     let mut writer = writer.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().with_context(|| format!("start the stream on {}", to.label))?;
-    ssh::track_child(&writer);
+    tools::track(&writer);
     let mut stdin = writer.stdin.take().context("no stdin")?;
 
     let relay = async {
@@ -220,6 +257,24 @@ mod tests {
         assert_eq!(around_mounts("/opt/keycloak/data/h2", &mounts), Around::Whole);
         assert_eq!(around_mounts("/opt/keycloak/data-old", &mounts), Around::Whole, "a sibling with the same prefix is not inside");
         assert_eq!(around_mounts("/app/storage", &mounts), Around::Whole);
+    }
+
+    #[test]
+    fn the_children_of_a_copied_folder_come_from_its_tar() {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut add = |path: &str, body: &[u8]| {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, path, body).unwrap();
+        };
+        add("data/top.txt", b"x");
+        add("data/h2/keycloakdb.mv.db", &[0u8; 2048]);
+        add("data/import/realm.json", b"{}");
+        add("data/h2/trace.log", b"");
+        let bytes = builder.into_inner().unwrap();
+        assert_eq!(names_below_top(bytes.as_slice()).unwrap(), vec!["h2", "import", "top.txt"]);
     }
 
     #[test]

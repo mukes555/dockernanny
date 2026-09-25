@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
         docker_context: false,
         pinned: false,
     };
-    ssh.write_config(std::slice::from_ref(&machine))?;
+    ssh.prepare(std::slice::from_ref(&machine))?;
 
     let started = std::time::Instant::now();
     doctor::doctor(&ssh, &machine, |row| {
@@ -44,6 +44,6 @@ async fn main() -> anyhow::Result<()> {
 
     let stats = machine::poll(&ssh, &machine).await;
     println!("stats: {stats:?}  ({:?})", started.elapsed());
-    ssh.close_master(&machine.alias());
+    ssh.exit_master(&machine.alias(), None);
     Ok(())
 }

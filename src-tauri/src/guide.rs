@@ -21,14 +21,21 @@ pub struct ScriptOptions {
     pub port: u16,
     pub memory_gb: u32,
     pub distro: String,
+    /// The machine's lid and sleep settings change only when this is on.
+    pub keep_awake: bool,
+    /// A Public network is marked Private only when this is on.
+    pub make_private: bool,
 }
 
 pub fn build_script(options: &ScriptOptions) -> String {
+    let powershell_bool = |on: bool| if on { "true" } else { "false" };
     TEMPLATE
         .replace("__PUBKEY__", options.public_key.trim())
         .replace("__PORT__", &options.port.to_string())
         .replace("__MEMORY__", &options.memory_gb.to_string())
         .replace("__DISTRO__", options.distro.trim())
+        .replace("__KEEP_AWAKE__", powershell_bool(options.keep_awake))
+        .replace("__MAKE_PRIVATE__", powershell_bool(options.make_private))
 }
 
 /// The public half of a key: the `.pub` next to it, or derived with ssh-keygen.
@@ -38,7 +45,8 @@ pub async fn public_key(key_path: &str) -> anyhow::Result<String> {
         return Ok(text.trim().to_string());
     }
     // No stdin: a passphrase prompt must fail at once instead of waiting forever.
-    let out = tokio::process::Command::new("ssh-keygen")
+    // Windows ships its own ssh-keygen, which reads the key where it is.
+    let out = crate::tools::native("ssh-keygen")
         .args(["-y", "-f", key_path])
         .stdin(std::process::Stdio::null())
         .output()
@@ -50,23 +58,7 @@ pub async fn public_key(key_path: &str) -> anyhow::Result<String> {
 
 /// IPv4 addresses of this computer on its networks, for the fetch command.
 pub async fn lan_addresses() -> Vec<String> {
-    let out = tokio::process::Command::new("ifconfig").output().await;
-    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
-    parse_inet_addresses(&text)
-}
-
-fn parse_inet_addresses(ifconfig: &str) -> Vec<String> {
-    let mut addresses = Vec::new();
-    for line in ifconfig.lines() {
-        let Some(rest) = line.trim_start().strip_prefix("inet ") else { continue };
-        let Some(address) = rest.split_whitespace().next() else { continue };
-        let loopback_or_link_local = address.starts_with("127.") || address.starts_with("169.254.");
-        if loopback_or_link_local || addresses.iter().any(|a| a == address) {
-            continue;
-        }
-        addresses.push(address.to_string());
-    }
-    addresses
+    tokio::task::spawn_blocking(crate::host::platform::lan_addresses).await.unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -178,20 +170,18 @@ mod tests {
         let script = build_script(&ScriptOptions {
             public_key: "ssh-ed25519 AAAAC3 alex@studio\n".into(),
             port: 2222,
-            memory_gb: 16,
+            memory_gb: 8,
             distro: "Ubuntu".into(),
+            keep_awake: true,
+            make_private: false,
         });
         assert!(script.contains("$pubkey = 'ssh-ed25519 AAAAC3 alex@studio'"));
         assert!(script.contains("$port = 2222"));
-        assert!(script.contains("$memory = '16GB'"));
+        assert!(script.contains("$memory = '8GB'"));
         assert!(script.contains("$distro = 'Ubuntu'"));
+        assert!(script.contains("$keepAwake = $true"));
+        assert!(script.contains("$makePrivate = $false"), "the network is left alone unless asked");
         assert!(!script.contains("__"));
-    }
-
-    #[test]
-    fn ifconfig_addresses_skip_loopback_and_link_local() {
-        let text = "lo0: flags\n\tinet 127.0.0.1 netmask 0xff000000\nen0: flags\n\tinet 192.0.2.10 netmask 0xffffff00 broadcast 192.0.2.255\nen5: flags\n\tinet 169.254.3.4 netmask 0xffff0000\nbridge0:\n\tinet 192.0.2.10 netmask 0xffffff00\n";
-        assert_eq!(parse_inet_addresses(text), vec!["192.0.2.10".to_string()]);
     }
 
     #[test]

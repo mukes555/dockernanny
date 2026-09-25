@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
         docker_context: false,
         pinned: false,
     };
-    ssh.write_config(std::slice::from_ref(&machine))?;
+    ssh.prepare(std::slice::from_ref(&machine))?;
     let project_dir = std::fs::canonicalize(project)?;
     let stack = Stack {
         id: "watch001".into(),

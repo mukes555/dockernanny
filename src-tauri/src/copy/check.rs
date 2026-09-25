@@ -25,7 +25,11 @@ pub async fn preflight(ssh: &Ssh, to: &Site, needed_bytes: u64) -> anyhow::Resul
         Endpoint::Local if cfg!(unix) => to.endpoint.run_script(ssh, "df -Pk \"$HOME\" 2>/dev/null | tail -1").await.map(|o| o.stdout).unwrap_or_default(),
         Endpoint::Local => String::new(),
     };
-    if let Some(free_bytes) = parse_df_free_kb(&df_line).map(|kb| kb * 1024) {
+    let free = match &to.endpoint {
+        Endpoint::Local if cfg!(windows) => windows_free_bytes(&crate::store::user_home()),
+        _ => parse_df_free_kb(&df_line).map(|kb| kb * 1024),
+    };
+    if let Some(free_bytes) = free {
         let wanted = (needed_bytes as f64 * HEADROOM) as u64;
         anyhow::ensure!(
             free_bytes >= wanted,
@@ -37,6 +41,23 @@ pub async fn preflight(ssh: &Ssh, to: &Site, needed_bytes: u64) -> anyhow::Resul
         notes.push(format!("{} free on {}, {} needed", human(free_bytes), to.label, human(wanted)));
     }
     Ok(notes)
+}
+
+/// Free bytes on the Windows drive holding `path`; Docker Desktop keeps its
+/// disk under the user's folder, so that drive is the one that fills up.
+#[cfg(windows)]
+fn windows_free_bytes(path: &std::path::Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let mut available: u64 = 0;
+    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut available, std::ptr::null_mut(), std::ptr::null_mut()) };
+    (ok != 0).then_some(available)
+}
+
+#[cfg(not(windows))]
+fn windows_free_bytes(_path: &std::path::Path) -> Option<u64> {
+    None
 }
 
 /// The last line of `df -Pk`: available kilobytes are the fourth column.
@@ -113,7 +134,7 @@ pub async fn post_copy(ssh: &Ssh, to: &Site) -> Summary {
     let ps = to.compose_output(ssh, "ps --format json").await.map(|o| o.stdout).unwrap_or_default();
     let sockets = match &to.endpoint {
         Endpoint::Machine { .. } => to.endpoint.run_script(ssh, "ss -ltn 2>/dev/null || netstat -an 2>/dev/null").await.map(|o| o.stdout).unwrap_or_default(),
-        Endpoint::Local if cfg!(windows) => tokio::process::Command::new("netstat").arg("-an").output().await.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default(),
+        Endpoint::Local if cfg!(windows) => crate::tools::native("netstat").arg("-an").output().await.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default(),
         Endpoint::Local => to.endpoint.run_script(ssh, "ss -ltn 2>/dev/null || netstat -an 2>/dev/null").await.map(|o| o.stdout).unwrap_or_default(),
     };
     summarize(&compose::parse_ps(&ps), &sockets)

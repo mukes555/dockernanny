@@ -18,7 +18,8 @@ use dockernanny_lib::copy::endpoint::Site;
 use dockernanny_lib::copy::progress::{megabytes, CopyProgress, Publish, StepState, Tracker};
 use dockernanny_lib::copy::{self, CopyRequest, DataSelection, EndpointRef, Report, Sides, Sink};
 use dockernanny_lib::machine::Machine;
-use dockernanny_lib::ssh::{Line, Ssh};
+use dockernanny_lib::job::Line;
+use dockernanny_lib::ssh::Ssh;
 use dockernanny_lib::stack::Phase;
 use dockernanny_lib::{store, sync};
 
@@ -85,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
         docker_context: false,
         pinned: false,
     };
-    ssh.write_config(std::slice::from_ref(&machine))?;
+    ssh.prepare(std::slice::from_ref(&machine))?;
     let alias = machine.alias();
 
     let (from, project) = match from_arg.split_once(':') {
@@ -162,6 +163,6 @@ async fn main() -> anyhow::Result<()> {
         println!("  folder mirrored, {} files", mirrored.files);
     }
     println!("== {}", outcome.summary.text(&to));
-    ssh.close_master(&alias);
+    ssh.exit_master(&alias, None);
     Ok(())
 }

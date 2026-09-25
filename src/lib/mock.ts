@@ -3,11 +3,12 @@
 // Every name, address and path here is made up (RFC 5737 addresses).
 
 import type { Api, Handlers } from "./ipc";
-import type { CopyProgress, DoctorRow, ForwardState, HostSnapshot, Machine, MachineStats, Preview, Settings, Stack, StackStatus } from "./types";
+import type { CopyProgress, DoctorRow, ForwardState, HostOs, HostSnapshot, Machine, MachineStats, Preview, Settings, Stack, StackStatus } from "./types";
 
 const KEY_PATH = "/home/alex/.ssh/id_ed25519";
 // The mock starts without a key, so the readiness list shows how one is created.
 let keyMade = false;
+let wslToolsInstalled = false;
 
 // Null until Continue is clicked in the role chooser, so a reload shows the first launch again.
 let settings: Settings | null = null;
@@ -22,7 +23,15 @@ const defaultSettings = (): Settings => ({
   pairing_port: 47433,
   script_port: 47431,
   helper_image: "alpine:3",
+  wsl_distro: "Ubuntu",
+  wsl_ssh_port: 2222,
 });
+
+// `?os=windows` or `?os=linux` in the address shows the window as it looks there.
+const MOCK_OS: HostOs = ((): HostOs => {
+  const asked = new URLSearchParams(window.location.search).get("os");
+  return asked === "windows" || asked === "linux" ? asked : "macos";
+})();
 
 // A full online reading with a few fields swapped: the shape the backend sends.
 const onlineStats = (over: Partial<MachineStats>): MachineStats => ({
@@ -273,6 +282,8 @@ export const mockApi: Api = {
   listMachines: async () => machines,
   machineStats: async () => stats,
   appHome: async () => "/home/alex/.dockernanny",
+  terminalInfo: async () => ({ ssh_config: "/home/alex/.dockernanny/ssh_config", wsl_distro: MOCK_OS === "windows" ? "Ubuntu" : null }),
+  wslDistros: async () => (MOCK_OS === "windows" ? ["Ubuntu", "Ubuntu-24.04", "Debian"] : []),
   computerName: async () => "desk",
   computerInfo: async () => ({
     name: "desk",
@@ -283,12 +294,20 @@ export const mockApi: Api = {
   defaultKeyPath: async () => KEY_PATH,
   computerReadiness: async () => {
     await wait(400);
+    const wsl: DoctorRow[] = MOCK_OS === "windows" ? [{ key: "wsl", label: "WSL", ok: true, detail: "Ubuntu, Linux 6.6.87.2-microsoft-standard-WSL2", fix: null }] : [];
+    // On Windows the mock starts without rsync in WSL, so the install button shows.
+    const rsyncOk = MOCK_OS !== "windows" || wslToolsInstalled;
     return [
+      ...wsl,
       { key: "ssh", label: "SSH client", ok: true, detail: "OpenSSH_9.8p1", fix: null },
-      { key: "rsync", label: "rsync", ok: true, detail: "rsync  version 3.2.7  protocol version 31", fix: null },
+      { key: "rsync", label: "rsync", ok: rsyncOk, detail: rsyncOk ? "rsync  version 3.2.7  protocol version 31" : "not found", fix: rsyncOk ? null : "dockerNanny runs rsync inside WSL: open the distribution and run `sudo apt install rsync`." },
       { key: "key", label: "SSH key", ok: keyMade, detail: keyMade ? KEY_PATH : `no key at ${KEY_PATH}`, fix: keyMade ? null : "Create one with the button below, or choose an existing key in Settings." },
       { key: "docker", label: "Docker here", ok: true, detail: "Docker 27.3.1", fix: null },
     ];
+  },
+  installWslTools: async () => {
+    await wait(900);
+    wslToolsInstalled = true;
   },
   generateKey: async () => {
     await wait(500);
@@ -503,7 +522,7 @@ export const mockApi: Api = {
   },
   scriptStop: async () => {},
 
-  getSettings: async () => ({ settings: settings ?? defaultSettings(), first_run: settings === null, os: "macos" }),
+  getSettings: async () => ({ settings: settings ?? defaultSettings(), first_run: settings === null, os: MOCK_OS }),
   saveSettings: async (next) => {
     settings = next;
     return next;

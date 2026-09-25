@@ -257,6 +257,16 @@ export interface ScriptRequest {
   port: number;
   memory_gb: number;
   distro: string;
+  /** Change the machine's lid and sleep settings. */
+  keep_awake: boolean;
+  /** Mark a Public network Private. */
+  make_private: boolean;
+}
+
+/** What the terminal dialog shows: the config as ssh reads it, and the WSL distribution on Windows. */
+export interface TerminalInfo {
+  ssh_config: string;
+  wsl_distro: string | null;
 }
 
 export interface ServeInfo {
@@ -320,6 +330,10 @@ export interface Settings {
   script_port: number;
   /** The image that reads and writes volumes during a copy. */
   helper_image: string;
+  /** Windows only: the WSL distribution for ssh and rsync, and for sharing. */
+  wsl_distro: string;
+  /** Windows only: the sshd port inside WSL when shared. */
+  wsl_ssh_port: number;
 }
 
 export type HostOs = "macos" | "windows" | "linux";
@@ -418,6 +432,8 @@ export interface ConnectedComputer {
 export interface HostSetupOptions {
   memory_gb: number;
   make_network_private: string | null;
+  /** Windows: change the power settings so it stays awake plugged in. */
+  keep_awake: boolean;
 }
 
 export interface HostLogEvent {

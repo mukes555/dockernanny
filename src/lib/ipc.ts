@@ -38,6 +38,7 @@ import type {
   StackStatus,
   StackStatusEvent,
   StatsEvent,
+  TerminalInfo,
 } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -74,12 +75,15 @@ const tauriApi = {
   listMachines: () => invoke<Machine[]>("list_machines"),
   machineStats: () => invoke<Record<string, MachineStats>>("machine_stats"),
   appHome: () => invoke<string>("app_home"),
+  terminalInfo: () => invoke<TerminalInfo>("terminal_info"),
+  wslDistros: () => invoke<string[]>("wsl_distros"),
   computerName: () => invoke<string>("computer_name"),
   computerInfo: () => invoke<ComputerInfo>("computer_info"),
   newMachineId: () => invoke<string>("new_machine_id"),
   defaultKeyPath: () => invoke<string>("default_key_path"),
   computerReadiness: () => invoke<DoctorRow[]>("computer_readiness"),
   generateKey: () => invoke<string>("generate_key"),
+  installWslTools: () => invoke<void>("install_wsl_tools"),
   diagnostics: () => invoke<string>("diagnostics"),
   revealAppFile: (which: "folder" | "log") => invoke<void>("reveal_app_file", { which }),
   openLink: (url: string) => openUrl(url),

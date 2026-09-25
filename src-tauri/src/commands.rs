@@ -43,6 +43,34 @@ pub fn app_home(state: State<'_, AppState>) -> String {
     state.store.home().display().to_string()
 }
 
+/// What the terminal dialog needs to show working commands: the config as
+/// ssh reads it, and on Windows the WSL distribution those commands run in.
+#[derive(Debug, Serialize)]
+pub struct TerminalInfo {
+    pub ssh_config: String,
+    pub wsl_distro: Option<String>,
+}
+
+#[tauri::command]
+pub fn terminal_info(state: State<'_, AppState>) -> TerminalInfo {
+    TerminalInfo {
+        ssh_config: state.ssh.config_path(),
+        wsl_distro: crate::tools::wsl_distro(),
+    }
+}
+
+/// The WSL distributions installed on this computer, for Settings. Empty
+/// off Windows and when WSL is missing.
+#[tauri::command]
+pub async fn wsl_distros() -> Vec<String> {
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+    let out = crate::tools::native("wsl.exe").args(["-l", "-q"]).env("WSL_UTF8", "1").output().await;
+    let text = out.map(|o| crate::host::platform::decode(&o.stdout)).unwrap_or_default();
+    text.lines().map(str::trim).filter(|name| crate::settings::safe_distro(name)).map(str::to_string).collect()
+}
+
 #[tauri::command]
 pub fn new_machine_id() -> String {
     Machine::new_id()
@@ -98,7 +126,7 @@ pub async fn remove_machine(app: AppHandle, state: State<'_, AppState>, id: Stri
     for stack in state.store.stacks().iter().filter(|s| s.machine_id == id) {
         forward::stop(&app, &stack.id);
     }
-    state.ssh.close_master(&machine.alias());
+    state.ssh.exit_master(&machine.alias(), None);
     if machine.docker_context {
         let _ = machine::set_docker_context(&machine, false).await;
     }
@@ -315,6 +343,10 @@ pub struct ScriptRequest {
     pub port: u16,
     pub memory_gb: u32,
     pub distro: String,
+    #[serde(default)]
+    pub keep_awake: bool,
+    #[serde(default)]
+    pub make_private: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -327,12 +359,25 @@ async fn script_for(request: &ScriptRequest) -> CmdResult<String> {
     if !guide::key_exists(&request.key_path) {
         return Err(format!("No key file at {}.", request.key_path));
     }
-    let public_key = guide::public_key(&request.key_path).await.map_err(fail)?;
+    // The name lands inside a quoted string of a script run as Administrator.
+    if !crate::settings::safe_distro(request.distro.trim()) {
+        return Err("A WSL distribution name is letters, digits, dots, dashes and underscores.".into());
+    }
+    if request.port == 0 {
+        return Err("Choose the port sshd should listen on.".into());
+    }
+    // Only `type base64` goes in: a comment could hold a quote and break out of the string.
+    let public_key = crate::host::platform::host_key_from_pub(&guide::public_key(&request.key_path).await.map_err(fail)?);
+    if public_key.is_empty() || public_key.contains('\'') {
+        return Err(format!("{}.pub does not look like an ssh public key.", request.key_path));
+    }
     Ok(guide::build_script(&ScriptOptions {
         public_key,
         port: request.port,
         memory_gb: request.memory_gb,
         distro: request.distro.clone(),
+        keep_awake: request.keep_awake,
+        make_private: request.make_private,
     }))
 }
 

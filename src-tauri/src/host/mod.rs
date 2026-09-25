@@ -29,9 +29,6 @@ use platform::{NetworkProfile, Platform, Row, SetupOptions};
 
 pub const SNAPSHOT_EVENT: &str = "host:snapshot";
 pub const LOG_EVENT: &str = "host:log";
-pub const DISTRO: &str = "Ubuntu";
-/// sshd inside WSL listens here, away from a Windows OpenSSH server on 22.
-pub const WSL_SSH_PORT: u16 = 2222;
 /// Windows 11 22H2, the first build with WSL mirrored networking.
 pub const MIN_WINDOWS_BUILD: u32 = 22621;
 
@@ -80,11 +77,30 @@ pub struct LogLine {
     pub line: String,
 }
 
+/// The settings the sharing role runs with; a change restarts it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostConfig {
+    pub pairing_port: u16,
+    /// Windows only: the WSL distribution and the sshd port inside it.
+    pub wsl_distro: String,
+    pub wsl_ssh_port: u16,
+}
+
+impl HostConfig {
+    pub fn from_settings(settings: &crate::settings::Settings) -> Self {
+        Self {
+            pairing_port: settings.pairing_port,
+            wsl_distro: settings.wsl_distro.clone(),
+            wsl_ssh_port: settings.wsl_ssh_port,
+        }
+    }
+}
+
 /// The app's handle on the sharing role: started when the role is on,
 /// stopped when it is turned off or the app quits.
 #[derive(Default)]
 pub struct Host {
-    engine: Mutex<Option<engine::Engine>>,
+    engine: Mutex<Option<(HostConfig, engine::Engine)>>,
 }
 
 impl Host {
@@ -92,31 +108,37 @@ impl Host {
         self.engine.lock().expect("host lock").is_some()
     }
 
-    pub fn start(&self, app: &AppHandle, pairing_port: u16) {
+    /// Starts the role, or restarts it when it runs with other settings.
+    pub fn start(&self, app: &AppHandle, config: HostConfig) {
         let mut slot = self.engine.lock().expect("host lock");
-        if slot.is_some() {
+        let unchanged = slot.as_ref().map(|(running, _)| *running == config).unwrap_or(false);
+        if unchanged {
             return;
         }
-        *slot = Some(engine::start(app.clone(), make_platform(), pairing_port));
+        if let Some((_, old)) = slot.take() {
+            old.quit();
+        }
+        let engine = engine::start(app.clone(), make_platform(&config), config.pairing_port);
+        *slot = Some((config, engine));
     }
 
     pub fn stop(&self) {
-        if let Some(engine) = self.engine.lock().expect("host lock").take() {
+        if let Some((_, engine)) = self.engine.lock().expect("host lock").take() {
             engine.quit();
         }
     }
 
     pub fn snapshot(&self) -> Option<HostSnapshot> {
-        self.engine.lock().expect("host lock").as_ref().map(|e| e.snapshot.lock().expect("host snapshot lock").clone())
+        self.engine.lock().expect("host lock").as_ref().map(|(_, e)| e.snapshot.lock().expect("host snapshot lock").clone())
     }
 
     pub fn log(&self) -> Vec<String> {
-        self.engine.lock().expect("host lock").as_ref().map(|e| e.log.lock().expect("host log lock").clone()).unwrap_or_default()
+        self.engine.lock().expect("host lock").as_ref().map(|(_, e)| e.log.lock().expect("host log lock").clone()).unwrap_or_default()
     }
 
     pub fn send(&self, message: engine::ToEngine) -> Result<(), String> {
         let slot = self.engine.lock().expect("host lock");
-        let engine = slot.as_ref().ok_or("sharing is off; turn it on in Settings")?;
+        let (_, engine) = slot.as_ref().ok_or("sharing is off; turn it on in Settings")?;
         engine.to_engine.send(message).map_err(|_| "the sharing engine is not running".to_string())
     }
 
@@ -127,31 +149,34 @@ impl Host {
 
 /// `DOCKERNANNY_FAKE_HOST=1` swaps in a pretend computer, so the page can be
 /// tried without changing anything on this one.
-fn make_platform() -> Arc<dyn Platform> {
+fn make_platform(config: &HostConfig) -> Arc<dyn Platform> {
     let fake = std::env::var("DOCKERNANNY_FAKE_HOST").map(|v| v == "1").unwrap_or(false);
     if fake {
         return Arc::new(fake::Fake::default());
     }
-    real_platform()
+    real_platform(config)
 }
 
 #[cfg(windows)]
-fn real_platform() -> Arc<dyn Platform> {
-    Arc::new(windows::Windows)
+fn real_platform(config: &HostConfig) -> Arc<dyn Platform> {
+    Arc::new(windows::Windows {
+        distro: config.wsl_distro.clone(),
+        ssh_port: config.wsl_ssh_port,
+    })
 }
 
 #[cfg(target_os = "macos")]
-fn real_platform() -> Arc<dyn Platform> {
+fn real_platform(_config: &HostConfig) -> Arc<dyn Platform> {
     Arc::new(macos::MacOs)
 }
 
 #[cfg(target_os = "linux")]
-fn real_platform() -> Arc<dyn Platform> {
+fn real_platform(_config: &HostConfig) -> Arc<dyn Platform> {
     Arc::new(linux::Linux)
 }
 
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
-fn real_platform() -> Arc<dyn Platform> {
+fn real_platform(_config: &HostConfig) -> Arc<dyn Platform> {
     Arc::new(fake::Fake::default())
 }
 

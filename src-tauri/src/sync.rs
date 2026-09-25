@@ -10,7 +10,8 @@ use notify::{RecursiveMode, Watcher as _};
 
 use crate::copy::endpoint::Site;
 use crate::copy::{folder, Sink};
-use crate::ssh::{Line, Ssh};
+use crate::job::Line;
+use crate::ssh::Ssh;
 use crate::stack::Stack;
 use crate::store;
 

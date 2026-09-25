@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::Serialize;
 use serde_json::Value;
-use tokio::process::Command;
 
 pub const COMPOSE_FILES: [&str; 4] = ["compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"];
 
@@ -68,7 +67,7 @@ pub fn locate(dropped: &Path) -> anyhow::Result<(PathBuf, String)> {
 /// compose printed while reading (unset variables). Never persisted: env_file
 /// contents are inlined into it.
 pub async fn config_model(project_dir: &Path, compose_rel: &str) -> anyhow::Result<(Value, String)> {
-    let out = Command::new("docker")
+    let out = crate::tools::native("docker")
         .args(["compose", "-f", compose_rel, "config", "--format", "json"])
         .current_dir(project_dir)
         // Must not depend on which context the user's terminal selected.

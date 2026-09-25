@@ -7,7 +7,8 @@ use serde::Serialize;
 use tokio::time::timeout;
 
 use crate::machine::{first_line, Machine};
-use crate::ssh::{Output, Ssh};
+use crate::job::Output;
+use crate::ssh::Ssh;
 
 pub const DOCTOR_EVENT: &str = "machine:doctor";
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -74,11 +75,19 @@ async fn check_ssh(ssh: &Ssh, machine: &Machine) -> DoctorRow {
     if out.ok() && out.stdout.contains("dockernanny-ok") {
         return row("ssh", "SSH", true, format!("{} answers", machine.address()), None);
     }
-    let (detail, fix) = explain_ssh_failure(machine, &out);
+    let (detail, fix) = explain_ssh_failure(machine, &out, &ssh.config_path());
     row("ssh", "SSH", false, detail, Some(fix))
 }
 
-fn explain_ssh_failure(machine: &Machine, out: &Output) -> (String, String) {
+/// A command as it is typed in a terminal here: on Windows ssh lives inside WSL.
+fn in_terminal(command: &str) -> String {
+    match crate::tools::wsl_distro() {
+        Some(distro) => format!("wsl -d {distro} {command}"),
+        None => command.to_string(),
+    }
+}
+
+fn explain_ssh_failure(machine: &Machine, out: &Output, config: &str) -> (String, String) {
     let err = &out.stderr;
     let key_rejected = err.contains("Permission denied");
     let host_key_changed = err.contains("Host key verification failed") || err.contains("IDENTIFICATION HAS CHANGED");
@@ -88,20 +97,16 @@ fn explain_ssh_failure(machine: &Machine, out: &Output) -> (String, String) {
     if key_rejected {
         // Only macOS's ssh-add knows the keychain flag; elsewhere it is an unknown option.
         let keychain = if cfg!(target_os = "macos") { " --apple-use-keychain" } else { "" };
-        let fix = format!(
-            "ssh-copy-id -i {key}.pub -p {port} {user}@{host}\n# key with a passphrase? load it first:\nssh-add{keychain} {key}",
-            key = machine.key_path,
-            port = machine.port,
-            user = machine.user,
-            host = machine.host
-        );
-        return ("The machine did not accept the key.".into(), fix);
+        let key = crate::tools::path(std::path::Path::new(&machine.key_path));
+        let copy_id = in_terminal(&format!("ssh-copy-id -i {key}.pub -p {} {}@{}", machine.port, machine.user, machine.host));
+        let add = in_terminal(&format!("ssh-add{keychain} {key}"));
+        return ("The machine did not accept the key.".into(), format!("{copy_id}\n# key with a passphrase? load it first:\n{add}"));
     }
     if host_key_changed {
         let known_hosts_name = if machine.port == 22 { machine.host.clone() } else { format!("[{}]:{}", machine.host, machine.port) };
         return (
             "The machine's host key changed since it was last seen.".into(),
-            format!("# only if you reinstalled the machine:\nssh-keygen -R '{known_hosts_name}'"),
+            format!("# only if you reinstalled the machine:\n{}", in_terminal(&format!("ssh-keygen -R '{known_hosts_name}'"))),
         );
     }
     if refused {
@@ -117,7 +122,7 @@ fn explain_ssh_failure(machine: &Machine, out: &Output) -> (String, String) {
         );
     }
     let detail = if err.is_empty() { format!("ssh exited with code {:?}", out.code) } else { err.clone() };
-    (detail, format!("# try it by hand:\nssh -F ~/.dockernanny/ssh_config {}", machine.alias()))
+    (detail, format!("# try it by hand:\n{}", in_terminal(&format!("ssh -F {config} {}", machine.alias()))))
 }
 
 async fn check_docker(ssh: &Ssh, machine: &Machine) -> DoctorRow {
@@ -179,4 +184,42 @@ async fn check_host(ssh: &Ssh, machine: &Machine) -> DoctorRow {
     let os = lines.next().unwrap_or("unknown os");
     let cpus = lines.next().unwrap_or("?");
     row("host", "Host", out.ok(), format!("{os}, {cpus} cpus"), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn failed(stderr: &str) -> Output {
+        Output { code: Some(255), stdout: String::new(), stderr: stderr.into() }
+    }
+
+    fn machine() -> Machine {
+        Machine {
+            id: "m1".into(),
+            name: "studio".into(),
+            user: "alex".into(),
+            host: "192.0.2.15".into(),
+            port: 2222,
+            key_path: "/home/alex/.ssh/id_ed25519".into(),
+            docker_context: false,
+            pinned: false,
+        }
+    }
+
+    #[test]
+    fn each_ssh_failure_gets_its_own_fix() {
+        let (detail, fix) = explain_ssh_failure(&machine(), &failed("alex@192.0.2.15: Permission denied (publickey)."), "/h/ssh_config");
+        assert_eq!(detail, "The machine did not accept the key.");
+        assert!(fix.contains("ssh-copy-id -i /home/alex/.ssh/id_ed25519.pub -p 2222 alex@192.0.2.15"), "{fix}");
+
+        let (_, fix) = explain_ssh_failure(&machine(), &failed("Host key verification failed."), "/h/ssh_config");
+        assert!(fix.contains("ssh-keygen -R '[192.0.2.15]:2222'"), "{fix}");
+
+        let (detail, _) = explain_ssh_failure(&machine(), &failed("ssh: connect to host 192.0.2.15 port 2222: Connection refused"), "/h/ssh_config");
+        assert_eq!(detail, "Nothing answers on port 2222.");
+
+        let (_, fix) = explain_ssh_failure(&machine(), &failed("something new"), "/h/ssh_config");
+        assert!(fix.ends_with("ssh -F /h/ssh_config dn-m1"), "{fix}");
+    }
 }

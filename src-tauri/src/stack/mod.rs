@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::compose::ServiceState;
-use crate::ssh::Line;
+use crate::job::Line;
 use crate::AppState;
 
 pub use lifecycle::{down, logs_start, logs_stop, refresh_now, remove, restart, resync, start_watcher, stop_watcher, up};

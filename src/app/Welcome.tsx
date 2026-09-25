@@ -14,12 +14,12 @@ const NEEDS: Record<"use" | "share", Record<HostOs, string>> = {
   use: {
     macos: "Needs an SSH key, which dockerNanny can make for you. ssh and rsync ship with macOS.",
     linux: "Needs an SSH key, which dockerNanny can make for you, plus ssh and rsync from your package manager.",
-    windows: "Needs WSL 2 with a Linux distribution; ssh and rsync run inside it.",
+    windows: "Needs WSL 2 with a Linux distribution (Ubuntu unless you pick another); ssh and rsync run inside it.",
   },
   share: {
     macos: "Needs Docker Desktop or OrbStack. dockerNanny turns on Remote Login (ssh) with your password.",
     linux: "Needs Docker Engine and an SSH server. dockerNanny shows the commands for anything missing.",
-    windows: "Needs Windows 11 22H2 or newer. dockerNanny installs WSL 2, Ubuntu, Docker and an SSH server, asking first.",
+    windows: "Needs Windows 11 22H2 or newer. dockerNanny installs WSL 2, a Linux distribution, Docker and an SSH server, and lists every change first.",
   },
 };
 

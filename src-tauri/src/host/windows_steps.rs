@@ -6,7 +6,7 @@
 use super::elevate;
 use super::platform::{run, Outcome, Output, Say, SetupOptions};
 use super::windows::Windows;
-use super::{DISTRO, MIN_WINDOWS_BUILD, WSL_SSH_PORT};
+use super::MIN_WINDOWS_BUILD;
 
 pub const ELEVATED_LOG: &str = "elevated.log";
 const HYPERV_WSL_VM: &str = "{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}";
@@ -18,9 +18,9 @@ pub fn run_all(win: &Windows, options: &SetupOptions, say: &mut Say) -> Vec<(&'s
     let steps: [(&'static str, Step); 8] = [
         ("Windows version", windows_version),
         ("WSL 2", wsl_present),
-        ("Ubuntu", distro_present),
+        ("Linux distribution", distro_present),
         ("Linux user", linux_user),
-        ("Docker, sshd, rsync inside Ubuntu", inside_ubuntu),
+        ("Docker, sshd, rsync inside WSL", inside_distro),
         ("WSL settings", wslconfig),
         ("Firewall and power (administrator)", admin_batch),
         ("Restart WSL", restart_wsl),
@@ -71,15 +71,16 @@ fn wsl_present(win: &Windows, _options: &SetupOptions, say: &mut Say) -> Outcome
 }
 
 fn distro_present(win: &Windows, _options: &SetupOptions, say: &mut Say) -> Outcome {
-    if win.wsl(&["-l", "-q"]).stdout.lines().any(|l| l.trim() == DISTRO) {
-        return Outcome::Done("installed".into());
+    let distro = &win.distro;
+    if win.has_distro() {
+        return Outcome::Done(format!("{distro} installed"));
     }
-    say(&format!("    installing {DISTRO} (a few minutes, no questions asked)"));
-    let install = win.wsl(&["--install", "-d", DISTRO, "--no-launch"]);
+    say(&format!("    installing {distro} (a few minutes, no questions asked)"));
+    let install = win.wsl(&["--install", "-d", distro, "--no-launch"]);
     if !install.ok {
-        return Outcome::Failed(format!("could not install {DISTRO}: {}", install.stderr.trim()));
+        return Outcome::Failed(format!("could not install {distro}: {} (wsl --list --online shows the names WSL can install)", install.stderr.trim()));
     }
-    Outcome::Changed(format!("{DISTRO} installed"))
+    Outcome::Changed(format!("{distro} installed"))
 }
 
 /// A non-root default user. One is created when the distro has none, so
@@ -94,7 +95,7 @@ fn linux_user(win: &Windows, _options: &SetupOptions, say: &mut Say) -> Outcome 
     if !out.ok {
         return Outcome::Failed(format!("useradd failed: {}", out.stderr.trim()));
     }
-    let _ = win.wsl(&["--terminate", DISTRO]);
+    let _ = win.wsl(&["--terminate", &win.distro]);
     Outcome::Changed(format!("user {NEW_USER} created and made the default"))
 }
 
@@ -104,9 +105,12 @@ fn wsl_conf_script(user: &str) -> String {
     format!("printf '[boot]\\nsystemd=true\\n\\n[user]\\ndefault={user}\\n' > /etc/wsl.conf\n")
 }
 
-fn inside_ubuntu(win: &Windows, _options: &SetupOptions, say: &mut Say) -> Outcome {
+/// Written for Debian and Ubuntu (apt-get); another distribution fails here
+/// with its own message and can be prepared by hand.
+fn inside_distro(win: &Windows, _options: &SetupOptions, say: &mut Say) -> Outcome {
     let Some(user) = win.distro_user() else { return Outcome::Failed("no Linux user".into()) };
-    say("    packages, Docker Engine if missing, sshd port, systemd (as root inside Ubuntu)");
+    say(&format!("    packages, Docker Engine if missing, sshd port, systemd (as root inside {})", win.distro));
+    let port = win.ssh_port;
     let script = format!(
         "set -e\n\
          export DEBIAN_FRONTEND=noninteractive\n\
@@ -114,7 +118,7 @@ fn inside_ubuntu(win: &Windows, _options: &SetupOptions, say: &mut Say) -> Outco
          apt-get install -y -qq openssh-server rsync curl ca-certificates\n\
          if command -v docker >/dev/null 2>&1; then echo \"docker already installed: $(docker --version)\"; else curl -fsSL https://get.docker.com | sh; fi\n\
          usermod -aG docker '{user}'\n\
-         printf 'Port {WSL_SSH_PORT}\\n' > /etc/ssh/sshd_config.d/dockernanny.conf\n\
+         printf 'Port {port}\\n' > /etc/ssh/sshd_config.d/dockernanny.conf\n\
          {wsl_conf}\
          systemctl disable --now ssh.socket >/dev/null 2>&1 || true\n\
          systemctl enable ssh.service >/dev/null 2>&1 || true\n\
@@ -129,7 +133,7 @@ fn inside_ubuntu(win: &Windows, _options: &SetupOptions, say: &mut Say) -> Outco
     if !out.ok || !out.stdout.contains("dockernanny-linux-ok") {
         return Outcome::Failed("the Linux part did not finish; see the lines above".into());
     }
-    Outcome::Changed("Docker, sshd and rsync ready inside Ubuntu".into())
+    Outcome::Changed(format!("Docker, sshd and rsync ready inside {}", win.distro))
 }
 
 /// `.wslconfig` in the Windows user profile: mirrored networking so the
@@ -154,10 +158,12 @@ fn wslconfig(win: &Windows, options: &SetupOptions, say: &mut Say) -> Outcome {
 }
 
 /// Firewall rules, network profile, power settings: run by the elevated copy.
+/// Skipped when the rules already open the right ports and nothing else was asked.
 fn admin_batch(win: &Windows, options: &SetupOptions, say: &mut Say) -> Outcome {
-    let rules_present = win.firewall_rule_exists("dockerNanny SSH") && win.firewall_rule_exists("dockerNanny Pair");
+    let rules_match = win.firewall_matches(options.pairing_port);
     let network = options.make_network_private.as_deref();
-    if rules_present && network.is_none() {
+    let nothing_to_do = rules_match && network.is_none() && !options.keep_awake;
+    if nothing_to_do {
         return Outcome::Done("firewall rules present".into());
     }
     say("    Windows asks for administrator permission now");
@@ -165,6 +171,8 @@ fn admin_batch(win: &Windows, options: &SetupOptions, say: &mut Say) -> Outcome 
     let _ = std::fs::remove_file(&log_path);
     let task = elevate::Task::Firewall {
         pairing_port: options.pairing_port,
+        ssh_port: win.ssh_port,
+        keep_awake: options.keep_awake,
         private_network: network.map(str::to_string),
     };
     let code = match elevate::run_elevated(&task) {
@@ -177,30 +185,35 @@ fn admin_batch(win: &Windows, options: &SetupOptions, say: &mut Say) -> Outcome 
     if code != 0 {
         return Outcome::Failed(format!("the administrator step exited with code {code}"));
     }
-    Outcome::Changed("firewall open, computer stays awake when plugged in".into())
+    let power = if options.keep_awake { ", computer stays awake when plugged in" } else { "" };
+    Outcome::Changed(format!("firewall open{power}"))
 }
 
 /// What the elevated copy does. Output goes to a file the parent shows.
-/// `private_network` is the one network the user agreed to mark Private.
-pub fn elevated_batch(win: &Windows, pairing_port: u16, private_network: Option<&str>, log_path: &std::path::Path) -> i32 {
+/// `private_network` is the one network the user agreed to mark Private;
+/// the power settings change only when `keep_awake` was left ticked.
+pub fn elevated_batch(pairing_port: u16, ssh_port: u16, keep_awake: bool, private_network: Option<&str>, log_path: &std::path::Path) -> i32 {
+    // Only the firewall and PowerShell helpers are used here; they do not touch the distribution.
+    let win = Windows { distro: String::new(), ssh_port };
     let mut report = Report::default();
 
-    for (name, port) in [("dockerNanny SSH", WSL_SSH_PORT), ("dockerNanny Pair", pairing_port)] {
-        if win.firewall_rule_exists(name) {
-            report.lines.push(format!("firewall rule {name}: already there"));
-            continue;
-        }
-        let out = run(
-            "netsh",
-            &["advfirewall", "firewall", "add", "rule", &format!("name={name}"), "dir=in", "action=allow", "protocol=TCP", &format!("localport={port}"), "profile=private,domain"],
-            None,
-            &[],
-        );
-        report.record(&format!("firewall rule {name}"), out);
+    for (name, port) in [("dockerNanny SSH", ssh_port), ("dockerNanny Pair", pairing_port)] {
+        // An existing rule is pointed at the port asked for, so a changed port takes effect.
+        let out = if win.firewall_rule_exists(name) {
+            run("netsh", &["advfirewall", "firewall", "set", "rule", &format!("name={name}"), "new", &format!("localport={port}")], None, &[])
+        } else {
+            run(
+                "netsh",
+                &["advfirewall", "firewall", "add", "rule", &format!("name={name}"), "dir=in", "action=allow", "protocol=TCP", &format!("localport={port}"), "profile=private,domain"],
+                None,
+                &[],
+            )
+        };
+        report.record(&format!("firewall rule {name} on {port}"), out);
     }
 
     let hyperv = format!(
-        "if (-not (Get-NetFirewallHyperVRule -Name dockerNannySsh -ErrorAction SilentlyContinue)) {{ New-NetFirewallHyperVRule -Name dockerNannySsh -DisplayName 'dockerNanny SSH' -Direction Inbound -VMCreatorId '{HYPERV_WSL_VM}' -Protocol TCP -LocalPorts {WSL_SSH_PORT} | Out-Null }}; \
+        "if (Get-NetFirewallHyperVRule -Name dockerNannySsh -ErrorAction SilentlyContinue) {{ Set-NetFirewallHyperVRule -Name dockerNannySsh -LocalPorts {ssh_port} }} else {{ New-NetFirewallHyperVRule -Name dockerNannySsh -DisplayName 'dockerNanny SSH' -Direction Inbound -VMCreatorId '{HYPERV_WSL_VM}' -Protocol TCP -LocalPorts {ssh_port} | Out-Null }}; \
          schtasks.exe /Delete /TN 'dockerNanny WSL' /F 2>$null | Out-Null; 'done'"
     );
     let out = win.powershell(&hyperv);
@@ -214,9 +227,13 @@ pub fn elevated_batch(win: &Windows, pairing_port: u16, private_network: Option<
         report.record(&format!("network {name} marked Private"), out);
     }
 
-    report.record("lid closed does nothing (plugged in)", run("powercfg", &["/setacvalueindex", "SCHEME_CURRENT", "SUB_BUTTONS", "LIDACTION", "0"], None, &[]));
-    report.record("apply power scheme", run("powercfg", &["/setactive", "SCHEME_CURRENT"], None, &[]));
-    report.record("no sleep while plugged in", run("powercfg", &["/change", "standby-timeout-ac", "0"], None, &[]));
+    if keep_awake {
+        report.record("lid closed does nothing (plugged in)", run("powercfg", &["/setacvalueindex", "SCHEME_CURRENT", "SUB_BUTTONS", "LIDACTION", "0"], None, &[]));
+        report.record("apply power scheme", run("powercfg", &["/setactive", "SCHEME_CURRENT"], None, &[]));
+        report.record("no sleep while plugged in", run("powercfg", &["/change", "standby-timeout-ac", "0"], None, &[]));
+    } else {
+        report.lines.push("power settings: left as they are".into());
+    }
 
     let _ = std::fs::write(log_path, report.lines.join("\n"));
     if report.failed {
@@ -247,11 +264,11 @@ fn restart_wsl(win: &Windows, _options: &SetupOptions, say: &mut Say) -> Outcome
     let _ = win.wsl(&["--shutdown"]);
     std::thread::sleep(std::time::Duration::from_secs(3));
     for attempt in 0..20 {
-        let sshd_ok = win.in_distro("ss -ltn 2>/dev/null").stdout.contains(&format!(":{WSL_SSH_PORT} "));
+        let sshd_ok = win.in_distro("ss -ltn 2>/dev/null").stdout.contains(&format!(":{} ", win.ssh_port));
         let docker = win.in_distro("docker version --format '{{.Server.Version}}' 2>/dev/null");
         let docker_ok = docker.ok && !docker.text().is_empty();
         if sshd_ok && docker_ok {
-            return Outcome::Changed(format!("sshd on {WSL_SSH_PORT}, Docker {}", docker.text()));
+            return Outcome::Changed(format!("sshd on {}, Docker {}", win.ssh_port, docker.text()));
         }
         if attempt == 19 {
             let what = if !sshd_ok { "sshd is not listening" } else { "Docker is not answering" };

@@ -7,7 +7,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::containers::{self, Action, Container};
-use crate::ssh::Line;
+use crate::job::Line;
 use crate::AppState;
 
 type CmdResult<T> = Result<T, String>;
