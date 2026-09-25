@@ -26,12 +26,15 @@ pub fn get_settings(state: State<'_, AppState>) -> SettingsView {
 }
 
 /// Saves, then starts or stops the sharing role and the start-at-login entry
-/// to match, so a toggle takes effect at once.
+/// to match, so a toggle takes effect at once. Applying runs off the main
+/// thread: a changed WSL distribution means several wsl.exe calls, and the
+/// window must not freeze while they run.
 #[tauri::command]
-pub fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> Result<Settings, String> {
+pub async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> Result<Settings, String> {
     let settings = settings.normalised();
     state.store.save_settings(settings.clone()).map_err(|err| format!("{err:#}"))?;
-    crate::apply_settings(&app);
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::apply_settings(&handle)).await.map_err(|err| format!("{err}"))?;
     Ok(settings)
 }
 

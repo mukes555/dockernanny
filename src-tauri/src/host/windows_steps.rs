@@ -158,11 +158,14 @@ fn wslconfig(win: &Windows, options: &SetupOptions, say: &mut Say) -> Outcome {
 }
 
 /// Firewall rules, network profile, power settings: run by the elevated copy.
-/// Skipped when the rules already open the right ports and nothing else was asked.
+/// Skipped when the rules already open the right ports and nothing else is
+/// left to do, so running Set up again does not ask for administrator rights.
 fn admin_batch(win: &Windows, options: &SetupOptions, say: &mut Say) -> Outcome {
     let rules_match = win.firewall_matches(options.pairing_port);
     let network = options.make_network_private.as_deref();
-    let nothing_to_do = rules_match && network.is_none() && !options.keep_awake;
+    // Power settings applied by an earlier Set up are not asked for again.
+    let power_done = !options.keep_awake || power_marker().exists();
+    let nothing_to_do = rules_match && network.is_none() && power_done;
     if nothing_to_do {
         return Outcome::Done("firewall rules present".into());
     }
@@ -185,8 +188,17 @@ fn admin_batch(win: &Windows, options: &SetupOptions, say: &mut Say) -> Outcome 
     if code != 0 {
         return Outcome::Failed(format!("the administrator step exited with code {code}"));
     }
+    if options.keep_awake {
+        let _ = std::fs::write(power_marker(), "applied by Set up\n");
+    }
     let power = if options.keep_awake { ", computer stays awake when plugged in" } else { "" };
     Outcome::Changed(format!("firewall open{power}"))
+}
+
+/// Remembers that Set up changed the power settings, so a later Set up does
+/// not need administrator rights just to set them to the same values.
+fn power_marker() -> std::path::PathBuf {
+    crate::store::home_dir().join("power-settings-applied")
 }
 
 /// What the elevated copy does. Output goes to a file the parent shows.

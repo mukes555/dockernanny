@@ -12,6 +12,8 @@ import { Button, CodeBlock } from "../ui/primitives";
  * Docker context is not offered yet. */
 export function TerminalDialog({ machine, onClose }: { machine: Machine | null; onClose: () => void }) {
   const appHome = useStore((state) => state.appHome);
+  const os = useStore((state) => state.os);
+  const settings = useStore((state) => state.settings);
   const setMachines = useStore((state) => state.setMachines);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +41,10 @@ export function TerminalDialog({ machine, onClose }: { machine: Machine | null; 
   };
 
   const config = info?.ssh_config ?? `${appHome || "~/.dockernanny"}/ssh_config`;
-  const wsl = info?.wsl_distro ?? null;
+  // Until the answer arrives (or if it fails), Windows still shows the WSL
+  // commands: the macOS ones do not work there.
+  const distroFromSettings = os === "windows" ? (settings?.wsl_distro ?? "Ubuntu") : null;
+  const wsl = info ? info.wsl_distro : distroFromSettings;
   const contextName = machine ? `dn-${contextSlug(machine.name)}` : "";
   if (machine && wsl) {
     return (

@@ -44,7 +44,16 @@ pub fn default_key_path(state: State<'_, AppState>) -> String {
 
 #[tauri::command]
 pub async fn computer_readiness(state: State<'_, AppState>) -> CmdResult<Vec<DoctorRow>> {
-    Ok(computer::readiness(&key_path(&state)).await)
+    let rows = computer::readiness(&key_path(&state)).await;
+    // WSL that answers only now (installed or started after the app) has
+    // no ssh config yet; the check that finds it working writes one.
+    let wsl_answers = rows.iter().any(|row| row.key == "wsl" && row.ok);
+    if wsl_answers {
+        if let Err(err) = state.ssh.prepare(&state.store.machines()) {
+            tracing::warn!("the tools could not be prepared in WSL: {err:#}");
+        }
+    }
+    Ok(rows)
 }
 
 /// Makes the key `default_key_path` points at, only when it does not exist.

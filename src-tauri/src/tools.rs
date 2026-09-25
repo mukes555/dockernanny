@@ -109,11 +109,28 @@ pub fn wsl_path(windows: &str) -> String {
 pub fn home(app_home: &Path) -> String {
     #[cfg(windows)]
     {
-        let _ = app_home;
-        format!("{}/.dockernanny", wsl::home())
+        let custom = std::env::var_os("DOCKERNANNY_HOME").is_some();
+        format!("{}/{}", wsl::home(), folder_in_wsl(custom, app_home))
     }
     #[cfg(not(windows))]
     app_home.display().to_string()
+}
+
+/// The tools' folder name inside WSL. A second instance or a test run with
+/// its own `DOCKERNANNY_HOME` gets its own folder there too, named after its
+/// app folder, so it never overwrites the app's ssh config or sockets.
+pub fn folder_in_wsl(custom_home: bool, app_home: &Path) -> String {
+    if !custom_home {
+        return ".dockernanny".into();
+    }
+    let name = app_home.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let plain: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')).collect();
+    let plain = plain.trim_start_matches('.');
+    if plain.is_empty() {
+        ".dockernanny-custom".into()
+    } else {
+        format!(".dockernanny-{plain}")
+    }
 }
 
 /// Creates the folders the tools write into, open to their owner only.
@@ -234,7 +251,14 @@ mod wsl {
     struct Chosen {
         distro: String,
         home: Option<String>,
+        /// When the distribution last failed to say where its home is.
+        failed_at: Option<std::time::Instant>,
     }
+
+    /// Where the tools' files are said to be while the distribution does not
+    /// answer: an ssh error then names it, instead of pointing somewhere real.
+    const NO_HOME: &str = "/dockernanny-needs-wsl";
+    const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
 
     static CHOSEN: RwLock<Option<Chosen>> = RwLock::new(None);
 
@@ -245,7 +269,7 @@ mod wsl {
         if previous.as_deref() == Some(distro) {
             return false;
         }
-        *chosen = Some(Chosen { distro: distro.to_string(), home: None });
+        *chosen = Some(Chosen { distro: distro.to_string(), home: None, failed_at: None });
         // The first choice is made at start, before the tools are prepared; it is not a change.
         previous.is_some()
     }
@@ -254,19 +278,38 @@ mod wsl {
         CHOSEN.read().expect("wsl lock").as_ref().map(|c| c.distro.clone()).unwrap_or_else(|| crate::settings::DEFAULT_WSL_DISTRO.into())
     }
 
-    /// `$HOME` inside the distribution, asked once and kept. Until the
-    /// distribution answers (WSL missing, first start) it is asked again next time.
+    /// `$HOME` inside the distribution, asked once and kept. While the
+    /// distribution does not answer (WSL missing or starting) the answer is
+    /// NO_HOME, and it is asked again at most every RETRY_AFTER, so every ssh
+    /// command does not start wsl.exe once more.
     pub fn home() -> String {
-        if let Some(home) = CHOSEN.read().expect("wsl lock").as_ref().and_then(|c| c.home.clone()) {
+        let (cached, failed_recently) = {
+            let chosen = CHOSEN.read().expect("wsl lock");
+            let cached = chosen.as_ref().and_then(|c| c.home.clone());
+            let failed_recently = chosen.as_ref().and_then(|c| c.failed_at).is_some_and(|at| at.elapsed() < RETRY_AFTER);
+            (cached, failed_recently)
+        };
+        if let Some(home) = cached {
             return home;
+        }
+        if failed_recently {
+            return NO_HOME.into();
         }
         let out = super::unix_std("sh").args(["-c", "printf %s \"$HOME\""]).stdin(Stdio::null()).output();
         let found = out.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|h| h.starts_with('/'));
-        let Some(home) = found else { return "/root".into() };
-        if let Some(chosen) = CHOSEN.write().expect("wsl lock").as_mut() {
-            chosen.home = Some(home.clone());
+        let mut chosen = CHOSEN.write().expect("wsl lock");
+        let Some(entry) = chosen.as_mut() else { return found.unwrap_or_else(|| NO_HOME.into()) };
+        match found {
+            Some(home) => {
+                entry.home = Some(home.clone());
+                entry.failed_at = None;
+                home
+            }
+            None => {
+                entry.failed_at = Some(std::time::Instant::now());
+                NO_HOME.into()
+            }
         }
-        home
     }
 
     /// A shell script inside the distribution with its arguments as `$1...`,
@@ -343,6 +386,14 @@ mod tests {
         assert_eq!(wsl_path("e:/data/x"), "/mnt/e/data/x");
         assert_eq!(wsl_path("/home/alex/shop"), "/home/alex/shop");
         assert_eq!(wsl_path(r"relative\dir"), "relative/dir");
+    }
+
+    #[test]
+    fn a_custom_app_folder_gets_its_own_folder_in_wsl() {
+        assert_eq!(folder_in_wsl(false, Path::new(r"C:\Users\alex\.dockernanny")), ".dockernanny");
+        assert_eq!(folder_in_wsl(true, Path::new("/x/test home")), ".dockernanny-testhome");
+        assert_eq!(folder_in_wsl(true, Path::new("/x/.dockernanny-smoke")), ".dockernanny-dockernanny-smoke");
+        assert_eq!(folder_in_wsl(true, Path::new("/")), ".dockernanny-custom");
     }
 
     #[test]

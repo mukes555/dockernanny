@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::process::Child;
 
-use super::platform::{host_key_from_pub, parse_ipconfig, row, run, Installed, NetworkProfile, Outcome, Output, Picture, Platform, Row, Say, SetupOptions, State};
+use super::platform::{host_key_from_pub, parse_ipconfig, parse_rule, row, run, FirewallRules, Installed, NetworkProfile, Outcome, Output, Picture, Platform, Row, Rule, Say, SetupOptions, State};
 use super::{windows_steps, MIN_WINDOWS_BUILD};
 
 pub struct Windows {
@@ -31,8 +31,9 @@ impl Windows {
     }
 
     /// Whether `wsl -l -q` lists the chosen distribution.
+    /// WSL matches distribution names without regard to case, and so does this.
     pub fn has_distro(&self) -> bool {
-        self.wsl(&["-l", "-q"]).stdout.lines().any(|l| l.trim() == self.distro)
+        self.wsl(&["-l", "-q"]).stdout.lines().any(|l| l.trim().eq_ignore_ascii_case(&self.distro))
     }
 
     pub fn powershell(&self, script: &str) -> Output {
@@ -56,20 +57,27 @@ impl Windows {
         run("netsh", &["advfirewall", "firewall", "show", "rule", &format!("name={name}")], None, &[]).ok
     }
 
-    /// The port a firewall rule opens, None when there is no such rule. Read
-    /// without admin rights, so Set up knows whether a changed port needs
-    /// it; through PowerShell objects because netsh's text is translated.
-    /// `name` is one of this app's fixed rule names.
-    pub fn firewall_rule_port(&self, name: &str) -> Option<u16> {
-        let script = format!("Get-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue | Get-NetFirewallPortFilter | Select-Object -First 1 -ExpandProperty LocalPort");
-        self.powershell(&script).text().parse().ok()
+    /// This app's two firewall rules, read in one PowerShell call without
+    /// admin rights (PowerShell objects, because netsh's text is translated).
+    /// When PowerShell cannot answer, netsh still tells whether each exists.
+    pub fn firewall_rules(&self) -> FirewallRules {
+        let script = "foreach ($name in 'dockerNanny SSH', 'dockerNanny Pair') { $rule = Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue; if ($rule) { $port = ($rule | Get-NetFirewallPortFilter | Select-Object -First 1).LocalPort; \"$name=$port\" } else { \"$name=\" } }";
+        let out = self.powershell(script);
+        let answered = out.ok && out.stdout.contains("dockerNanny SSH=");
+        if !answered {
+            let fallback = |name: &str| if self.firewall_rule_exists(name) { Rule::Open(None) } else { Rule::Missing };
+            return FirewallRules { ssh: fallback("dockerNanny SSH"), pairing: fallback("dockerNanny Pair") };
+        }
+        FirewallRules {
+            ssh: parse_rule(&out.stdout, "dockerNanny SSH"),
+            pairing: parse_rule(&out.stdout, "dockerNanny Pair"),
+        }
     }
 
-    /// Both rules there and on the ports asked for.
+    /// Both rules there and, as far as can be read, on the ports asked for.
     pub fn firewall_matches(&self, pairing_port: u16) -> bool {
-        let ssh_ok = self.firewall_rule_port("dockerNanny SSH") == Some(self.ssh_port);
-        let pair_ok = self.firewall_rule_port("dockerNanny Pair") == Some(pairing_port);
-        ssh_ok && pair_ok
+        let rules = self.firewall_rules();
+        rules.ssh.opens(self.ssh_port) && rules.pairing.opens(pairing_port)
     }
 
     fn total_memory_gb(&self) -> u32 {
@@ -135,15 +143,15 @@ impl Platform for Windows {
         picture.rows.push(row("rsync", rsync.ok && !rsync.text().is_empty(), if rsync.ok { "installed" } else { "missing" }));
 
         // Pairing may listen once both rules exist; a port changed since only needs Set up again.
-        let firewall_open = self.firewall_rule_exists("dockerNanny SSH") && self.firewall_rule_exists("dockerNanny Pair");
+        let rules = self.firewall_rules();
+        let firewall_open = rules.ssh != Rule::Missing && rules.pairing != Rule::Missing;
         picture.ready_for_pairing = firewall_open;
-        let ssh_rule_port = self.firewall_rule_port("dockerNanny SSH");
-        let firewall_detail = match ssh_rule_port {
-            Some(open) if open == port => "ports open".to_string(),
-            Some(open) => format!("open for {open}, not {port} (Set up again updates it)"),
-            None => "ports closed (Set up opens them)".to_string(),
+        let firewall_detail = match (&rules.ssh, firewall_open) {
+            (_, false) => "ports closed (Set up opens them)".to_string(),
+            (Rule::Open(Some(open)), true) if *open != port => format!("open for {open}, not {port} (Set up again updates it)"),
+            _ => "ports open".to_string(),
         };
-        picture.rows.push(row("Firewall", firewall_open && ssh_rule_port == Some(port), firewall_detail));
+        picture.rows.push(row("Firewall", firewall_open && rules.ssh.opens(port), firewall_detail));
 
         picture.network = self.network_profile();
         if let Some(network) = &picture.network {

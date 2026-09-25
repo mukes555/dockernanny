@@ -48,10 +48,12 @@ pub struct ForwardEvent {
     pub state: ForwardState,
 }
 
-/// A running forwarder: what it forwards and how to stop it.
+/// A running forwarder: what it forwards, how to stop it, and its task, so a
+/// replacement can wait until it has fully stopped.
 pub struct Forwarder {
     pub ports: Vec<ForwardPort>,
     cancel: watch::Sender<bool>,
+    task: tauri::async_runtime::JoinHandle<()>,
 }
 
 /// Ports that something on this computer already listens on. Both address families
@@ -98,23 +100,18 @@ pub fn reconcile(app: &AppHandle, stack: &Stack, services: &[ServiceState]) {
     if current == desired {
         return;
     }
-    if let Some(old) = forwarders.remove(&stack.id) {
+    let previous = forwarders.remove(&stack.id).map(|old| {
         let _ = old.cancel.send(true);
-    }
+        old.task
+    });
     if desired.is_empty() {
         publish(app, &stack.id, ForwardState::default());
         return;
     }
     let Some(machine) = state.store.machine(&stack.machine_id) else { return };
     let (cancel, cancelled) = watch::channel(false);
-    tauri::async_runtime::spawn(run(app.clone(), stack.id.clone(), machine.alias(), desired.clone(), cancelled));
-    forwarders.insert(
-        stack.id.clone(),
-        Forwarder {
-            ports: desired,
-            cancel,
-        },
-    );
+    let task = tauri::async_runtime::spawn(run(app.clone(), stack.id.clone(), machine.alias(), desired.clone(), cancelled, previous));
+    forwarders.insert(stack.id.clone(), Forwarder { ports: desired, cancel, task });
 }
 
 pub fn stop(app: &AppHandle, stack_id: &str) {
@@ -138,7 +135,12 @@ pub fn exit_all(ssh: &Ssh, stack_ids: impl Iterator<Item = String>, aliases: &Ha
     }
 }
 
-async fn run(app: AppHandle, stack_id: String, alias: String, ports: Vec<ForwardPort>, mut cancelled: watch::Receiver<bool>) {
+async fn run(app: AppHandle, stack_id: String, alias: String, ports: Vec<ForwardPort>, mut cancelled: watch::Receiver<bool>, previous: Option<tauri::async_runtime::JoinHandle<()>>) {
+    // Both use the same control socket: the old forwarder's final "exit"
+    // must not reach this one, so it finishes stopping first.
+    if let Some(previous) = previous {
+        let _ = previous.await;
+    }
     let ssh = app.state::<AppState>().ssh.clone();
     let socket = ssh.forward_socket(&stack_id);
     let mut attempts: u32 = 0;

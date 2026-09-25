@@ -198,7 +198,8 @@ pub fn authorized_keys_script(user: &str, key: &str) -> String {
 pub fn host_key_from_pub(text: &str) -> String {
     let mut fields = text.split_whitespace();
     match (fields.next(), fields.next()) {
-        (Some(key_type), Some(blob)) if key_type.starts_with("ssh-") || key_type.starts_with("ecdsa-") => format!("{key_type} {blob}"),
+        // sk- keys live on a hardware security key (FIDO); they are ssh keys too.
+        (Some(key_type), Some(blob)) if key_type.starts_with("ssh-") || key_type.starts_with("ecdsa-") || key_type.starts_with("sk-") => format!("{key_type} {blob}"),
         _ => String::new(),
     }
 }
@@ -216,6 +217,43 @@ pub fn parse_ifconfig(text: &str) -> Vec<String> {
         }
     }
     addresses
+}
+
+/// One of the app's Windows firewall rules, as far as it can be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rule {
+    Missing,
+    /// There, opening this port; None when the port could not be read.
+    Open(Option<u16>),
+}
+
+impl Rule {
+    /// Whether it opens `port`. A rule whose port cannot be read is trusted,
+    /// so an unreadable answer never makes Set up ask for admin rights again.
+    pub fn opens(&self, port: u16) -> bool {
+        match self {
+            Rule::Missing => false,
+            Rule::Open(None) => true,
+            Rule::Open(Some(open)) => *open == port,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FirewallRules {
+    pub ssh: Rule,
+    pub pairing: Rule,
+}
+
+/// A `dockerNanny SSH=2222` line from the rules query; an empty value means
+/// there is no such rule, a value that is not one port means it is unreadable.
+pub fn parse_rule(text: &str, name: &str) -> Rule {
+    let prefix = format!("{name}=");
+    let Some(value) = text.lines().find_map(|line| line.trim().strip_prefix(&prefix)) else { return Rule::Missing };
+    if value.trim().is_empty() {
+        return Rule::Missing;
+    }
+    Rule::Open(value.trim().parse().ok())
 }
 
 /// `   IPv4 Address. . . . . . . . . . . : 192.0.2.15` lines from Windows'
@@ -261,6 +299,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn firewall_rules_read_from_one_query() {
+        let text = "dockerNanny SSH=2222\r\ndockerNanny Pair=\r\n";
+        assert_eq!(parse_rule(text, "dockerNanny SSH"), Rule::Open(Some(2222)));
+        assert_eq!(parse_rule(text, "dockerNanny Pair"), Rule::Missing);
+        assert_eq!(parse_rule("dockerNanny SSH=2222,47433\n", "dockerNanny SSH"), Rule::Open(None));
+        assert!(Rule::Open(None).opens(2200), "an unreadable port is trusted");
+        assert!(!Rule::Open(Some(2222)).opens(2200));
+        assert!(!Rule::Missing.opens(2222));
+    }
+
+    #[test]
     fn ipconfig_skips_virtual_adapters() {
         let text = "Ethernet adapter vEthernet (WSL):\n\n   IPv4 Address. . . . . . . . . . . : 172.20.0.1\n\nWireless LAN adapter Wi-Fi:\n\n   IPv4 Address. . . . . . . . . . . : 192.0.2.15(Preferred)\n   Autoconfiguration IPv4 Address. . : 169.254.1.1\n";
         assert_eq!(parse_ipconfig(text), vec!["192.0.2.15".to_string()]);
@@ -277,6 +326,7 @@ mod tests {
     fn host_key_keeps_type_and_blob_only() {
         assert_eq!(host_key_from_pub("ssh-ed25519 AAAAC3Nz root@machine\n"), "ssh-ed25519 AAAAC3Nz");
         assert_eq!(host_key_from_pub("garbage"), "");
+        assert_eq!(host_key_from_pub("sk-ssh-ed25519@openssh.com AAAAGnNr alex@studio"), "sk-ssh-ed25519@openssh.com AAAAGnNr");
     }
 
     #[test]

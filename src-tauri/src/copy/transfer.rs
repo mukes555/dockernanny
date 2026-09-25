@@ -153,10 +153,19 @@ fn local_children(source: &str) -> anyhow::Result<Vec<String>> {
         .spawn()
         .context("run docker cp")?;
     let stdout = child.stdout.take().context("no stdout")?;
+    // stderr is drained alongside: a full stderr pipe would stop docker while
+    // this side waits on stdout, and neither would ever finish.
+    let mut stderr = child.stderr.take().context("no stderr")?;
+    let stderr_text = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = std::io::Read::read_to_string(&mut stderr, &mut text);
+        text
+    });
     // Reading to the end (or dropping the pipe on an error) lets docker finish.
     let names = names_below_top(stdout);
-    let out = child.wait_with_output().context("wait for docker cp")?;
-    anyhow::ensure!(out.status.success(), "could not list {source} on this computer: {}", String::from_utf8_lossy(&out.stderr).trim());
+    let status = child.wait().context("wait for docker cp")?;
+    let errors = stderr_text.join().unwrap_or_default();
+    anyhow::ensure!(status.success(), "could not list {source} on this computer: {}", errors.trim());
     names.context("read the tar docker cp wrote")
 }
 
