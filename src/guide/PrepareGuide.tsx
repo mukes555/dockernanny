@@ -189,7 +189,7 @@ function LinuxSteps() {
 sudo usermod -aG docker $USER
 sudo systemctl enable --now docker`}
         />
-        <Note>Log out and back in once so the docker group applies.</Note>
+        <Note>Every new ssh login picks up the docker group at once, and Check connection in dockerNanny logs in afresh. For Docker without sudo on the machine's own desktop too, restart it once.</Note>
       </Step>
 
       <Step n={2} title="Install sshd and rsync" where="Terminal on the machine">

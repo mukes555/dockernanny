@@ -2,11 +2,15 @@
 //! shows what is still to come. The names are written once, here, so the
 //! planned list and the steps as they run are the same strings.
 
+use super::discover::Download;
 use super::{CopyRequest, Inventory, Sides};
 
 pub mod names {
     pub fn look() -> String {
         "looking at both ends".into()
+    }
+    pub fn download(image: &str, label: &str) -> String {
+        format!("downloading {image} on {label}")
     }
     pub fn stop(name: &str, label: &str) -> String {
         format!("stopping {name} on {label}")
@@ -38,9 +42,13 @@ pub mod names {
 }
 
 /// Everything the copy will do, in order, once it has looked at both ends.
-pub(crate) fn planned(sides: &Sides, request: &CopyRequest, inventory: Option<&Inventory>, destination_exists: bool, source_running: bool) -> Vec<String> {
+pub(crate) fn planned(sides: &Sides, request: &CopyRequest, inventory: Option<&Inventory>, downloads: &[Download], destination_exists: bool, source_running: bool) -> Vec<String> {
     let (from, to) = (&sides.from, &sides.to);
     let mut steps = vec![names::look()];
+    // Before anything stops, so a missing image ends the copy early.
+    for download in downloads {
+        steps.push(names::download(&download.image, &to.label));
+    }
     if request.data && destination_exists {
         steps.push(names::stop(&to.name, &to.label));
     }
@@ -110,18 +118,20 @@ mod tests {
 
     #[test]
     fn the_step_list_follows_the_shape_of_the_copy() {
-        let config_only = planned(&sides(), &request(true, false, false, false), None, false, true);
+        let config_only = planned(&sides(), &request(true, false, false, false), None, &[], false, true);
         assert_eq!(config_only, vec!["looking at both ends", "copying the project folder to studio", "starting shop on studio", "checking the result on studio"]);
 
         let inventory = Inventory {
             volumes: vec![NamedVolume { key: "pgdata".into(), name: "shop-api_pgdata".into(), size: "412MB".into(), external: false }],
             images: vec!["shop-api-worker:local".into()],
         };
-        let both = planned(&sides(), &request(true, true, true, false), Some(&inventory), true, true);
+        let downloads = [Download { image: "postgres:16".into(), platform: None }];
+        let both = planned(&sides(), &request(true, true, true, false), Some(&inventory), &downloads, true, true);
         assert_eq!(
             both,
             vec![
                 "looking at both ends",
+                "downloading postgres:16 on studio",
                 "stopping shop on studio",
                 "stopping shop-api on this computer",
                 "copying the project folder to studio",
@@ -135,7 +145,7 @@ mod tests {
             ]
         );
 
-        let moved = planned(&sides(), &request(false, true, false, true), Some(&inventory), true, false);
+        let moved = planned(&sides(), &request(false, true, false, true), Some(&inventory), &[], true, false);
         assert!(!moved.iter().any(|s| s.contains("project folder")), "config off: no folder step");
         assert!(!moved.iter().any(|s| s.starts_with("stopping shop-api")), "a source that is not running is not stopped");
         assert!(!moved.iter().any(|s| s.contains("again")), "a move never starts the source again");

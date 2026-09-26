@@ -34,6 +34,8 @@ pub enum State {
     Ok,
     Missing,
     Unknown,
+    /// All installed; the user restarts the computer once to finish.
+    Restart,
 }
 
 /// One line of the status list: what this computer has or lacks.

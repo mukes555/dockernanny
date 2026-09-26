@@ -1,11 +1,25 @@
 import { useState } from "react";
 
 import { api, errorMessage } from "../lib/ipc";
-import type { HostSnapshot } from "../lib/types";
+import type { HostRow, HostSnapshot } from "../lib/types";
 import { useStore } from "../state/store";
 import { SpinnerIcon } from "../ui/icons";
 import { Button, Card, cx, Eyebrow, Toggle } from "../ui/primitives";
 import { SetupChanges } from "./SetupChanges";
+
+const ROW_DOT: Record<HostRow["state"], string> = {
+  ok: "bg-good",
+  missing: "bg-critical",
+  restart: "bg-warning",
+  unknown: "border border-ink-3",
+};
+
+const ROW_TEXT: Record<HostRow["state"], string> = {
+  ok: "text-ink-2",
+  missing: "text-critical",
+  restart: "text-warning",
+  unknown: "text-ink-2",
+};
 
 /** The sharing role's part of this computer's page: what this computer has,
  * a button that makes it ready, the pairing code for the other computer, and
@@ -93,9 +107,9 @@ function StatusSection({ host, onError }: { host: HostSnapshot; onError: (messag
       <div className="space-y-1.5">
         {host.rows.map((row) => (
           <div key={row.name} className="flex items-center gap-3 text-[13px]">
-            <span className={cx("h-2.5 w-2.5 shrink-0 rounded-full", row.state === "ok" ? "bg-good" : row.state === "missing" ? "bg-critical" : "border border-ink-3")} />
+            <span className={cx("h-2.5 w-2.5 shrink-0 rounded-full", ROW_DOT[row.state])} />
             <span className="w-32 shrink-0 font-medium text-ink">{row.name}</span>
-            <span className={cx("min-w-0 truncate", row.state === "missing" ? "text-critical" : "text-ink-2")} title={row.detail}>
+            <span className={cx("min-w-0 truncate", ROW_TEXT[row.state])} title={row.detail}>
               {row.detail}
             </span>
           </div>

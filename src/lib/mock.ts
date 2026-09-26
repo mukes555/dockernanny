@@ -34,6 +34,9 @@ const MOCK_OS: HostOs = ((): HostOs => {
   return asked === "windows" || asked === "linux" ? asked : "macos";
 })();
 
+// `?restart=1`: Docker is installed and only a restart of the computer is left.
+const MOCK_RESTART = new URLSearchParams(window.location.search).get("restart") === "1";
+
 // A full online reading with a few fields swapped: the shape the backend sends.
 const onlineStats = (over: Partial<MachineStats>): MachineStats => ({
   online: true,
@@ -258,7 +261,9 @@ const hostSnapshot = (): HostSnapshot => {
     rows: [
       { name: "Windows", state: "ok", detail: "build 22631" },
       { name: "WSL 2", state: "ok", detail: "2.6.1.0" },
-      { name: "Docker Engine", state: hostReady ? "ok" : "missing", detail: hostReady ? "29.8.1" : "not running or not installed" },
+      MOCK_RESTART
+        ? { name: "Docker Engine", state: "restart", detail: "running; restart this computer once so your login can use it" }
+        : { name: "Docker Engine", state: hostReady ? "ok" : "missing", detail: hostReady ? "29.8.1" : "not installed; Set up installs it" },
       { name: "SSH server", state: hostReady ? "ok" : "missing", detail: hostReady ? "listening on 2222" : "not listening on 2222" },
       { name: "Firewall", state: hostReady ? "ok" : "missing", detail: hostReady ? "ports open" : "ports closed (Set up opens them)" },
       { name: "Network", state: hostReady ? "ok" : "missing", detail: hostReady ? "Home Wi-Fi (Private)" : "Home Wi-Fi is marked Public, which blocks the firewall rules" },

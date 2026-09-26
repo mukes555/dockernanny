@@ -1,4 +1,5 @@
 import { errorMessage } from "../lib/ipc";
+import type { HostSnapshot } from "../lib/types";
 import { useStore } from "../state/store";
 import { OsGlyph } from "../ui/Badges";
 import { Chip, cx } from "../ui/primitives";
@@ -21,18 +22,7 @@ export function ThisComputerBlock() {
   const sharing = settings?.share_this_computer ?? false;
   const usingMachines = settings?.use_machines ?? true;
   const open = view === "computer";
-  const missing = host?.rows.filter((row) => row.state === "missing").length ?? 0;
-  const sharingChip: { text: string; tone: ChipTone } = !sharing
-    ? { text: "sharing off", tone: "neutral" }
-    : !host?.probed
-      ? { text: "sharing: checking", tone: "neutral" }
-      : host.pairing.armed
-        ? { text: `pairing on · ${host.pairing.code}`, tone: "accent" }
-        : missing > 0
-          ? { text: `sharing: ${missing} to set up`, tone: "warning" }
-          : host.connected.length > 0
-            ? { text: `sharing: ${host.connected.length} connected`, tone: "good" }
-            : { text: "sharing: ready", tone: "good" };
+  const sharingChip = sharingChipFor(sharing, host);
   const whoAndWhere = info ? `${info.user}@${info.probe.hostname ?? computerName}` : null;
 
   const turnSharingOn = () => {
@@ -77,4 +67,16 @@ export function ThisComputerBlock() {
       </div>
     </div>
   );
+}
+
+/** The one thing most worth knowing about sharing; the first match wins. */
+function sharingChipFor(sharing: boolean, host: HostSnapshot | null): { text: string; tone: ChipTone } {
+  if (!sharing) return { text: "sharing off", tone: "neutral" };
+  if (!host?.probed) return { text: "sharing: checking", tone: "neutral" };
+  if (host.pairing.armed) return { text: `pairing on · ${host.pairing.code}`, tone: "accent" };
+  const missing = host.rows.filter((row) => row.state === "missing").length;
+  if (missing > 0) return { text: `sharing: ${missing} to set up`, tone: "warning" };
+  if (host.rows.some((row) => row.state === "restart")) return { text: "sharing: restart once", tone: "warning" };
+  if (host.connected.length > 0) return { text: `sharing: ${host.connected.length} connected`, tone: "good" };
+  return { text: "sharing: ready", tone: "good" };
 }
