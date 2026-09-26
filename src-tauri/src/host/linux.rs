@@ -1,22 +1,16 @@
 //! A Linux box as the shared computer: Docker Engine, sshd on 22, rsync.
-//! Everything that needs root is one script; it runs through `pkexec` when
-//! a desktop session can show the password prompt, and is shown for the
-//! user to paste into a terminal otherwise.
+//! Everything that needs root is one script with only what is missing (see
+//! `linux_setup.rs`); it runs through `pkexec` when a desktop session can
+//! show the password prompt, and is shown for the user to paste into a
+//! terminal otherwise.
 
 use std::process::Child;
 
+use super::linux_setup::{docker_action_for_user, docker_row, RootPlan};
 use super::platform::{host_key_from_pub, parse_ifconfig, row, run, Installed, Outcome, Output, Picture, Platform, Say, SetupOptions};
+use crate::docker_access;
 
 const SSH_PORT: u16 = 22;
-const ROOT_SCRIPT: &str = "set -e\n\
-export DEBIAN_FRONTEND=noninteractive\n\
-if command -v apt-get >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq openssh-server rsync curl ca-certificates; fi\n\
-if command -v dnf >/dev/null 2>&1; then dnf install -y -q openssh-server rsync curl ca-certificates; fi\n\
-if command -v docker >/dev/null 2>&1; then echo \"docker already installed: $(docker --version)\"; else curl -fsSL https://get.docker.com | sh; fi\n\
-usermod -aG docker \"$DOCKERNANNY_USER\"\n\
-systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd\n\
-systemctl enable --now docker\n\
-echo dockernanny-linux-ok\n";
 
 pub struct Linux;
 
@@ -27,11 +21,6 @@ impl Linux {
 
     fn user(&self) -> String {
         std::env::var("USER").unwrap_or_else(|_| self.sh("whoami").text())
-    }
-
-    fn docker_version(&self) -> Option<String> {
-        let out = self.sh("docker version --format '{{.Server.Version}}' 2>/dev/null");
-        (out.ok && !out.text().is_empty()).then(|| out.text())
     }
 
     fn sshd_listening(&self) -> bool {
@@ -71,8 +60,7 @@ impl Platform for Linux {
         let release = self.sh(". /etc/os-release 2>/dev/null && echo \"$PRETTY_NAME\"").text();
         picture.rows.push(row("Linux", !release.is_empty(), if release.is_empty() { "unknown distribution".into() } else { release }));
 
-        let docker = self.docker_version();
-        picture.rows.push(row("Docker Engine", docker.is_some(), docker.unwrap_or_else(|| "not running or not installed".into())));
+        picture.rows.push(docker_row(&docker_access::check()));
 
         let listening = self.sshd_listening();
         picture.sshd_listening = listening;
@@ -86,30 +74,36 @@ impl Platform for Linux {
     fn setup(&self, _options: &SetupOptions, say: &mut Say) -> Vec<(&'static str, Outcome)> {
         let mut results = Vec::new();
         let user = self.user();
+        let docker = docker_access::check();
+        let plan = RootPlan::for_missing(!self.rsync_present(), !self.sshd_listening(), &docker, &user);
 
         say("==> Docker, sshd, rsync");
-        let all_present = self.docker_version().is_some() && self.sshd_listening() && self.rsync_present();
-        let root_step = if all_present {
-            Outcome::Done("Docker, sshd and rsync present".into())
+        let root_step = if plan.is_empty() {
+            Outcome::Done("nothing to install or start".into())
         } else if self.can_prompt_for_root() {
             say("    the system asks for your password (pkexec)");
-            let out = run("pkexec", &["env", &format!("DOCKERNANNY_USER={user}"), "sh", "-c", ROOT_SCRIPT], None, &[]);
+            let out = run("pkexec", &["sh", "-c", &plan.script()], None, &[]);
             for line in out.stdout.lines().chain(out.stderr.lines()).filter(|l| !l.trim().is_empty()).take(40) {
                 say(&format!("    | {line}"));
             }
             if out.ok && out.stdout.contains("dockernanny-linux-ok") {
-                Outcome::Changed("Docker, sshd and rsync ready; log out and back in once so the docker group applies".into())
+                Outcome::Changed(plan.summary())
             } else {
                 Outcome::Failed("the root script did not finish; see the lines above".into())
             }
         } else {
-            let script = ROOT_SCRIPT.replace("\"$DOCKERNANNY_USER\"", &user);
-            Outcome::NeedsUser(format!("Run this as root in a terminal, then click Set up again:\n\n{script}"))
+            Outcome::NeedsUser(format!("Run this as root in a terminal, then click Set up again:\n\n{}", plan.script()))
         };
         let stop = matches!(root_step, Outcome::Failed(_) | Outcome::NeedsUser(_));
         results.push(("Docker, sshd, rsync", root_step));
         if stop {
             return results;
+        }
+        // Checked again after the script: joining the docker group leaves a
+        // restart to the user, and the notice should say so.
+        let docker_now = if plan.is_empty() { docker } else { docker_access::check() };
+        if let Some(action) = docker_action_for_user(&docker_now) {
+            results.push(("Docker", Outcome::NeedsUser(action)));
         }
 
         say("==> Key folder");

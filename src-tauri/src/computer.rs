@@ -53,7 +53,6 @@ pub async fn readiness(key_path: &Path) -> Vec<DoctorRow> {
     let Versions { ssh, rsync, docker } = versions().await;
     let key_present = key_path.exists();
     let key_detail = if key_present { key_path.display().to_string() } else { format!("no key at {}", key_path.display()) };
-    let docker_detail = docker.clone().map(|v| format!("Docker {v}")).unwrap_or_else(|| "not running or not installed".into());
     let mut rows = Vec::new();
     if let Some(distro) = tools::wsl_distro() {
         rows.push(wsl_row(&distro).await);
@@ -61,14 +60,43 @@ pub async fn readiness(key_path: &Path) -> Vec<DoctorRow> {
     rows.push(row("ssh", "SSH client", ssh.clone(), ssh.is_some(), install_hint("an OpenSSH client", "openssh-client")));
     rows.push(row("rsync", "rsync", rsync.clone(), rsync.is_some(), install_hint("rsync", "rsync")));
     rows.push(row("key", "SSH key", Some(key_detail), key_present, "Create one with the button below, or choose an existing key in Settings.".into()));
-    rows.push(row(
+    rows.push(docker_here_row(docker).await);
+    rows
+}
+
+const DOCKER_NEEDED_FOR: &str = "Only needed to preview a dropped compose file and to copy this computer's own projects.";
+
+/// Docker on this computer. On Linux, when it does not answer, the same
+/// check as the sharing page says why, with Docker's own next step.
+async fn docker_here_row(version: Option<String>) -> DoctorRow {
+    if let Some(version) = version {
+        return row("docker", "Docker here", Some(format!("Docker {version}")), true, String::new());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(access) = tauri::async_runtime::spawn_blocking(crate::docker_access::check).await {
+            return row("docker", "Docker here", Some(access.detail()), access.is_ready(), linux_docker_fix(&access));
+        }
+    }
+    row(
         "docker",
         "Docker here",
-        Some(docker_detail),
-        docker.is_some(),
-        "Only needed to preview a dropped compose file and to copy this computer's own projects. Install Docker Desktop, OrbStack or Docker Engine and start it.".into(),
-    ));
-    rows
+        Some("not running or not installed".into()),
+        false,
+        format!("{DOCKER_NEEDED_FOR} Install Docker Desktop, OrbStack or Docker Engine and start it."),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn linux_docker_fix(access: &crate::docker_access::DockerAccess) -> String {
+    use crate::docker_access::DockerAccess;
+    match access {
+        DockerAccess::NotInstalled => format!("{DOCKER_NEEDED_FOR} Install Docker Engine (docs.docker.com/engine/install) and start it."),
+        DockerAccess::NotRunning => "Start it: sudo systemctl enable --now docker".into(),
+        DockerAccess::NotInGroup => "Docker's post-install step: sudo usermod -aG docker $USER, then restart this computer once.".into(),
+        DockerAccess::RestartNeeded => "Restart this computer once so your login can use Docker.".into(),
+        DockerAccess::Ready(_) | DockerAccess::Other(_) => format!("{DOCKER_NEEDED_FOR} Make `docker version` work without sudo."),
+    }
 }
 
 /// Windows: whether the chosen WSL distribution answers at all.

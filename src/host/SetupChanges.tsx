@@ -16,8 +16,9 @@ const CHANGES: Record<HostOs, string[]> = {
   ],
   macos: ["Turns on Remote Login (the SSH server). macOS asks for your password.", "Creates ~/.ssh/authorized_keys if it is missing."],
   linux: [
-    "Installs openssh-server, rsync and Docker Engine if missing, and starts them. The system asks for your password (pkexec), or shows the commands to run yourself.",
-    "Adds you to the docker group.",
+    "Only what is missing, as one root script: installs rsync and openssh-server and turns the SSH server on; installs Docker Engine with Docker's official script and starts it (also at boot). The system asks for your password (pkexec), or shows the commands to run yourself.",
+    "Adds you to the docker group if you are not in it. As Docker's own guide warns, that lets your user control Docker with root-level power. Your login picks it up after one restart.",
+    "Docker installed another way (snap, Docker Desktop, rootless, Podman) is left as it is.",
     "Creates ~/.ssh/authorized_keys if it is missing.",
   ],
 };

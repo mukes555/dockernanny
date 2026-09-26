@@ -12,14 +12,17 @@ pub mod endpoint;
 pub mod folder;
 pub mod local;
 pub mod progress;
+pub mod pull;
 pub mod steps;
 pub mod transfer;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use check::Summary;
 use discover::{ContainerData, NamedVolume};
@@ -145,6 +148,21 @@ impl Report<'_> {
         })
     }
 
+    /// A sink that also keeps the last line reading like an error, so a
+    /// failure can say why in Docker's own words, not only its exit code.
+    fn sink_keeping_error(&self) -> (Sink, Arc<Mutex<Option<String>>>) {
+        let mut inner = self.sink();
+        let reason = Arc::new(Mutex::new(None));
+        let kept = reason.clone();
+        let sink: Sink = Box::new(move |l: Line| {
+            if reads_like_error(&l.text) {
+                *kept.lock().expect("reason lock") = Some(l.text.trim().to_string());
+            }
+            inner(l);
+        });
+        (sink, reason)
+    }
+
     fn say(&self, text: &str) {
         self.sink()(line(text));
     }
@@ -187,6 +205,18 @@ pub(crate) fn line(text: &str) -> Line {
     }
 }
 
+fn reads_like_error(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("error") || lower.contains("failed")
+}
+
+/// Why a Docker command failed: the last error line it printed, or its
+/// exit code when it printed none.
+fn why_it_failed(code: Option<i32>, reason: &Mutex<Option<String>>) -> String {
+    let said = reason.lock().expect("reason lock").take();
+    said.unwrap_or_else(|| format!("exited with code {}", code.map(|c| c.to_string()).unwrap_or_else(|| "?".into())))
+}
+
 /// Looks at both ends without changing anything.
 pub async fn plan(ssh: &Ssh, sides: &Sides, request: &CopyRequest) -> anyhow::Result<CopyPlan> {
     let (from, to) = (&sides.from, &sides.to);
@@ -227,7 +257,9 @@ pub async fn plan(ssh: &Ssh, sides: &Sides, request: &CopyRequest) -> anyhow::Re
     } else {
         (Vec::new(), Vec::new(), Vec::new(), 0)
     };
-    let notes = check::preflight(ssh, to, needed).await?;
+    let mut notes = check::preflight(ssh, to, needed).await?;
+    let downloads = pull::planned(ssh, sides, request, &model, &images).await;
+    notes.extend(pull::note(&to.label, &downloads));
 
     Ok(CopyPlan {
         from: from.label.clone(),
@@ -272,17 +304,21 @@ async fn run_steps(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest,
     let destination_exists = to.exists(ssh).await;
     anyhow::ensure!(request.config || destination_exists, "{} has no copy of the project yet; copy the config too", to.label);
 
-    let inventory = if request.data { Some(Inventory::at(ssh, from, to).await?) } else { None };
+    let model = discover::model(ssh, from).await?;
+    let inventory = if request.data { Some(Inventory::at(ssh, from, to, &model).await) } else { None };
     let needed = inventory.as_ref().map(|i| i.volumes.iter().map(|v| check::parse_human_size(&v.size)).sum()).unwrap_or(0);
     for note in check::preflight(ssh, to, needed).await? {
         report.say(&format!("    {note}"));
     }
+    let carried = inventory.as_ref().map(|i| i.images.as_slice()).unwrap_or(&[]);
+    let downloads = pull::planned(ssh, sides, request, &model, carried).await;
 
     let source_ps = from.compose_output(ssh, "ps -a --format json").await?;
     let source_services = compose::parse_ps(&source_ps.stdout);
     let source_running = source_services.iter().any(|s| s.state == "running");
-    let steps = steps::planned(sides, request, inventory.as_ref(), destination_exists, source_running);
+    let steps = steps::planned(sides, request, inventory.as_ref(), &downloads, destination_exists, source_running);
     report.progress.lock().expect("progress lock").set_steps(steps);
+    pull::run(ssh, sides, &downloads, report).await?;
 
     if request.data && destination_exists {
         report.step(Phase::Migrating, &names::stop(&to.name, &to.label));
@@ -325,11 +361,10 @@ pub(crate) struct Inventory {
 }
 
 impl Inventory {
-    async fn at(ssh: &Ssh, from: &Site, to: &Site) -> anyhow::Result<Self> {
-        let model = discover::model(ssh, from).await?;
-        let volumes = discover::named_volumes(ssh, from, &model).await;
-        let images = if from.is_local() { discover::images_to_carry(ssh, from, to, &model).await } else { Vec::new() };
-        Ok(Self { volumes, images })
+    async fn at(ssh: &Ssh, from: &Site, to: &Site, model: &Value) -> Self {
+        let volumes = discover::named_volumes(ssh, from, model).await;
+        let images = if from.is_local() { discover::images_to_carry(ssh, from, to, model).await } else { Vec::new() };
+        Self { volumes, images }
     }
 }
 
@@ -365,9 +400,9 @@ async fn carry(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest, inv
             sent.with_context(|| format!("image {image}"))?;
         }
         report.step(Phase::Migrating, &names::create(&to.label));
-        let create = to.compose_job(ssh, "create --build --remove-orphans", report.sink())?;
-        let code = create.wait().await?;
-        anyhow::ensure!(code == Some(0), "compose create on {} exited with code {}", to.label, code.map(|c| c.to_string()).unwrap_or_else(|| "?".into()));
+        let (sink, reason) = report.sink_keeping_error();
+        let code = to.compose_job(ssh, "create --build --remove-orphans", sink)?.wait().await?;
+        anyhow::ensure!(code == Some(0), "compose create on {} failed: {}", to.label, why_it_failed(code, &reason));
 
         if !request.data_selection.is_empty() {
             copy_container_data(ssh, sides, request, source_services, source_stopped, report).await?;
@@ -375,9 +410,9 @@ async fn carry(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest, inv
     }
 
     report.step(Phase::Starting, &names::start(&to.name, &to.label));
-    let up = to.compose_job(ssh, "up -d --build --remove-orphans", report.sink())?;
-    let code = up.wait().await?;
-    anyhow::ensure!(code == Some(0), "compose up on {} exited with code {}", to.label, code.map(|c| c.to_string()).unwrap_or_else(|| "?".into()));
+    let (sink, reason) = report.sink_keeping_error();
+    let code = to.compose_job(ssh, "up -d --build --remove-orphans", sink)?.wait().await?;
+    anyhow::ensure!(code == Some(0), "compose up on {} failed: {}", to.label, why_it_failed(code, &reason));
     Ok(mirrored)
 }
 
@@ -419,6 +454,21 @@ async fn copy_container_data(ssh: &Ssh, sides: &Sides, request: &CopyRequest, so
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failure_is_explained_in_dockers_words() {
+        let reason = Mutex::new(None);
+        assert_eq!(why_it_failed(Some(1), &reason), "exited with code 1");
+        // The lines compose printed when a registry refused an image.
+        for text in [" Image quay.io/minio/minio:latest Pulling ", "Error response from daemon: unauthorized: access to the requested resource is not authorized"] {
+            if reads_like_error(text) {
+                *reason.lock().unwrap() = Some(text.trim().to_string());
+            }
+        }
+        assert_eq!(why_it_failed(Some(1), &reason), "Error response from daemon: unauthorized: access to the requested resource is not authorized");
+        assert!(reads_like_error("target api: failed to solve: process did not complete successfully"));
+        assert!(!reads_like_error(" Container shop-db-1  Created"));
+    }
 
     #[test]
     fn requests_and_endpoints_read_from_the_wire() {

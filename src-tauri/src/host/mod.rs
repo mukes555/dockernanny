@@ -10,6 +10,7 @@ pub mod fake;
 pub mod keepalive;
 #[cfg(target_os = "linux")]
 pub mod linux;
+pub mod linux_setup;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod paired;

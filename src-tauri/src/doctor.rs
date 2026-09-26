@@ -138,7 +138,7 @@ async fn check_docker(ssh: &Ssh, machine: &Machine) -> DoctorRow {
     let missing = err.contains("not found");
     let not_running = err.contains("Cannot connect to the Docker daemon");
     let fix = if not_allowed {
-        "sudo usermod -aG docker $USER\n# then log out of the machine and back in"
+        "sudo usermod -aG docker $USER\n# then click Check again: every new ssh login picks up the group"
     } else if missing {
         "curl -fsSL https://get.docker.com | sudo sh\nsudo usermod -aG docker $USER"
     } else if not_running {

@@ -384,7 +384,8 @@ export interface DataSelection {
 /** Mirrors `host::HostSnapshot`: what the sharing role sees on this computer. */
 export interface HostRow {
   name: string;
-  state: "ok" | "missing" | "unknown";
+  /** "restart": all installed; restarting the computer once finishes it. */
+  state: "ok" | "missing" | "unknown" | "restart";
   detail: string;
 }
 

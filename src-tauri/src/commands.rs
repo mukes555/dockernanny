@@ -85,6 +85,9 @@ pub async fn doctor(app: AppHandle, state: State<'_, AppState>, machine: Machine
     machines.retain(|m| m.id != machine.id);
     machines.push(machine.clone());
     state.ssh.write_config(&machines).map_err(fail)?;
+    // A check is asked for after fixing something on the machine; the
+    // shared connection may predate the fix, so the check logs in afresh.
+    state.ssh.retire_master(&machine.alias());
 
     let machine_id = machine.id.clone();
     let rows = doctor::doctor(&state.ssh, &machine, |row| {

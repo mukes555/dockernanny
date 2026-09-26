@@ -129,6 +129,17 @@ impl Endpoint {
         }
     }
 
+    /// A `docker` command with its output streamed line by line.
+    pub fn docker_job(&self, ssh: &Ssh, args: &[&str], on_line: impl FnMut(Line) + Send + 'static) -> anyhow::Result<Job> {
+        match self {
+            Endpoint::Local => Job::spawn(local_docker(args), None, on_line),
+            Endpoint::Machine { alias } => {
+                let quoted: Vec<String> = args.iter().map(|a| shell_quote(a)).collect();
+                ssh.job(alias, &format!("docker {}", quoted.join(" ")), on_line)
+            }
+        }
+    }
+
     /// A shell script to completion: `sh` here (inside WSL on Windows), the
     /// login shell there.
     pub async fn run_script(&self, ssh: &Ssh, script: &str) -> anyhow::Result<Output> {

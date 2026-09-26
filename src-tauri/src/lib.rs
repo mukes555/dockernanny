@@ -4,6 +4,7 @@ pub mod compose;
 pub mod computer;
 pub mod containers;
 pub mod diagnostics;
+pub mod docker_access;
 pub mod doctor;
 pub mod forward;
 pub mod guide;

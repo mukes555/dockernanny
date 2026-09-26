@@ -123,12 +123,24 @@ impl Ssh {
     /// Asks the master on `socket` (the shared one when None) to exit. Used
     /// when a machine is removed, at exit, and for stale forwarders.
     pub fn exit_master(&self, alias: &str, socket: Option<&str>) {
+        self.control_master(alias, socket, "exit");
+    }
+
+    /// Asks the shared master to take no new sessions, while the ones on it
+    /// (a copy, a log follow) finish. The next command logs in afresh, so a
+    /// check sees what changed on the machine since, such as a new group:
+    /// a login keeps the groups it started with.
+    pub fn retire_master(&self, alias: &str) {
+        self.control_master(alias, None, "stop");
+    }
+
+    fn control_master(&self, alias: &str, socket: Option<&str>, command: &str) {
         let mut cmd = tools::unix_std("ssh");
         cmd.arg("-F").arg(self.config_path());
         if let Some(socket) = socket {
             cmd.arg("-S").arg(socket);
         }
-        let _ = cmd.args(["-O", "exit", alias]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        let _ = cmd.args(["-O", command, alias]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
     }
 }
 

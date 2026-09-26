@@ -146,6 +146,64 @@ pub async fn images_to_carry(ssh: &Ssh, from: &Site, to: &Site, model: &Value) -
     images
 }
 
+/// An image the destination downloads, for the platform its service asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Download {
+    pub image: String,
+    pub platform: Option<String>,
+}
+
+impl Download {
+    pub fn pull_args(&self) -> Vec<&str> {
+        let mut args = vec!["pull"];
+        if let Some(platform) = &self.platform {
+            args.extend(["--platform", platform.as_str()]);
+        }
+        args.push(&self.image);
+        args
+    }
+}
+
+/// What compose would download at the destination when it creates the
+/// containers: every service's image except the ones it builds, the ones
+/// the copy carries itself, and the ones already there. The copy pulls
+/// them before anything stops, so an image that cannot be had stops the
+/// copy while the stack still runs.
+pub async fn images_to_download(ssh: &Ssh, to: &Site, model: &Value, carried: &[String]) -> Vec<Download> {
+    let mut downloads = Vec::new();
+    for wanted in registry_images(model) {
+        if carried.contains(&wanted.image) {
+            continue;
+        }
+        let there = to.endpoint.docker_output(ssh, &["image", "inspect", "-f", "{{.Id}}", &wanted.image]).await.map(|o| o.ok()).unwrap_or(false);
+        if !there {
+            downloads.push(wanted);
+        }
+    }
+    downloads
+}
+
+/// Each distinct image a service runs without building it.
+fn registry_images(model: &Value) -> Vec<Download> {
+    let mut wanted: Vec<Download> = Vec::new();
+    let Some(services) = model.get("services").and_then(Value::as_object) else {
+        return wanted;
+    };
+    for service in services.values() {
+        let builds = service.get("build").map(|b| !b.is_null()).unwrap_or(false);
+        let Some(image) = service.get("image").and_then(Value::as_str) else { continue };
+        if builds {
+            continue;
+        }
+        let platform = service.get("platform").and_then(Value::as_str).map(str::to_string);
+        let download = Download { image: image.to_string(), platform };
+        if !wanted.contains(&download) {
+            wanted.push(download);
+        }
+    }
+    wanted
+}
+
 /// Anonymous volumes (a 64 hex name) and the destination of every mount, so
 /// the diff can ignore what lives in a mount.
 pub fn parse_mounts(json: &str) -> (Vec<AnonymousVolume>, Vec<String>) {
@@ -279,6 +337,24 @@ mod tests {
     fn a_copy_goes_around_binds_and_read_only_mounts_but_into_writable_volumes() {
         let json = r#"[{"Type":"bind","Destination":"/opt/keycloak/data/import","RW":false},{"Type":"bind","Destination":"/app/config","RW":true},{"Type":"volume","Name":"shop_cache","Destination":"/srv/cache","RW":false},{"Type":"volume","Name":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","Destination":"/var/lib/postgresql/data","RW":true}]"#;
         assert_eq!(mounts_to_go_around(json), vec!["/opt/keycloak/data/import", "/app/config", "/srv/cache"]);
+    }
+
+    #[test]
+    fn only_images_compose_would_pull_are_downloaded_ahead() {
+        let model = serde_json::json!({"services": {
+            "api": {"build": {"context": "."}, "image": "shop-api:local"},
+            "minio": {"image": "quay.io/minio/minio:latest"},
+            "db": {"image": "postgres:16", "platform": "linux/amd64"},
+            "replica": {"image": "postgres:16", "platform": "linux/amd64"},
+            "worker": {"command": "true"}
+        }});
+        let wanted = registry_images(&model);
+        let postgres = Download { image: "postgres:16".into(), platform: Some("linux/amd64".into()) };
+        let minio = Download { image: "quay.io/minio/minio:latest".into(), platform: None };
+        assert_eq!(wanted.len(), 2, "built, image-less and repeated services add nothing: {wanted:?}");
+        assert!(wanted.contains(&postgres) && wanted.contains(&minio));
+        assert_eq!(postgres.pull_args(), vec!["pull", "--platform", "linux/amd64", "postgres:16"]);
+        assert_eq!(minio.pull_args(), vec!["pull", "quay.io/minio/minio:latest"]);
     }
 
     #[test]
