@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn a_login_older_than_the_group_needs_a_restart_not_a_reinstall() {
-        // What that computer showed: `mk` in the group, the app's process not.
+        // What that computer showed: the user in the group, the app's process not.
         let stale = Facts { login_in_group: false, ..facts(DENIED) };
         assert_eq!(classify(&stale), DockerAccess::RestartNeeded);
     }
@@ -174,8 +174,8 @@ mod tests {
 
     #[test]
     fn groups_are_matched_whole() {
-        assert!(has_docker_group("mk adm sudo docker"));
-        assert!(!has_docker_group("mk dockerusers"));
+        assert!(has_docker_group("alex adm sudo docker"));
+        assert!(!has_docker_group("alex dockerusers"));
         assert_eq!(first_line("\n  permission denied\nmore"), "permission denied");
         assert_eq!(first_line(""), "Docker did not answer");
     }

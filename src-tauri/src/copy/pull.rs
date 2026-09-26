@@ -54,10 +54,10 @@ mod tests {
 
     #[test]
     fn the_sheet_names_what_will_be_downloaded() {
-        assert_eq!(note("Mk", &[]), None);
+        assert_eq!(note("studio", &[]), None);
         let one = [Download { image: "redis:7-alpine".into(), platform: None }];
-        assert_eq!(note("Mk", &one).unwrap(), "Mk downloads 1 image first, before anything is stopped: redis:7-alpine.");
+        assert_eq!(note("studio", &one).unwrap(), "studio downloads 1 image first, before anything is stopped: redis:7-alpine.");
         let two = [one[0].clone(), Download { image: "postgres:16".into(), platform: None }];
-        assert!(note("Mk", &two).unwrap().starts_with("Mk downloads 2 images first"));
+        assert!(note("studio", &two).unwrap().starts_with("studio downloads 2 images first"));
     }
 }

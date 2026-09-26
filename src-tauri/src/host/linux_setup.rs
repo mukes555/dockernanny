@@ -121,27 +121,27 @@ mod tests {
 
     #[test]
     fn a_restart_or_a_docker_set_up_elsewhere_needs_no_root() {
-        assert!(RootPlan::for_missing(false, false, &DockerAccess::RestartNeeded, "mk").is_empty());
-        assert!(RootPlan::for_missing(false, false, &DockerAccess::Other("snap".into()), "mk").is_empty());
-        assert!(RootPlan::for_missing(false, false, &DockerAccess::Ready("29.8.1".into()), "mk").is_empty());
+        assert!(RootPlan::for_missing(false, false, &DockerAccess::RestartNeeded, "alex").is_empty());
+        assert!(RootPlan::for_missing(false, false, &DockerAccess::Other("snap".into()), "alex").is_empty());
+        assert!(RootPlan::for_missing(false, false, &DockerAccess::Ready("29.8.1".into()), "alex").is_empty());
         assert!(docker_action_for_user(&DockerAccess::RestartNeeded).unwrap().contains("Restart this computer once"));
         assert_eq!(docker_action_for_user(&DockerAccess::NotRunning), None);
     }
 
     #[test]
     fn the_script_holds_only_what_is_missing() {
-        let start = RootPlan::for_missing(false, false, &DockerAccess::NotRunning, "mk");
+        let start = RootPlan::for_missing(false, false, &DockerAccess::NotRunning, "alex");
         let script = start.script();
         assert!(script.contains("systemctl enable --now docker"));
         assert!(!script.contains("apt-get"), "nothing to install: {script}");
         assert!(!script.contains("usermod"));
         assert_eq!(start.summary(), "Done: started Docker.");
 
-        let join = RootPlan::for_missing(false, false, &DockerAccess::NotInGroup, "mk");
-        assert!(join.script().contains("usermod -aG docker 'mk'"));
+        let join = RootPlan::for_missing(false, false, &DockerAccess::NotInGroup, "alex");
+        assert!(join.script().contains("usermod -aG docker 'alex'"));
         assert!(join.summary().ends_with("Restart this computer once so your login can use Docker."));
 
-        let rsync = RootPlan::for_missing(true, false, &DockerAccess::Ready("29.8.1".into()), "mk");
+        let rsync = RootPlan::for_missing(true, false, &DockerAccess::Ready("29.8.1".into()), "alex");
         assert!(rsync.script().contains("apt-get install -y -qq rsync;"));
         let docker_commands = ["get.docker.com", "systemctl", "usermod"];
         assert!(!docker_commands.iter().any(|c| rsync.script().contains(c)), "Docker is fine, so no Docker step: {}", rsync.script());
