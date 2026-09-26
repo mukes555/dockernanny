@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { api, errorMessage } from "../lib/ipc";
+import type { UpdateStatus } from "../lib/types";
 import { useStore } from "../state/store";
 import { BookIcon, ExternalIcon, FolderIcon, LogsIcon, SpinnerIcon } from "../ui/icons";
 import { Button, Card, PageHeader } from "../ui/primitives";
@@ -82,30 +83,30 @@ export function HelpPage() {
   );
 }
 
-/** The check the automatic one does quietly, with its answer shown. */
+/** The app checks every hour by itself; this shows its last answer and asks now. */
 function UpdatesCard() {
   const update = useStore((state) => state.update);
-  const setUpdate = useStore((state) => state.setUpdate);
+  const status = useStore((state) => state.updateStatus);
+  const setUpdateStatus = useStore((state) => state.setUpdateStatus);
   const setUpdateOpen = useStore((state) => state.setUpdateOpen);
   const [checking, setChecking] = useState(false);
-  const [answer, setAnswer] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const checkNow = async () => {
     setChecking(true);
-    setAnswer(null);
+    setError(null);
     try {
-      const found = await api.checkUpdate();
-      setUpdate(found);
-      setAnswer(found ? null : `dockerNanny ${VERSION} is the latest version.`);
+      setUpdateStatus(await api.checkForUpdate());
     } catch (err) {
-      setAnswer(`Could not check: ${errorMessage(err)}`);
+      setError(`Could not check: ${errorMessage(err)}`);
     } finally {
       setChecking(false);
     }
   };
+  const answer = error ?? lastCheck(status);
 
   return (
-    <Card title="Updates" description={`This is dockerNanny ${VERSION}. New versions come from the project's GitHub releases.`}>
+    <Card title="Updates" description={`This is dockerNanny ${VERSION}. It looks for a new version on the project's GitHub releases at start and every hour, unless Settings turns that off.`}>
       <div className="flex flex-wrap items-center gap-3">
         {update ? (
           <Button tone="primary" onClick={() => setUpdateOpen(true)}>
@@ -120,6 +121,13 @@ function UpdatesCard() {
       </div>
     </Card>
   );
+}
+
+/** "Last checked 23:40: up to date", or nothing before the first answer. */
+function lastCheck(status: UpdateStatus | null): string | null {
+  if (!status?.checked_ms) return status?.checking ? "Checking…" : null;
+  const time = new Date(status.checked_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `Last checked ${time}: ${status.result ?? ""}`;
 }
 
 /** Copies a redacted report and shows exactly what was copied, so nobody

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import { api, errorMessage } from "../lib/ipc";
-import type { AvailableUpdate, ComputerInfo, CopyProgress, DoctorRow, Fetched, ForwardState, HostOs, HostSnapshot, Machine, MachineStats, OutputLine, Preview, Settings, Stack, StackStatus, Theme } from "../lib/types";
+import type { AvailableUpdate, ComputerInfo, CopyProgress, DoctorRow, Fetched, ForwardState, HostOs, HostSnapshot, Machine, MachineStats, OutputLine, Preview, Settings, Stack, StackStatus, Theme, UpdateStatus } from "../lib/types";
 
 export type View = "stacks" | "guide" | "settings" | "computer" | "help";
 
@@ -43,10 +43,15 @@ interface State {
   firstRun: boolean;
   /** The welcome, reopened from Help after the first run. */
   welcomeOpen: boolean;
-  /** A newer release the updater found; installing waits for the user. */
+  /** A newer release the app's checks found; installing waits for the user. */
   update: AvailableUpdate | null;
+  /** The last check's answer, for Help. */
+  updateStatus: UpdateStatus | null;
+  /** The share of an update downloaded while it installs. */
+  updateProgress: number | null;
   updateOpen: boolean;
-  setUpdate: (update: AvailableUpdate | null) => void;
+  setUpdateStatus: (status: UpdateStatus) => void;
+  setUpdateProgress: (fraction: number | null) => void;
   setUpdateOpen: (open: boolean) => void;
   /** The Add machine dialog, opened from the rail or from the welcome. */
   addMachineOpen: boolean;
@@ -157,6 +162,8 @@ export const useStore = create<State>((set, get) => ({
   firstRun: false,
   welcomeOpen: false,
   update: null,
+  updateStatus: null,
+  updateProgress: null,
   updateOpen: false,
   addMachineOpen: false,
   askRemoveFor: null,
@@ -191,7 +198,8 @@ export const useStore = create<State>((set, get) => ({
 
   setView: (view) => set({ view }),
   setWelcomeOpen: (welcomeOpen) => set({ welcomeOpen }),
-  setUpdate: (update) => set({ update }),
+  setUpdateStatus: (updateStatus) => set({ updateStatus, update: updateStatus.available }),
+  setUpdateProgress: (updateProgress) => set({ updateProgress }),
   setUpdateOpen: (updateOpen) => set({ updateOpen }),
   setAddMachineOpen: (addMachineOpen) => set({ addMachineOpen }),
   askRemoveMachine: (id) => set({ askRemoveFor: id, selectedMachineId: id, view: "stacks" }),

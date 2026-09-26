@@ -21,6 +21,7 @@ pub mod store;
 pub mod sync;
 pub mod tools;
 pub mod tray;
+pub mod updates;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -73,8 +74,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .manage(state)
+        .manage(updates::Updates::default())
         .setup(move |app| {
             let state = app.state::<AppState>();
             forget_stale_forwarders(&state);
@@ -86,6 +87,7 @@ pub fn run() {
             }
             tray::build(app.handle())?;
             apply_settings(app.handle());
+            updates::start(app.handle());
             if start_hidden {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
@@ -93,7 +95,10 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(tray::on_window_event)
+        .on_window_event(|window, event| {
+            tray::on_window_event(window, event);
+            updates::on_window_event(window, event);
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_machines,
             commands::machine_stats,
@@ -150,20 +155,29 @@ pub fn run() {
             commands::host::host_arm_pairing,
             commands::host::host_disarm_pairing,
             commands::host::host_probe,
+            commands::updates::update_status,
+            commands::updates::check_for_update,
+            commands::updates::install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
-                let state = app.state::<AppState>();
-                state.host.stop();
-                forget_stale_forwarders(&state);
-                tools::end_all_children();
-                for machine in state.store.machines() {
-                    state.ssh.exit_master(&machine.alias(), None);
-                }
+                shut_down(app);
             }
         });
+}
+
+/// What every way out of the app does first, a restart for an update too:
+/// sharing stops, bridges and child processes end, ssh connections close.
+pub fn shut_down(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    state.host.stop();
+    forget_stale_forwarders(&state);
+    tools::end_all_children();
+    for machine in state.store.machines() {
+        state.ssh.exit_master(&machine.alias(), None);
+    }
 }
 
 /// Starts or stops what the settings ask for: the WSL distribution the

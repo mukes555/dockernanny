@@ -79,7 +79,7 @@ export function SettingsPage() {
 
       {os === "windows" ? <WslCard draft={draft} onCommit={commit} /> : null}
       <Card title="Updates" description="Only the version file of the latest GitHub release is fetched; nothing is installed until you choose to.">
-        <Toggle checked={draft.check_updates} onChange={(on) => commit({ check_updates: on })} label="Look for a new version at start and twice a day" />
+        <Toggle checked={draft.check_updates} onChange={(on) => commit({ check_updates: on })} label="Look for a new version at start and every hour" />
       </Card>
 
       {draft.use_machines ? (
