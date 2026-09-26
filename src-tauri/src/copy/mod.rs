@@ -258,8 +258,8 @@ pub async fn plan(ssh: &Ssh, sides: &Sides, request: &CopyRequest) -> anyhow::Re
         (Vec::new(), Vec::new(), Vec::new(), 0)
     };
     let mut notes = check::preflight(ssh, to, needed).await?;
-    let downloads = pull::planned(ssh, sides, request, &model, &images).await;
-    notes.extend(pull::note(&to.label, &downloads));
+    let pulls = pull::planned(ssh, sides, request, &model, &images).await;
+    notes.extend(pull::notes(sides, &pulls));
 
     Ok(CopyPlan {
         from: from.label.clone(),
@@ -311,14 +311,14 @@ async fn run_steps(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest,
         report.say(&format!("    {note}"));
     }
     let carried = inventory.as_ref().map(|i| i.images.as_slice()).unwrap_or(&[]);
-    let downloads = pull::planned(ssh, sides, request, &model, carried).await;
+    let pulls = pull::planned(ssh, sides, request, &model, carried).await;
 
     let source_ps = from.compose_output(ssh, "ps -a --format json").await?;
     let source_services = compose::parse_ps(&source_ps.stdout);
     let source_running = source_services.iter().any(|s| s.state == "running");
-    let steps = steps::planned(sides, request, inventory.as_ref(), &downloads, destination_exists, source_running);
+    let steps = steps::planned(sides, request, inventory.as_ref(), &pulls.downloads, destination_exists, source_running);
     report.progress.lock().expect("progress lock").set_steps(steps);
-    pull::run(ssh, sides, &downloads, report).await?;
+    pull::run(ssh, sides, &pulls, report).await?;
 
     if request.data && destination_exists {
         report.step(Phase::Migrating, &names::stop(&to.name, &to.label));

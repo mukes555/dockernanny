@@ -12,6 +12,9 @@ pub mod names {
     pub fn download(image: &str, label: &str) -> String {
         format!("downloading {image} on {label}")
     }
+    pub fn send_instead(image: &str, label: &str) -> String {
+        format!("sending {image} from {label} instead")
+    }
     pub fn stop(name: &str, label: &str) -> String {
         format!("stopping {name} on {label}")
     }
