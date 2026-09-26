@@ -7,12 +7,13 @@
 //! private registry only the source is logged in to, a name that is gone)
 //! is sent from the source instead, when the source's copy is built for
 //! what the destination runs. Otherwise the copy stops, saying why.
-
-use std::time::Duration;
+//!
+//! Only Docker's own pull decides whether an image can be had. Asking the
+//! registry ahead (`docker manifest inspect`) took up to half a minute per
+//! image and said "refused" for images that downloaded fine.
 
 use anyhow::Context;
 use serde_json::Value;
-use tokio::time::timeout;
 
 use super::discover::{self, Download};
 use super::endpoint::Site;
@@ -21,76 +22,36 @@ use super::{transfer, why_it_failed, CopyRequest, Report, Sides};
 use crate::ssh::Ssh;
 use crate::stack::Phase;
 
-/// A registry that does not answer within this is treated as refusing; the
-/// pull still decides.
-const ASK_TIMEOUT: Duration = Duration::from_secs(20);
-
-pub struct Pulls {
-    /// In the order they run: the ones the registry refused first.
-    pub downloads: Vec<Download>,
-    /// Asked before anything downloads, so a copy that cannot go ahead is
-    /// known in seconds.
-    pub refused: Vec<String>,
-}
-
 /// From the compose file that will run at the destination: the source's
 /// when the config travels, else the one already there. When that file
 /// cannot be read, nothing is pulled ahead and compose pulls at create, as
 /// it always did.
-pub async fn planned(ssh: &Ssh, sides: &Sides, request: &CopyRequest, source_model: &Value, carried: &[String]) -> Pulls {
+pub async fn planned(ssh: &Ssh, sides: &Sides, request: &CopyRequest, source_model: &Value, carried: &[String]) -> Vec<Download> {
     let to = &sides.to;
-    let downloads = if request.config {
-        discover::images_to_download(ssh, to, source_model, carried).await
-    } else {
-        match discover::model(ssh, to).await {
-            Ok(there) => discover::images_to_download(ssh, to, &there, carried).await,
-            Err(_) => Vec::new(),
-        }
-    };
-    let refused = refused_by_registry(ssh, to, &downloads).await;
-    Pulls { downloads: refused_first(downloads, &refused), refused }
-}
-
-/// Asks each image's registry, the way the destination would, without
-/// downloading anything. Only the order follows from it: the daemon's pull
-/// decides, because it can reach mirrors the command line cannot.
-async fn refused_by_registry(ssh: &Ssh, to: &Site, downloads: &[Download]) -> Vec<String> {
-    let mut refused = Vec::new();
-    for download in downloads {
-        let args = ["manifest", "inspect", download.image.as_str()];
-        let answered = matches!(timeout(ASK_TIMEOUT, to.endpoint.docker_output(ssh, &args)).await, Ok(Ok(out)) if out.ok());
-        if !answered {
-            refused.push(download.image.clone());
-        }
+    if request.config {
+        return discover::images_to_download(ssh, to, source_model, carried).await;
     }
-    refused
-}
-
-fn refused_first(downloads: Vec<Download>, refused: &[String]) -> Vec<Download> {
-    let (mut first, rest): (Vec<Download>, Vec<Download>) = downloads.into_iter().partition(|d| refused.contains(&d.image));
-    first.extend(rest);
-    first
+    match discover::model(ssh, to).await {
+        Ok(there) => discover::images_to_download(ssh, to, &there, carried).await,
+        Err(_) => Vec::new(),
+    }
 }
 
 /// For the copy sheet, so the download is listed before the user commits.
-pub fn notes(sides: &Sides, pulls: &Pulls) -> Vec<String> {
+pub fn note(sides: &Sides, downloads: &[Download]) -> Option<String> {
+    if downloads.is_empty() {
+        return None;
+    }
     let (from, to) = (&sides.from.label, &sides.to.label);
-    if pulls.downloads.is_empty() {
-        return Vec::new();
-    }
-    let images: Vec<&str> = pulls.downloads.iter().map(|d| d.image.as_str()).collect();
+    let images: Vec<&str> = downloads.iter().map(|d| d.image.as_str()).collect();
     let count = if images.len() == 1 { "1 image".to_string() } else { format!("{} images", images.len()) };
-    let mut notes = vec![format!("{to} downloads {count} first, before anything is stopped: {}.", images.join(", "))];
-    if !pulls.refused.is_empty() {
-        let instead = sentence(&format!("{from}'s own copy is sent instead if it is built for {to}; otherwise the copy stops before anything changes."));
-        notes.push(format!("The registry already refuses {}. {instead}", pulls.refused.join(", ")));
-    }
-    notes
+    let instead = sentence(&format!("{from}'s own copy goes instead of one it cannot download, if it is built for {to}."));
+    Some(format!("{to} downloads {count} first, before anything is stopped: {}. {instead}", images.join(", ")))
 }
 
-pub async fn run(ssh: &Ssh, sides: &Sides, pulls: &Pulls, report: &Report<'_>) -> anyhow::Result<()> {
+pub async fn run(ssh: &Ssh, sides: &Sides, downloads: &[Download], report: &Report<'_>) -> anyhow::Result<()> {
     let to = &sides.to;
-    for download in &pulls.downloads {
+    for download in downloads {
         report.step(Phase::Migrating, &names::download(&download.image, &to.label));
         let (sink, reason) = report.sink_keeping_error();
         let code = to.endpoint.docker_job(ssh, &download.pull_args(), sink)?.wait().await?;
@@ -178,24 +139,15 @@ mod tests {
     }
 
     #[test]
-    fn the_sheet_names_what_will_be_downloaded_and_what_is_refused() {
-        let none = Pulls { downloads: Vec::new(), refused: Vec::new() };
-        assert!(notes(&sides(), &none).is_empty());
-        let one = Pulls { downloads: vec![download("redis:7-alpine")], refused: Vec::new() };
-        assert_eq!(notes(&sides(), &one), vec!["studio downloads 1 image first, before anything is stopped: redis:7-alpine."]);
-        let refused = Pulls { downloads: vec![download("quay.io/minio/minio:latest"), download("redis:7-alpine")], refused: vec!["quay.io/minio/minio:latest".into()] };
-        let said = notes(&sides(), &refused);
-        assert!(said[0].starts_with("studio downloads 2 images first"));
-        assert!(said[1].starts_with("The registry already refuses quay.io/minio/minio:latest. This computer's own copy is sent instead"));
+    fn the_sheet_names_what_will_be_downloaded() {
+        assert_eq!(note(&sides(), &[]), None);
+        assert_eq!(
+            note(&sides(), &[download("redis:7-alpine")]).unwrap(),
+            "studio downloads 1 image first, before anything is stopped: redis:7-alpine. This computer's own copy goes instead of one it cannot download, if it is built for studio."
+        );
+        let two = note(&sides(), &[download("quay.io/minio/minio:latest"), download("redis:7-alpine")]).unwrap();
+        assert!(two.starts_with("studio downloads 2 images first"));
         assert_eq!(sentence("this computer's copy"), "This computer's copy");
-    }
-
-    #[test]
-    fn refused_images_go_first_and_the_rest_keep_their_order() {
-        let downloads = vec![download("clamav/clamav:stable"), download("quay.io/minio/minio:latest"), download("redis:7-alpine")];
-        let ordered = refused_first(downloads, &["quay.io/minio/minio:latest".into()]);
-        let names: Vec<&str> = ordered.iter().map(|d| d.image.as_str()).collect();
-        assert_eq!(names, vec!["quay.io/minio/minio:latest", "clamav/clamav:stable", "redis:7-alpine"]);
     }
 
     #[test]
