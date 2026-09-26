@@ -3,7 +3,7 @@
 // Every name, address and path here is made up (RFC 5737 addresses).
 
 import type { Api, Handlers } from "./ipc";
-import type { CopyProgress, DoctorRow, ForwardState, HostOs, HostSnapshot, Machine, MachineStats, Preview, Settings, Stack, StackStatus } from "./types";
+import type { CopyProgress, DoctorRow, ForwardState, HostOs, HostSnapshot, Machine, MachineStats, Preview, Settings, Stack, StackStatus, UpdateStatus } from "./types";
 
 const KEY_PATH = "/home/alex/.ssh/id_ed25519";
 // The mock starts without a key, so the readiness list shows how one is created.
@@ -33,6 +33,12 @@ const MOCK_OS: HostOs = ((): HostOs => {
   const asked = new URLSearchParams(window.location.search).get("os");
   return asked === "windows" || asked === "linux" ? asked : "macos";
 })();
+
+const mockUpdateStatus = (): UpdateStatus => {
+  const offered = new URLSearchParams(window.location.search).get("update") === "1";
+  const available = offered ? { version: "0.3.3", notes: "What is new in 0.3.3:\n- A made-up fix, to show the notes.\n- Another one." } : null;
+  return { available, checked_ms: Date.now(), result: available ? "0.3.3 is available" : "up to date", checking: false };
+};
 
 // `?restart=1`: Docker is installed and only a restart of the computer is left.
 const MOCK_RESTART = new URLSearchParams(window.location.search).get("restart") === "1";
@@ -324,15 +330,15 @@ export const mockApi: Api = {
   revealAppFile: async () => {},
   openLink: async (url) => void window.open(url, "_blank"),
   // `?update=1` in the address pretends a newer release exists.
-  checkUpdate: async () => {
+  updateStatus: async () => mockUpdateStatus(),
+  checkForUpdate: async () => {
     await wait(600);
-    const offered = new URLSearchParams(window.location.search).get("update") === "1";
-    return offered ? { version: "0.3.2", notes: "## Fixed\n\n- A made-up fix, to show the notes.\n- Another one." } : null;
+    return mockUpdateStatus();
   },
-  installUpdate: async (onProgress) => {
+  installUpdate: async () => {
     for (let step = 0; step <= 10; step += 1) {
       await wait(150);
-      onProgress(step / 10);
+      handlers?.onUpdateProgress(step / 10);
     }
     window.location.reload();
   },

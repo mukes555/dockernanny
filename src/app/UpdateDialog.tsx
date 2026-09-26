@@ -14,8 +14,9 @@ export function UpdateDialog() {
   const open = useStore((state) => state.updateOpen);
   const setOpen = useStore((state) => state.setUpdateOpen);
   const os = useStore((state) => state.os);
+  const progress = useStore((state) => state.updateProgress);
+  const setProgress = useStore((state) => state.setUpdateProgress);
   const [installing, setInstalling] = useState(false);
-  const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   if (!update) return null;
@@ -23,9 +24,10 @@ export function UpdateDialog() {
   const install = async () => {
     setInstalling(true);
     setError(null);
+    setProgress(null);
     try {
       // The app restarts at the end, so success has nothing left to show.
-      await api.installUpdate(setProgress);
+      await api.installUpdate();
     } catch (err) {
       setError(errorMessage(err));
       setInstalling(false);

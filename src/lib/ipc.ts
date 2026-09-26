@@ -6,12 +6,9 @@ import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type Update } from "@tauri-apps/plugin-updater";
 
 import { mockApi } from "./mock";
 import type {
-  AvailableUpdate,
   DoctorEvent,
   DoctorRow,
   Fetched,
@@ -42,12 +39,10 @@ import type {
   StackStatusEvent,
   StatsEvent,
   TerminalInfo,
+  UpdateStatus,
 } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-// What the last update check found, kept so it can be installed when the user says so.
-let pendingUpdate: Update | null = null;
 export const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
 
 /** Tauri rejects commands with a plain string; normalise to a message. */
@@ -69,6 +64,11 @@ export interface Handlers {
   onHostSnapshot: (snapshot: HostSnapshot) => void;
   onHostLog: (event: HostLogEvent) => void;
   onCopyProgress: (progress: CopyProgress) => void;
+  onUpdateStatus: (status: UpdateStatus) => void;
+  /** The share of an update downloaded, null while its size is unknown. */
+  onUpdateProgress: (fraction: number | null) => void;
+  /** The tray's "Update to …" was clicked. */
+  onOpenUpdate: () => void;
 }
 
 function unlistenAll(pending: Array<Promise<() => void>>): () => void {
@@ -93,23 +93,12 @@ const tauriApi = {
   diagnostics: () => invoke<string>("diagnostics"),
   revealAppFile: (which: "folder" | "log") => invoke<void>("reveal_app_file", { which }),
   openLink: (url: string) => openUrl(url),
-  checkUpdate: async (): Promise<AvailableUpdate | null> => {
-    pendingUpdate = await check();
-    return pendingUpdate ? { version: pendingUpdate.version, notes: pendingUpdate.body ?? "" } : null;
-  },
-  /** Downloads and installs what the last check found, reporting the share
-   * downloaded (null while the size is unknown), then restarts the app. */
-  installUpdate: async (onProgress: (fraction: number | null) => void): Promise<void> => {
-    if (!pendingUpdate) throw new Error("No update to install; check again.");
-    let total = 0;
-    let done = 0;
-    await pendingUpdate.downloadAndInstall((event) => {
-      if (event.event === "Started") total = event.data.contentLength ?? 0;
-      if (event.event === "Progress") done += event.data.chunkLength;
-      onProgress(total > 0 ? done / total : null);
-    });
-    await relaunch();
-  },
+  // The app checks by itself (see updates.rs); these read it, ask now, and install.
+  updateStatus: () => invoke<UpdateStatus>("update_status"),
+  checkForUpdate: () => invoke<UpdateStatus>("check_for_update"),
+  /** Downloads, verifies and installs what the last check found, then the
+   * app restarts; progress arrives as `onUpdateProgress`. */
+  installUpdate: () => invoke<void>("install_update"),
   doctor: (machine: Machine) => invoke<DoctorRow[]>("doctor", { machine }),
   addMachine: (machine: Machine) => invoke<Machine[]>("add_machine", { machine }),
   removeMachine: (id: string) => invoke<Machine[]>("remove_machine", { id }),
@@ -179,6 +168,9 @@ const tauriApi = {
       listen<HostSnapshot>("host:snapshot", (event) => handlers.onHostSnapshot(event.payload)),
       listen<HostLogEvent>("host:log", (event) => handlers.onHostLog(event.payload)),
       listen<CopyProgress>("copy:progress", (event) => handlers.onCopyProgress(event.payload)),
+      listen<UpdateStatus>("update:status", (event) => handlers.onUpdateStatus(event.payload)),
+      listen<number | null>("update:progress", (event) => handlers.onUpdateProgress(event.payload)),
+      listen("update:open", () => handlers.onOpenUpdate()),
     ]);
   },
 };

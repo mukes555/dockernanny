@@ -7,6 +7,7 @@ pub mod containers;
 pub mod copy;
 pub mod host;
 pub mod settings;
+pub mod updates;
 
 use std::collections::HashMap;
 use std::path::Path;

@@ -347,6 +347,16 @@ export interface AvailableUpdate {
   notes: string;
 }
 
+/** Mirrors `updates::UpdateStatus`: what the app's own checks found. */
+export interface UpdateStatus {
+  available: AvailableUpdate | null;
+  /** When the last check ended, in milliseconds since 1970. */
+  checked_ms: number | null;
+  /** "up to date", "0.3.3 is available" or why the check failed. */
+  result: string | null;
+  checking: boolean;
+}
+
 export interface SettingsView {
   settings: Settings;
   first_run: boolean;

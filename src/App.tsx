@@ -78,26 +78,20 @@ export default function App() {
           pushNotice(`Copy of ${progress.name} to ${progress.to} failed. Open Activity to see why.`);
         }
       },
+      onUpdateStatus: (status) => useStore.getState().setUpdateStatus(status),
+      onUpdateProgress: (fraction) => useStore.getState().setUpdateProgress(fraction),
+      onOpenUpdate: () => useStore.getState().setUpdateOpen(true),
     });
     const started = (what: string, run: () => Promise<unknown>) => void run().catch((err) => pushNotice(`Could not load ${what}: ${errorMessage(err)}`));
     started("settings", loadSettings);
     started("machines and stacks", load);
     started("the sharing role", loadHost);
     started("this computer's details", loadComputerInfo);
+    // The app checks for releases by itself; a check that ended before the
+    // window listened is read here.
+    started("the update check", () => api.updateStatus().then((status) => useStore.getState().setUpdateStatus(status)));
     return unsubscribe;
   }, [load, loadSettings, loadHost, loadComputerInfo, setStats, pushDoctorRow, setStatus, setForward, appendOutput, appendLog, setScriptFetched, setHost, appendHostLog, setCopyProgress, appendContainerLog, pushNotice]);
-
-  // A newer release is looked for at start and twice a day, when the setting
-  // allows; offline or failing checks stay quiet (Help has a check that reports).
-  const checkUpdates = useStore((state) => state.settings?.check_updates ?? false);
-  const setUpdate = useStore((state) => state.setUpdate);
-  useEffect(() => {
-    if (!checkUpdates) return;
-    const look = () => void api.checkUpdate().then(setUpdate).catch((err) => console.warn("update check", errorMessage(err)));
-    look();
-    const timer = window.setInterval(look, 12 * 60 * 60 * 1000);
-    return () => window.clearInterval(timer);
-  }, [checkUpdates, setUpdate]);
 
   // A new page starts at its top; the main area is one scroller shared by every page.
   useEffect(() => {
