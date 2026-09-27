@@ -283,7 +283,8 @@ pub async fn create_stack(app: AppHandle, state: State<'_, AppState>, mut stack:
     if state.store.machine(&stack.machine_id).is_none() {
         return Err("Pick a machine first.".into());
     }
-    if !Path::new(&stack.project_dir).join(&stack.compose_rel).is_file() {
+    let is_file = Path::new(&stack.project_dir).join(&stack.compose_rel).is_file();
+    if !is_file || !stays_inside_folder(&stack.compose_rel) {
         return Err(format!("{} is not a file inside {}.", stack.compose_rel, stack.project_dir));
     }
     let mut stacks = state.store.stacks();
@@ -430,6 +431,14 @@ fn spawn_logged(task: impl std::future::Future<Output = anyhow::Result<()>> + Se
     });
 }
 
+/// Only the project folder is synced, so a compose file reached with `..`
+/// or an absolute path would never exist on the machine.
+fn stays_inside_folder(compose_rel: &str) -> bool {
+    let absolute = Path::new(compose_rel).is_absolute() || compose_rel.starts_with(['/', '\\']);
+    let climbs = compose_rel.split(['/', '\\']).any(|part| part == "..");
+    !absolute && !climbs
+}
+
 fn validate(machine: &Machine) -> CmdResult<()> {
     let name_ok = !machine.name.trim().is_empty();
     let host_ok = pairing::valid_host(machine.host.trim());
@@ -448,4 +457,19 @@ fn validate(machine: &Machine) -> CmdResult<()> {
         return Err(format!("No key file at {}.", machine.key_path));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_compose_file_must_sit_inside_the_synced_folder() {
+        assert!(stays_inside_folder("compose.yaml"));
+        assert!(stays_inside_folder("deploy/docker-compose.yml"));
+        assert!(!stays_inside_folder("../other/compose.yaml"));
+        assert!(!stays_inside_folder("deploy/../../compose.yaml"));
+        assert!(!stays_inside_folder("/etc/compose.yaml"));
+        assert!(!stays_inside_folder("\\shared\\compose.yaml"));
+    }
 }

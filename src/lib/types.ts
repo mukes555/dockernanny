@@ -246,6 +246,8 @@ export interface StackStatus {
   synced_at_ms: number | null;
   synced_files: number;
   known: boolean;
+  /** The project folder is gone from the machine; Start copies it again. */
+  folder_missing?: boolean;
 }
 
 export interface OutputLine {

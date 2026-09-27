@@ -164,6 +164,7 @@ export function StackCard({ stack }: { stack: Stack }) {
         </div>
       ) : null}
       {status?.message ? <div className={cx("mt-2 text-[12px]", phase === "error" ? "text-critical" : "text-warning")}>{status.message}</div> : null}
+      {status?.folder_missing ? <div className="mt-2 text-[12px] text-warning">The project folder is gone from the machine. Start copies it there again.</div> : null}
       {error ? <div className="mt-2 text-[12px] text-critical">{error}</div> : null}
 
       {removing ? (

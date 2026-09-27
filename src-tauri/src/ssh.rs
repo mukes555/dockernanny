@@ -188,12 +188,10 @@ struct Places {
 
 fn host_block(machine: &Machine, key: &str, places: &Places) -> String {
     // A pinned machine trusts only the key learned at pairing; a hand-added
-    // one trusts the first key it sees, the usual ssh behaviour.
-    let trust = if machine.pinned {
-        format!("UserKnownHostsFile {}\n  StrictHostKeyChecking yes", places.known_hosts)
-    } else {
-        "StrictHostKeyChecking accept-new".to_string()
-    };
+    // one trusts the first key it sees, the usual ssh behaviour. Both keep
+    // what they learn in the app's own file, never in the user's.
+    let checking = if machine.pinned { "yes" } else { "accept-new" };
+    let trust = format!("UserKnownHostsFile {}\n  StrictHostKeyChecking {checking}", places.known_hosts);
     format!(
         "\nHost {alias}\n  \
            HostName {host}\n  \
@@ -264,7 +262,7 @@ mod tests {
         assert!(pinned.contains("IdentityFile \"/k\""));
         let loose = host_block(&machine(2222, false), "/k", &places());
         assert!(loose.contains("StrictHostKeyChecking accept-new"));
-        assert!(!loose.contains("UserKnownHostsFile"));
+        assert!(loose.contains("UserKnownHostsFile /h/known_hosts"), "a hand-added machine's key lands in the app's file too");
     }
 
     #[test]
