@@ -371,6 +371,10 @@ export const mockApi: Api = {
     const index = machines.findIndex((m) => m.id === id);
     if (index >= 0) machines.splice(index, 1);
     delete stats[id];
+    // Its stacks go with it.
+    for (let at = stacks.length - 1; at >= 0; at -= 1) {
+      if (stacks[at].machine_id === id) stacks.splice(at, 1);
+    }
     return [...machines];
   },
   pollMachine: async (id) => stats[id],

@@ -125,11 +125,18 @@ pub async fn remove_machine(app: AppHandle, state: State<'_, AppState>, id: Stri
     let Some(machine) = machines.iter().find(|m| m.id == id).cloned() else {
         return Err("unknown machine".into());
     };
-    // Its stacks' localhost ports must not keep pointing at a machine that is
-    // gone; nothing polls a removed machine, so nothing else would stop them.
-    for stack in state.store.stacks().iter().filter(|s| s.machine_id == id) {
+    // Its stacks go with it here: their bridges, log streams and live-sync
+    // watchers would otherwise keep pointing at a machine that is gone. What
+    // runs on the machine stays as it is; it may be off, or added again.
+    let mut stacks = state.store.stacks();
+    for stack in stacks.iter().filter(|s| s.machine_id == id) {
         forward::stop(&app, &stack.id);
+        stack::logs_stop(&app, &stack.id);
+        stack::stop_watcher(&app, &stack.id);
+        state.statuses.lock().expect("statuses lock").remove(&stack.id);
     }
+    stacks.retain(|s| s.machine_id != id);
+    state.store.save_stacks(stacks).map_err(fail)?;
     state.ssh.exit_master(&machine.alias(), None);
     if machine.docker_context {
         let _ = machine::set_docker_context(&machine, false).await;

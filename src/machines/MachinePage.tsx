@@ -62,6 +62,8 @@ export function MachinePage({ machine }: { machine: Machine }) {
   const remove = async () => {
     try {
       setMachines(await api.removeMachine(machine.id));
+      // Its stacks went with it.
+      useStore.getState().setStacks(await api.listStacks());
       selectMachine(null);
     } catch (err) {
       setError(errorMessage(err));
@@ -131,7 +133,9 @@ export function MachinePage({ machine }: { machine: Machine }) {
 
         {removing ? (
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-critical/40 bg-surface-2 px-3 py-2 text-[12px]">
-            <span className="text-ink">Remove {machine.name} from this computer? Its stacks keep running there with their data; their ports on localhost close here.</span>
+            <span className="text-ink">
+              Remove {machine.name} from this computer? {stacks.length === 1 ? "Its stack is forgotten here and its ports" : `Its ${stacks.length} stacks are forgotten here and their ports`} on localhost close. What runs on the machine stays as it is.
+            </span>
             <div className="flex gap-2">
               <Button size="sm" tone="ghost" onClick={() => setRemoving(false)}>
                 Keep
