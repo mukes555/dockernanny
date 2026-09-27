@@ -110,14 +110,17 @@ impl Ssh {
         format!("ssh -F {}", self.config_path())
     }
 
-    /// Runs one remote script to completion and captures both streams.
+    /// Runs one remote script to completion and captures both streams. A
+    /// caller that gives up (a poll with a timeout) takes the remote side
+    /// with it, see `ends_with_the_connection`.
     pub async fn run(&self, alias: &str, script: &str) -> anyhow::Result<Output> {
-        job::run_with_stdin(self.command(alias), script).await
+        job::run_with_stdin(self.command(alias), &ends_with_the_connection(script)).await
     }
 
-    /// Like `run`, but streams output lines as they arrive and can be cancelled.
+    /// Like `run`, but streams output lines as they arrive and can be
+    /// cancelled; cancelling ends the command on the machine too.
     pub fn job(&self, alias: &str, script: &str, on_line: impl FnMut(Line) + Send + 'static) -> anyhow::Result<Job> {
-        Job::spawn(self.command(alias), Some(script.to_string()), on_line)
+        Job::spawn(self.command(alias), Some(ends_with_the_connection(script)), on_line)
     }
 
     /// Asks the master on `socket` (the shared one when None) to exit. Used
@@ -142,6 +145,22 @@ impl Ssh {
         }
         let _ = cmd.args(["-O", command, alias]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
     }
+}
+
+/// Without a terminal, sshd does not end a command when the connection goes:
+/// a killed ssh here left `compose logs -f` running there for good, and a
+/// hung probe piled up. So the script runs in the background while a watcher
+/// reads this computer's side of the connection, which this computer keeps
+/// open until the script is done or it gives up; at end of input the watcher
+/// ends the whole process group.
+///
+/// The shell gives a background command /dev/null as stdin unless it is
+/// redirected explicitly, so the connection is first copied to descriptor 3
+/// and the watcher reads that. The script's own stdin is /dev/null, so
+/// nothing competes with the watcher, and everything after the script is
+/// one line, read in full before the watcher starts.
+pub fn ends_with_the_connection(script: &str) -> String {
+    format!("exec 3<&0\n(\n{script}\n) </dev/null & w=$!; ( cat <&3 >/dev/null; kill 0 ) >/dev/null 2>&1 & wait $w; c=$?; exit $c\n")
 }
 
 /// The known_hosts text with one line for `marker`, replacing any older one.
@@ -221,6 +240,14 @@ mod tests {
             control: "/h/cm/%C".into(),
             known_hosts: "/h/known_hosts".into(),
         }
+    }
+
+    #[test]
+    fn a_remote_script_ends_with_the_connection() {
+        let wrapped = ends_with_the_connection("echo one\ndocker compose logs -f");
+        assert!(wrapped.starts_with("exec 3<&0\n(\necho one\ndocker compose logs -f\n) </dev/null & w=$!; "), "{wrapped}");
+        assert!(wrapped.contains("( cat <&3 >/dev/null; kill 0 ) >/dev/null 2>&1 &"), "the watcher reads the copied connection and holds no output pipe");
+        assert!(wrapped.ends_with("wait $w; c=$?; exit $c\n"), "the shell needs no end of input to finish");
     }
 
     #[test]

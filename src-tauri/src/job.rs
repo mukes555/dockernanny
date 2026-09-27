@@ -7,7 +7,7 @@ use std::process::Stdio;
 use anyhow::Context;
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, Command};
+use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
@@ -79,10 +79,12 @@ impl Job {
         let done = tokio::spawn(async move {
             let mut child = child;
             let pid = child.id();
-            if let Some(script) = stdin {
-                feed_stdin(&mut child, &script).await?;
-            }
+            let script_pipe = match stdin {
+                Some(script) => Some(feed_stdin(&mut child, &script).await?),
+                None => None,
+            };
             let result = drive(child, cancelled, on_line).await;
+            drop(script_pipe);
             tools::untrack(pid);
             result
         });
@@ -106,8 +108,9 @@ pub async fn run_with_stdin(mut cmd: Command, script: &str) -> anyhow::Result<Ou
     // with it, or a stuck remote command leaves sessions piling up.
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     let mut child = cmd.spawn().context("spawn process")?;
-    feed_stdin(&mut child, script).await?;
+    let script_pipe = feed_stdin(&mut child, script).await?;
     let out = child.wait_with_output().await.context("wait for process")?;
+    drop(script_pipe);
     Ok(Output {
         code: out.status.code(),
         stdout: String::from_utf8_lossy(&out.stdout).trim_end().to_string(),
@@ -115,12 +118,14 @@ pub async fn run_with_stdin(mut cmd: Command, script: &str) -> anyhow::Result<Ou
     })
 }
 
-/// Writes the script and closes the pipe, so the shell sees EOF and runs it.
-async fn feed_stdin(child: &mut Child, script: &str) -> anyhow::Result<()> {
+/// Writes the script and hands back the open pipe. It stays open until the
+/// process is done or given up on: a remote script ends when its stdin
+/// does (`ssh::ends_with_the_connection`), so closing early would end it.
+async fn feed_stdin(child: &mut Child, script: &str) -> anyhow::Result<ChildStdin> {
     let mut stdin = child.stdin.take().context("child has no stdin")?;
     stdin.write_all(script.as_bytes()).await.context("write script")?;
-    stdin.shutdown().await.context("close stdin")?;
-    Ok(())
+    stdin.flush().await.context("write script")?;
+    Ok(stdin)
 }
 
 async fn drive(mut child: Child, mut cancelled: watch::Receiver<bool>, mut on_line: impl FnMut(Line)) -> anyhow::Result<Option<i32>> {

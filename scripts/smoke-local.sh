@@ -41,6 +41,10 @@ out="$(example doctor "$user" 127.0.0.1 22 "$key")"
 echo "$out" | grep '^ERR' && fail "a doctor check failed"
 echo "$out" | grep -q '^ok  SSH' || fail "ssh to this computer did not answer"
 
+say "giving up on a remote command ends it on the machine"
+out="$(example cancel "$user" 127.0.0.1 22 "$key")" || fail "a cancelled or timed-out command was left running"
+echo "$out" | grep -c 'left running = 0' | grep -q '^2$' || fail "expected two 'left running = 0' lines"
+
 say "stack: sync, up, ps, down"
 out="$(example stack "$user" 127.0.0.1 22 "$key" "$repo_dir/examples/sample-stack")"
 echo "$out" | sed -n '/^== up/,/^== ps/p' | grep -q 'exit Some(0)' || fail "compose up failed"
