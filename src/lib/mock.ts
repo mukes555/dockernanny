@@ -153,6 +153,11 @@ const samplePreview: Preview = {
     { name: "web", image: "nginx:alpine", builds: false, ports: [{ target: 80, published: 8087, protocol: "tcp" }] },
   ],
   warnings: ["echo: port 9099/udp is not forwarded (SSH forwards TCP only)", "echo: mounts /etc/hosts, which is outside the project folder and will not exist on the machine"],
+  binds: [
+    { path: "html", read_only: false, services: ["web"], exists_here: true },
+    { path: "pgdata", read_only: false, services: ["db"], exists_here: false },
+    { path: "conf/nginx.conf", read_only: true, services: ["web"], exists_here: true },
+  ],
 };
 
 let handlers: Handlers | null = null;

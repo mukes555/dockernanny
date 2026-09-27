@@ -86,6 +86,17 @@ export interface Preview {
   services: ServicePreview[];
   warnings: string[];
   has_env_file: boolean;
+  /** Folders inside the project that containers mount; the user picks which are copied. */
+  binds: BindMount[];
+}
+
+/** A bind mount whose source is inside the project folder, relative to it. */
+export interface BindMount {
+  path: string;
+  read_only: boolean;
+  services: string[];
+  /** False when only the machine has it (a container wrote it); then it is left alone. */
+  exists_here: boolean;
 }
 
 export interface Stack {

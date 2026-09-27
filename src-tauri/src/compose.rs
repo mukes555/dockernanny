@@ -19,6 +19,20 @@ pub struct Preview {
     pub services: Vec<ServicePreview>,
     pub warnings: Vec<String>,
     pub has_env_file: bool,
+    /// Folders inside the project that containers mount, so the user
+    /// decides which are copied: a database's data folder must not be.
+    pub binds: Vec<BindMount>,
+}
+
+/// A bind mount whose source is inside the project folder, relative to it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct BindMount {
+    pub path: String,
+    pub read_only: bool,
+    pub services: Vec<String>,
+    /// Whether the folder exists on this computer; one that does not is
+    /// the machine's own (written by a container) and is left alone.
+    pub exists_here: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,6 +102,9 @@ pub async fn preview(dropped: &Path) -> anyhow::Result<Preview> {
     let (model, stderr) = config_model(&project_dir, &compose_rel).await?;
 
     let mut preview = parse_model(&model, &project_dir);
+    for bind in &mut preview.binds {
+        bind.exists_here = project_dir.join(&bind.path).exists();
+    }
     preview.warnings.extend(variable_warnings(&stderr));
     preview.name = sanitize_name(project_dir.file_name().and_then(|n| n.to_str()).unwrap_or("stack"));
     preview.has_env_file = project_dir.join(".env").is_file();
@@ -138,6 +155,9 @@ pub fn parse_model(model: &Value, project_dir: &Path) -> Preview {
             if let Some(warning) = bind_mount_warning(volume, project_dir) {
                 preview.warnings.push(format!("{name}: {warning}"));
             }
+            if let Some(bind) = bind_inside_project(volume, project_dir) {
+                note_bind(&mut preview.binds, bind, name);
+            }
         }
         preview.services.push(ServicePreview {
             name: name.clone(),
@@ -184,6 +204,35 @@ fn bind_mount_warning(volume: &Value, project_dir: &Path) -> Option<String> {
         return None;
     }
     Some(format!("mounts {source}, which is outside the project folder and will not exist on the machine"))
+}
+
+/// A bind mount of a folder inside the project, as a path relative to it.
+/// The project folder itself (`.:/app`) is always copied, so it is not one.
+fn bind_inside_project(volume: &Value, project_dir: &Path) -> Option<BindMount> {
+    let is_bind = volume.get("type").and_then(Value::as_str) == Some("bind");
+    let source = volume.get("source").and_then(Value::as_str)?;
+    let relative = Path::new(source).strip_prefix(project_dir).ok()?;
+    if !is_bind || relative.as_os_str().is_empty() {
+        return None;
+    }
+    Some(BindMount {
+        path: relative.to_string_lossy().replace('\\', "/"),
+        read_only: volume.get("read_only").and_then(Value::as_bool).unwrap_or(false),
+        services: Vec::new(),
+        exists_here: false,
+    })
+}
+
+/// One entry per path; a folder two services mount is listed once, with
+/// both, and counts as writable when either writes to it.
+fn note_bind(binds: &mut Vec<BindMount>, bind: BindMount, service: &str) {
+    match binds.iter_mut().find(|known| known.path == bind.path) {
+        Some(known) => {
+            known.read_only = known.read_only && bind.read_only;
+            known.services.push(service.to_string());
+        }
+        None => binds.push(BindMount { services: vec![service.to_string()], ..bind }),
+    }
 }
 
 /// `The "X" variable is not set. Defaulting to a blank string.` on stderr.
@@ -276,6 +325,26 @@ mod tests {
         "volumes":[{"type":"bind","source":"/etc/hosts","target":"/tmp/hosts","read_only":true}]},
       "web":{"build":{"context":"/proj","dockerfile":"Dockerfile"},"ports":[{"mode":"ingress","target":80,"published":"8087","protocol":"tcp"}],
         "volumes":[{"type":"bind","source":"/proj/html","target":"/usr/share/nginx/html"},{"type":"volume","source":"data","target":"/data"}]}}}"#;
+
+    #[test]
+    fn bind_mounts_inside_the_project_are_listed_once_each() {
+        let model: Value = serde_json::from_str(
+            r#"{"services":{
+              "db":{"image":"postgres","volumes":[{"type":"bind","source":"/proj/data","target":"/var/lib/postgresql/data"}]},
+              "backup":{"image":"alpine","volumes":[{"type":"bind","source":"/proj/data","target":"/data","read_only":true},{"type":"bind","source":"/proj","target":"/app"}]},
+              "web":{"image":"nginx","volumes":[{"type":"bind","source":"/proj/conf/nginx.conf","target":"/etc/nginx/nginx.conf","read_only":true},{"type":"bind","source":"/etc/hosts","target":"/h"},{"type":"volume","source":"cache","target":"/cache"}]}}}"#,
+        )
+        .unwrap();
+        let preview = parse_model(&model, Path::new("/proj"));
+        assert_eq!(
+            preview.binds,
+            vec![
+                BindMount { path: "data".into(), read_only: false, services: vec!["backup".into(), "db".into()], exists_here: false },
+                BindMount { path: "conf/nginx.conf".into(), read_only: true, services: vec!["web".into()], exists_here: false },
+            ],
+            "the project itself, paths outside it and named volumes are not bind mounts to choose about"
+        );
+    }
 
     #[test]
     fn model_gives_services_ports_and_warnings() {
