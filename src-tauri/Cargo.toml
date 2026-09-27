@@ -1,6 +1,6 @@
 [package]
 name = "dockernanny"
-version = "0.3.4"
+version = "0.3.5"
 description = "Run your compose stacks on another machine and keep using localhost"
 authors = ["dockerNanny contributors"]
 edition = "2021"
