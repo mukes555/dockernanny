@@ -128,22 +128,42 @@ async fn feed_stdin(child: &mut Child, script: &str) -> anyhow::Result<ChildStdi
     Ok(stdin)
 }
 
+/// A line as the pump found it: `redraw` when `\r` ended it, the way progress
+/// bars overwrite their line, rather than `\n`.
+struct Read {
+    line: Line,
+    redraw: bool,
+}
+
+/// Skips a redraw that repeats the redraw before it. Two equal lines that
+/// ended in `\n` are both real: a log printing the same thing twice.
+#[derive(Default)]
+struct Redraws {
+    last: Option<(String, bool)>,
+}
+
+impl Redraws {
+    fn keeps(&mut self, read: &Read) -> bool {
+        let repeat = matches!(&self.last, Some((text, true)) if *text == read.line.text);
+        self.last = Some((read.line.text.clone(), read.redraw));
+        !repeat
+    }
+}
+
 async fn drive(mut child: Child, mut cancelled: watch::Receiver<bool>, mut on_line: impl FnMut(Line)) -> anyhow::Result<Option<i32>> {
-    let (tx, mut rx) = mpsc::channel::<Line>(256);
+    let (tx, mut rx) = mpsc::channel::<Read>(256);
     let stdout = tokio::spawn(pump(child.stdout.take(), Stream::Stdout, tx.clone()));
     let stderr = tokio::spawn(pump(child.stderr.take(), Stream::Stderr, tx));
 
     let mut code = None;
     let mut exited = false;
-    // Progress output redraws the same line with `\r`; showing it once is enough.
-    let mut last_text = String::new();
+    let mut redraws = Redraws::default();
     loop {
         tokio::select! {
-            line = rx.recv() => match line {
-                Some(line) => {
-                    if line.text != last_text {
-                        last_text = line.text.clone();
-                        on_line(line);
+            read = rx.recv() => match read {
+                Some(read) => {
+                    if redraws.keeps(&read) {
+                        on_line(read.line);
                     }
                 }
                 // Both pumps are gone, so every byte has been delivered.
@@ -167,25 +187,39 @@ async fn drive(mut child: Child, mut cancelled: watch::Receiver<bool>, mut on_li
 }
 
 /// Reads bytes, not lines: `\r` also ends a line so progress bars do not pile
-/// up, and one enormous line is truncated instead of buffered forever.
-async fn pump<R: AsyncRead + Unpin>(reader: Option<R>, stream: Stream, tx: mpsc::Sender<Line>) {
+/// up, and one enormous line is truncated instead of buffered forever. A
+/// line ended by `\r` is held back one byte, because `\r\n` is an ordinary
+/// line end, not a redraw.
+async fn pump<R: AsyncRead + Unpin>(reader: Option<R>, stream: Stream, tx: mpsc::Sender<Read>) {
     let Some(mut reader) = reader else { return };
     let mut buf = vec![0u8; 8192];
     let mut line: Vec<u8> = Vec::new();
+    let mut held: Option<String> = None;
     loop {
         let read = match reader.read(&mut buf).await {
             Ok(0) | Err(_) => break,
             Ok(read) => read,
         };
         for &byte in &buf[..read] {
-            let ends_line = byte == b'\n' || byte == b'\r';
-            if ends_line {
-                if line.is_empty() {
+            if let Some(text) = held.take() {
+                let plain_line_end = byte == b'\n';
+                if send(&tx, stream, text, !plain_line_end).await.is_err() {
+                    return;
+                }
+                if plain_line_end {
                     continue;
                 }
+            }
+            let ends_line = byte == b'\n' || byte == b'\r';
+            if ends_line && line.is_empty() {
+                continue;
+            }
+            if ends_line {
                 let text = String::from_utf8_lossy(&line).into_owned();
                 line.clear();
-                if tx.send(Line { stream, text }).await.is_err() {
+                if byte == b'\r' {
+                    held = Some(text);
+                } else if send(&tx, stream, text, false).await.is_err() {
                     return;
                 }
             } else if line.len() < MAX_LINE_BYTES {
@@ -195,8 +229,51 @@ async fn pump<R: AsyncRead + Unpin>(reader: Option<R>, stream: Stream, tx: mpsc:
             }
         }
     }
+    if let Some(text) = held {
+        let _ = send(&tx, stream, text, true).await;
+    }
     if !line.is_empty() {
         let text = String::from_utf8_lossy(&line).into_owned();
-        let _ = tx.send(Line { stream, text }).await;
+        let _ = send(&tx, stream, text, false).await;
+    }
+}
+
+async fn send(tx: &mpsc::Sender<Read>, stream: Stream, text: String, redraw: bool) -> Result<(), mpsc::error::SendError<Read>> {
+    tx.send(Read { line: Line { stream, text }, redraw }).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn pumped(bytes: &'static [u8]) -> Vec<(String, bool)> {
+        let (tx, mut rx) = mpsc::channel::<Read>(64);
+        pump(Some(bytes), Stream::Stdout, tx).await;
+        let mut reads = Vec::new();
+        while let Some(read) = rx.recv().await {
+            reads.push((read.line.text, read.redraw));
+        }
+        reads
+    }
+
+    #[tokio::test]
+    async fn only_a_carriage_return_alone_marks_a_redraw() {
+        let reads = pumped(b"one\r\ntwo\nbar 10%\rbar 20%\rlast").await;
+        assert_eq!(
+            reads,
+            vec![("one".into(), false), ("two".into(), false), ("bar 10%".into(), true), ("bar 20%".into(), true), ("last".into(), false)]
+        );
+    }
+
+    #[test]
+    fn a_log_that_repeats_itself_is_shown_every_time() {
+        let read = |text: &str, redraw: bool| Read { line: Line { stream: Stream::Stdout, text: text.into() }, redraw };
+        let mut redraws = Redraws::default();
+        assert!(redraws.keeps(&read("tick", false)));
+        assert!(redraws.keeps(&read("tick", false)), "the same line printed again is a real line");
+        assert!(redraws.keeps(&read("spin", true)));
+        assert!(!redraws.keeps(&read("spin", true)), "a redraw of the same text is noise");
+        assert!(!redraws.keeps(&read("spin", false)), "the final print of a redrawn line is that same line");
+        assert!(redraws.keeps(&read("spin", false)), "printed again after that, it is a new line");
     }
 }
