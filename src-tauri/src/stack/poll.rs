@@ -50,11 +50,14 @@ pub fn spawn_status_loop(app: AppHandle) {
                 let Ok(Ok(out)) = out else { continue };
                 let sections = split_by_marker(&out.stdout);
                 for stack in stacks {
-                    let services = sections.get(&stack.id).map(|text| compose::parse_ps(text)).unwrap_or_default();
+                    let section = sections.get(&stack.id).map(String::as_str).unwrap_or("");
+                    let services = compose::parse_ps(section);
+                    let missing = folder_is_missing(section);
                     forward::reconcile(&app, &stack, &services);
                     set_status(&app, &stack.id, |status| {
                         status.services = services;
                         status.known = true;
+                        status.folder_missing = missing;
                         if !status.phase.busy() {
                             status.phase = derive_phase(&status.services);
                         }
@@ -66,13 +69,22 @@ pub fn spawn_status_loop(app: AppHandle) {
     });
 }
 
+/// A stack whose folder is gone from the machine says so, instead of
+/// looking merely stopped.
+const NO_FOLDER: &str = "dockernanny-no-folder";
+
 fn ps_script(stacks: &[Stack]) -> String {
     let mut script = String::new();
     for stack in stacks {
-        script.push_str(&format!("echo '=== {}'; ( {} 2>/dev/null ); ", stack.id, stack.compose_cmd("ps --all --format json")));
+        let dir = crate::stack::shell_quote(&stack.remote_dir());
+        script.push_str(&format!("echo '=== {}'; [ -d {dir} ] || echo {NO_FOLDER}; ( {} 2>/dev/null ); ", stack.id, stack.compose_cmd("ps --all --format json")));
     }
     script.push_str("true");
     script
+}
+
+fn folder_is_missing(section: &str) -> bool {
+    section.lines().any(|line| line.trim() == NO_FOLDER)
 }
 
 fn split_by_marker(text: &str) -> HashMap<String, String> {
@@ -101,10 +113,29 @@ mod tests {
 
     #[test]
     fn markers_split_per_stack() {
-        let text = "=== aaa\n{\"Service\":\"web\"}\n=== bbb\n=== ccc\n{\"Service\":\"db\"}\n";
+        let text = "=== aaa\n{\"Service\":\"web\"}\n=== bbb\n=== ccc\ndockernanny-no-folder\n";
         let sections = split_by_marker(text);
         assert_eq!(sections["aaa"].trim(), "{\"Service\":\"web\"}");
         assert_eq!(sections["bbb"].trim(), "");
-        assert_eq!(sections["ccc"].trim(), "{\"Service\":\"db\"}");
+        assert!(!folder_is_missing(&sections["aaa"]));
+        assert!(folder_is_missing(&sections["ccc"]), "a stack whose folder is gone says so");
+        assert!(compose::parse_ps(&sections["ccc"]).is_empty(), "the marker is not a service");
+    }
+
+    #[test]
+    fn the_script_checks_the_folder_before_asking_compose() {
+        let stack = Stack {
+            id: "s1".into(),
+            name: "shop".into(),
+            machine_id: "m".into(),
+            project_dir: "/p".into(),
+            compose_rel: "compose.yaml".into(),
+            excludes: vec![],
+            forward_ports: true,
+            live_sync: false,
+            port_overrides: HashMap::new(),
+        };
+        let script = ps_script(std::slice::from_ref(&stack));
+        assert!(script.starts_with("echo '=== s1'; [ -d '.dockernanny/shop' ] || echo dockernanny-no-folder; ( cd '.dockernanny/shop' && docker compose"), "{script}");
     }
 }

@@ -96,6 +96,9 @@ pub struct StackStatus {
     pub synced_files: u32,
     /// False until `compose ps` has answered at least once.
     pub known: bool,
+    /// The project folder is gone from the machine; Start copies it again.
+    #[serde(default)]
+    pub folder_missing: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

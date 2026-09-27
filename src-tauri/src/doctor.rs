@@ -103,10 +103,11 @@ fn explain_ssh_failure(machine: &Machine, out: &Output, config: &str) -> (String
         return ("The machine did not accept the key.".into(), format!("{copy_id}\n# key with a passphrase? load it first:\n{add}"));
     }
     if host_key_changed {
-        let known_hosts_name = if machine.port == 22 { machine.host.clone() } else { format!("[{}]:{}", machine.host, machine.port) };
+        // The app keeps what it learned about machines in its own known_hosts, next to the config.
+        let known_hosts = config.rsplit_once('/').map(|(dir, _)| format!("{dir}/known_hosts")).unwrap_or_else(|| "known_hosts".into());
         return (
             "The machine's host key changed since it was last seen.".into(),
-            format!("# only if you reinstalled the machine:\n{}", in_terminal(&format!("ssh-keygen -R '{known_hosts_name}'"))),
+            format!("# only if you reinstalled the machine:\n{}", in_terminal(&format!("ssh-keygen -f {known_hosts} -R '{}'", crate::ssh::known_hosts_name(machine)))),
         );
     }
     if refused {
@@ -214,7 +215,7 @@ mod tests {
         assert!(fix.contains("ssh-copy-id -i /home/alex/.ssh/id_ed25519.pub -p 2222 alex@192.0.2.15"), "{fix}");
 
         let (_, fix) = explain_ssh_failure(&machine(), &failed("Host key verification failed."), "/h/ssh_config");
-        assert!(fix.contains("ssh-keygen -R '[192.0.2.15]:2222'"), "{fix}");
+        assert!(fix.contains("ssh-keygen -f /h/known_hosts -R '[192.0.2.15]:2222'"), "{fix}");
 
         let (detail, _) = explain_ssh_failure(&machine(), &failed("ssh: connect to host 192.0.2.15 port 2222: Connection refused"), "/h/ssh_config");
         assert_eq!(detail, "Nothing answers on port 2222.");
