@@ -290,14 +290,15 @@ pub async fn create_stack(app: AppHandle, state: State<'_, AppState>, mut stack:
     if stack.live_sync {
         stack::start_watcher(&app, &stack);
     }
-    spawn_logged(stack::up(app, stack));
+    spawn_logged(stack::up(app, stack, false));
     Ok(stacks)
 }
 
+/// Start (`up -d`) or, with `rebuild`, Rebuild (`up -d --build`).
 #[tauri::command]
-pub async fn up_stack(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
+pub async fn up_stack(app: AppHandle, state: State<'_, AppState>, id: String, rebuild: bool) -> CmdResult<()> {
     let stack = state.store.stack(&id).ok_or("unknown stack")?;
-    spawn_logged(stack::up(app, stack));
+    spawn_logged(stack::up(app, stack, rebuild));
     Ok(())
 }
 
