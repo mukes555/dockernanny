@@ -3,12 +3,14 @@
 //! status to say how they ended.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::{derive_phase, now_ms, output_sink, set_status, shell_quote, OutputEvent, Phase, Stack, LOG_EVENT};
 use crate::compose;
+use crate::job::LastError;
 use crate::{forward, sync, AppState};
 
 /// Sync the folder, then `up -d`, which builds only images that are missing,
@@ -167,10 +169,18 @@ pub async fn remove(app: AppHandle, stack: Stack, remove_volumes: bool) -> anyho
 }
 
 /// Runs one compose command with streamed output, then refreshes the phase
-/// from `ps`. A cancelled job leaves the status to whoever cancelled it.
+/// from `ps`. A cancelled job leaves the status to whoever cancelled it. A
+/// failure's message carries the last error line compose printed, so the
+/// card says why without a look at the output.
 async fn run_compose(app: &AppHandle, stack: &Stack, alias: &str, script: &str, label: &str) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
-    let job = state.ssh.job(alias, script, output_sink(app, &stack.id))?;
+    let last_error = Arc::new(Mutex::new(LastError::default()));
+    let noted = last_error.clone();
+    let mut sink = output_sink(app, &stack.id);
+    let job = state.ssh.job(alias, script, move |line| {
+        noted.lock().expect("last error lock").note(&line.text);
+        sink(line);
+    })?;
     let handle = job.handle();
     state.jobs.lock().expect("jobs lock").insert(stack.id.clone(), handle.clone());
     let code = job.wait().await;
@@ -180,11 +190,12 @@ async fn run_compose(app: &AppHandle, stack: &Stack, alias: &str, script: &str, 
     }
     let code = code?;
     if code != Some(0) {
+        let why = last_error.lock().expect("last error lock").explain(code);
         set_status(app, &stack.id, |status| {
             status.phase = Phase::Error;
-            status.message = Some(format!("{label} exited with code {}", code.map(|c| c.to_string()).unwrap_or_else(|| "?".into())));
+            status.message = Some(format!("{label} failed: {why}"));
         });
-        anyhow::bail!("{label} failed");
+        anyhow::bail!("{label} failed: {why}");
     }
     refresh(app, stack, alias).await;
     Ok(())

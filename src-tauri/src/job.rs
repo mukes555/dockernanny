@@ -29,6 +29,31 @@ impl Output {
     }
 }
 
+/// The last line of output that read like an error, so a failure can say
+/// why in the tool's own words rather than only by its exit code.
+#[derive(Debug, Default)]
+pub struct LastError {
+    line: Option<String>,
+}
+
+impl LastError {
+    pub fn note(&mut self, text: &str) {
+        if reads_like_error(text) {
+            self.line = Some(text.trim().to_string());
+        }
+    }
+
+    /// The line, or "exited with code N" when nothing read like an error.
+    pub fn explain(&self, code: Option<i32>) -> String {
+        self.line.clone().unwrap_or_else(|| format!("exited with code {}", code.map(|c| c.to_string()).unwrap_or_else(|| "?".into())))
+    }
+}
+
+pub fn reads_like_error(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("error") || lower.contains("failed")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Stream {
@@ -263,6 +288,21 @@ mod tests {
             reads,
             vec![("one".into(), false), ("two".into(), false), ("bar 10%".into(), true), ("bar 20%".into(), true), ("last".into(), false)]
         );
+    }
+
+    #[test]
+    fn a_failure_is_explained_in_the_tools_own_words() {
+        let mut last = LastError::default();
+        assert_eq!(last.explain(Some(1)), "exited with code 1");
+        assert_eq!(last.explain(None), "exited with code ?");
+        // The lines compose printed when a registry refused an image.
+        last.note(" Image quay.io/minio/minio:latest Pulling ");
+        last.note("Error response from daemon: unauthorized: access to the requested resource is not authorized");
+        last.note(" Container shop-db-1  Created");
+        assert_eq!(last.explain(Some(1)), "Error response from daemon: unauthorized: access to the requested resource is not authorized");
+        assert!(reads_like_error("target api: failed to solve: process did not complete successfully"));
+        assert!(reads_like_error("rsync error: some files/attrs were not transferred (code 23)"));
+        assert!(!reads_like_error(" Container shop-db-1  Created"));
     }
 
     #[test]
