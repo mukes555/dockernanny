@@ -4,13 +4,13 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 
 use super::endpoint::{Endpoint, Site};
 use super::Sink;
-use crate::job::Job;
+use crate::job::{Job, LastError};
 use crate::ssh::Ssh;
 use crate::stack::shell_quote;
 use crate::tools;
@@ -91,10 +91,13 @@ async fn run_rsync(args: &[String], mut on_line: Sink) -> anyhow::Result<Mirrore
     cmd.args(args);
     let files = Arc::new(AtomicU32::new(0));
     let counter = files.clone();
+    let last_error = Arc::new(Mutex::new(LastError::default()));
+    let noted = last_error.clone();
     let job = Job::spawn(cmd, None, move |line| {
         if is_file_change(&line.text) {
             counter.fetch_add(1, Ordering::Relaxed);
         }
+        noted.lock().expect("last error lock").note(&line.text);
         on_line(line);
     })?;
     let code = job.wait().await?;
@@ -106,7 +109,8 @@ async fn run_rsync(args: &[String], mut on_line: Sink) -> anyhow::Result<Mirrore
             files,
             warning: Some("some files could not be copied (rsync reported a partial transfer)".into()),
         }),
-        other => anyhow::bail!("rsync exited with {other:?}"),
+        // rsync's own last words, such as the ssh error under it.
+        other => anyhow::bail!("rsync: {}", last_error.lock().expect("last error lock").explain(other)),
     }
 }
 

@@ -33,7 +33,7 @@ use progress::Progress;
 use steps::names;
 
 use crate::compose;
-use crate::job::{Line, Stream};
+use crate::job::{LastError, Line, Stream};
 use crate::ssh::Ssh;
 use crate::stack::Phase;
 
@@ -150,14 +150,12 @@ impl Report<'_> {
 
     /// A sink that also keeps the last line reading like an error, so a
     /// failure can say why in Docker's own words, not only its exit code.
-    fn sink_keeping_error(&self) -> (Sink, Arc<Mutex<Option<String>>>) {
+    fn sink_keeping_error(&self) -> (Sink, Arc<Mutex<LastError>>) {
         let mut inner = self.sink();
-        let reason = Arc::new(Mutex::new(None));
+        let reason = Arc::new(Mutex::new(LastError::default()));
         let kept = reason.clone();
         let sink: Sink = Box::new(move |l: Line| {
-            if reads_like_error(&l.text) {
-                *kept.lock().expect("reason lock") = Some(l.text.trim().to_string());
-            }
+            kept.lock().expect("reason lock").note(&l.text);
             inner(l);
         });
         (sink, reason)
@@ -205,16 +203,10 @@ pub(crate) fn line(text: &str) -> Line {
     }
 }
 
-fn reads_like_error(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    lower.contains("error") || lower.contains("failed")
-}
-
 /// Why a Docker command failed: the last error line it printed, or its
 /// exit code when it printed none.
-fn why_it_failed(code: Option<i32>, reason: &Mutex<Option<String>>) -> String {
-    let said = reason.lock().expect("reason lock").take();
-    said.unwrap_or_else(|| format!("exited with code {}", code.map(|c| c.to_string()).unwrap_or_else(|| "?".into())))
+fn why_it_failed(code: Option<i32>, reason: &Mutex<LastError>) -> String {
+    reason.lock().expect("reason lock").explain(code)
 }
 
 /// Looks at both ends without changing anything.
@@ -454,21 +446,6 @@ async fn copy_container_data(ssh: &Ssh, sides: &Sides, request: &CopyRequest, so
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_failure_is_explained_in_dockers_words() {
-        let reason = Mutex::new(None);
-        assert_eq!(why_it_failed(Some(1), &reason), "exited with code 1");
-        // The lines compose printed when a registry refused an image.
-        for text in [" Image quay.io/minio/minio:latest Pulling ", "Error response from daemon: unauthorized: access to the requested resource is not authorized"] {
-            if reads_like_error(text) {
-                *reason.lock().unwrap() = Some(text.trim().to_string());
-            }
-        }
-        assert_eq!(why_it_failed(Some(1), &reason), "Error response from daemon: unauthorized: access to the requested resource is not authorized");
-        assert!(reads_like_error("target api: failed to solve: process did not complete successfully"));
-        assert!(!reads_like_error(" Container shop-db-1  Created"));
-    }
 
     #[test]
     fn requests_and_endpoints_read_from_the_wire() {
