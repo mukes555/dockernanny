@@ -87,8 +87,8 @@ export function StackCard({ stack }: { stack: Stack }) {
             size="sm"
             tone="primary"
             disabled={busy || !machine}
-            onClick={() => void call(api.upStack(stack.id))}
-            title={primary === "Start" ? "Sync the folder and start the stack on the machine" : "Sync the folder, rebuild what changed and restart what needs it"}
+            onClick={() => void call(api.upStack(stack.id, primary === "Rebuild"))}
+            title={primary === "Start" ? "Sync the folder and start the stack on the machine; images are built only if missing" : "Sync the folder, build every image again and restart what needs it"}
           >
             {primary === "Start" ? <PlayIcon size={11} /> : <RefreshIcon size={11} />} {primary}
           </Button>
@@ -102,6 +102,9 @@ export function StackCard({ stack }: { stack: Stack }) {
             {/* Always there, so the items do not move under the cursor when the state changes. */}
             <MenuItem onClick={() => void call(api.restartStack(stack.id))} disabled={!(phase === "running" || phase === "partial")}>
               Restart
+            </MenuItem>
+            <MenuItem onClick={() => void call(api.upStack(stack.id, true))} disabled={busy || !machine}>
+              Rebuild
             </MenuItem>
             <MenuItem onClick={() => setCopyOpen({ open: true, sourceStackId: stack.id })} disabled={busy || !machine}>
               Copy to…

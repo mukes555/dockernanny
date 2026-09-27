@@ -11,8 +11,11 @@ use super::{derive_phase, now_ms, output_sink, set_status, shell_quote, OutputEv
 use crate::compose;
 use crate::{forward, sync, AppState};
 
-/// Sync the folder, then `up`. A previous up or down still running is cancelled first.
-pub async fn up(app: AppHandle, stack: Stack) -> anyhow::Result<()> {
+/// Sync the folder, then `up -d`, which builds only images that are missing,
+/// as `docker compose up` does; `rebuild` adds `--build`, so every built
+/// image is made again from the synced folder. A previous up or down still
+/// running is cancelled first.
+pub async fn up(app: AppHandle, stack: Stack, rebuild: bool) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
     let machine = state.store.machine(&stack.machine_id).context("the machine no longer exists")?;
     let alias = machine.alias();
@@ -40,8 +43,8 @@ pub async fn up(app: AppHandle, stack: Stack) -> anyhow::Result<()> {
         status.message = synced.warning;
     });
 
-    let script = stack.compose_cmd("up -d --build --remove-orphans");
-    run_compose(&app, &stack, &alias, &script, "compose up").await
+    let args = if rebuild { "up -d --build --remove-orphans" } else { "up -d --remove-orphans" };
+    run_compose(&app, &stack, &alias, &stack.compose_cmd(args), "compose up").await
 }
 
 pub async fn down(app: AppHandle, stack: Stack, remove_volumes: bool) -> anyhow::Result<()> {
