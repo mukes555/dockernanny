@@ -69,8 +69,11 @@ fn can_bind(port: u16) -> bool {
 }
 
 /// The forwards a stack should have right now: every TCP port of a running
-/// service, mapped through the stack's overrides.
-pub fn desired_ports(stack: &Stack, services: &[ServiceState]) -> Vec<ForwardPort> {
+/// service, mapped through the stack's overrides. A service that is
+/// restarting publishes nothing for a moment; its ports stay bridged (as
+/// `kept`, what is bridged now) so localhost does not flap while a
+/// container comes back.
+pub fn desired_ports(stack: &Stack, services: &[ServiceState], kept: &[ForwardPort]) -> Vec<ForwardPort> {
     if !stack.forward_ports {
         return Vec::new();
     }
@@ -87,6 +90,11 @@ pub fn desired_ports(stack: &Stack, services: &[ServiceState]) -> Vec<ForwardPor
             }
         }
     }
+    let restarting = services.iter().any(|s| s.state == "restarting");
+    if restarting {
+        let still_bridged: Vec<ForwardPort> = kept.iter().filter(|port| !ports.contains(port)).cloned().collect();
+        ports.extend(still_bridged);
+    }
     ports.sort();
     ports
 }
@@ -94,9 +102,9 @@ pub fn desired_ports(stack: &Stack, services: &[ServiceState]) -> Vec<ForwardPor
 /// Brings the forwarder in line with what the stack currently publishes.
 pub fn reconcile(app: &AppHandle, stack: &Stack, services: &[ServiceState]) {
     let state = app.state::<AppState>();
-    let desired = desired_ports(stack, services);
     let mut forwarders = state.forwarders.lock().expect("forwarders lock");
     let current = forwarders.get(&stack.id).map(|f| f.ports.clone()).unwrap_or_default();
+    let desired = desired_ports(stack, services, &current);
     if current == desired {
         return;
     }
@@ -146,11 +154,17 @@ async fn run(app: AppHandle, stack_id: String, alias: String, ports: Vec<Forward
     let mut attempts: u32 = 0;
     loop {
         attempts += 1;
+        // A start that fails (WSL not up yet, ssh missing for a moment) is
+        // retried like a bridge that died; only a cancel ends the loop.
         let mut child = match spawn_ssh(&ssh, &alias, &socket, &ports) {
             Ok(child) => child,
             Err(err) => {
                 publish(&app, &stack_id, ForwardState { up: false, ports: ports.clone(), error: Some(format!("{err:#}")), attempts, since_ms: None });
-                return;
+                if wait_before_retry(attempts, &mut cancelled).await == Wait::Cancelled {
+                    publish(&app, &stack_id, ForwardState::default());
+                    return;
+                }
+                continue;
             }
         };
         let last_error = capture_last_line(child.stderr.take());
@@ -177,12 +191,25 @@ async fn run(app: AppHandle, stack_id: String, alias: String, ports: Vec<Forward
             }
         }
 
-        // Exponential backoff so a machine that went to sleep is not hammered.
-        let delay = Duration::from_secs(2u64.saturating_pow(attempts.min(5))).min(MAX_BACKOFF);
-        tokio::select! {
-            _ = tokio::time::sleep(delay) => {}
-            _ = cancelled.changed() => { publish(&app, &stack_id, ForwardState::default()); return; }
+        if wait_before_retry(attempts, &mut cancelled).await == Wait::Cancelled {
+            publish(&app, &stack_id, ForwardState::default());
+            return;
         }
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum Wait {
+    Over,
+    Cancelled,
+}
+
+/// Exponential backoff so a machine that went to sleep is not hammered.
+async fn wait_before_retry(attempts: u32, cancelled: &mut watch::Receiver<bool>) -> Wait {
+    let delay = Duration::from_secs(2u64.saturating_pow(attempts.min(5))).min(MAX_BACKOFF);
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => Wait::Over,
+        _ = cancelled.changed() => Wait::Cancelled,
     }
 }
 
@@ -314,11 +341,39 @@ mod tests {
             ports: ports.into_iter().map(|(p, proto)| Port { target: p, published: p, protocol: proto.into() }).collect(),
         };
         let services = vec![service("running", vec![(3000, "tcp"), (5432, "tcp"), (9099, "udp")]), service("exited", vec![(4000, "tcp")])];
-        assert_eq!(
-            desired_ports(&stack, &services),
-            vec![ForwardPort { local: 3000, remote: 3000 }, ForwardPort { local: 6432, remote: 5432 }]
-        );
+        let bridged = vec![ForwardPort { local: 3000, remote: 3000 }, ForwardPort { local: 6432, remote: 5432 }];
+        assert_eq!(desired_ports(&stack, &services, &[]), bridged);
         stack.forward_ports = false;
-        assert!(desired_ports(&stack, &services).is_empty());
+        assert!(desired_ports(&stack, &services, &bridged).is_empty());
+    }
+
+    #[test]
+    fn a_restarting_service_keeps_its_bridge() {
+        let stack = Stack {
+            id: "s".into(),
+            name: "s".into(),
+            machine_id: "m".into(),
+            project_dir: "/p".into(),
+            compose_rel: "compose.yaml".into(),
+            excludes: vec![],
+            forward_ports: true,
+            live_sync: false,
+            port_overrides: HashMap::new(),
+        };
+        let service = |name: &str, state: &str, ports: Vec<u16>| ServiceState {
+            service: name.into(),
+            container: String::new(),
+            state: state.into(),
+            health: String::new(),
+            exit_code: 0,
+            ports: ports.into_iter().map(|p| Port { target: p, published: p, protocol: "tcp".into() }).collect(),
+        };
+        let bridged = vec![ForwardPort { local: 3000, remote: 3000 }, ForwardPort { local: 5432, remote: 5432 }];
+        // The database restarts: it publishes nothing for a moment, and its port stays bridged.
+        let mid_restart = vec![service("api", "running", vec![3000]), service("db", "restarting", vec![])];
+        assert_eq!(desired_ports(&stack, &mid_restart, &bridged), bridged);
+        // Stopped for real: the bridge follows.
+        let stopped = vec![service("api", "running", vec![3000]), service("db", "exited", vec![])];
+        assert_eq!(desired_ports(&stack, &stopped, &bridged), vec![ForwardPort { local: 3000, remote: 3000 }]);
     }
 }
