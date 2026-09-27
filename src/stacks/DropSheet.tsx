@@ -7,6 +7,7 @@ import { useStore } from "../state/store";
 import { Dialog, DialogActions } from "../ui/Dialog";
 import { SpinnerIcon } from "../ui/icons";
 import { Button, Chip, Field, Select, TextInput, Toggle } from "../ui/primitives";
+import { BindMounts, excludeFor } from "./BindMounts";
 
 /** Confirms a dropped compose file: where it runs, what it publishes, what to skip. */
 export function DropSheet() {
@@ -23,6 +24,8 @@ export function DropSheet() {
   const [name, setName] = useState("");
   const [machineId, setMachineId] = useState("");
   const [excludes, setExcludes] = useState("");
+  // Mounted folders left to the machine; those it alone has start here.
+  const [skipped, setSkipped] = useState<string[]>([]);
   const [forward, setForward] = useState(true);
   const [live, setLive] = useState(false);
   const [overrides, setOverrides] = useState<Record<number, number>>({});
@@ -40,6 +43,7 @@ export function DropSheet() {
     const target = dropTarget(visibleMachines(state.machines, state.computerInfo), state.stats, state.selectedMachineId);
     setMachineId(target?.id ?? "");
     setOverrides({});
+    setSkipped(preview.binds.filter((bind) => !bind.exists_here).map((bind) => bind.path));
     setError(null);
     void api.defaultExcludes().then((list) => setExcludes(list.join(", ")));
     void api.busyPorts(allPorts(preview)).then(setBusy);
@@ -66,10 +70,13 @@ export function DropSheet() {
       machine_id: machineId,
       project_dir: preview.project_dir,
       compose_rel: preview.compose_rel,
-      excludes: excludes
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
+      excludes: [
+        ...excludes
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+        ...preview.binds.filter((bind) => skipped.includes(bind.path)).map(excludeFor),
+      ],
       forward_ports: forward,
       live_sync: live,
       port_overrides: Object.fromEntries(Object.entries(overrides).map(([k, v]) => [String(k), v])),
@@ -189,6 +196,8 @@ export function DropSheet() {
           ) : null}
         </ul>
       ) : null}
+
+      <BindMounts binds={preview.binds} skipped={skipped} onSkip={(path, skip) => setSkipped((list) => (skip ? [...list, path] : list.filter((p) => p !== path)))} />
 
       <div className="mt-4">
         <Field label="Do not copy" hint="Comma separated. Excluded folders the containers create on the machine are kept.">

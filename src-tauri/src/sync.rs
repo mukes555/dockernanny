@@ -85,8 +85,16 @@ fn is_relevant(event: &notify::Result<notify::Event>, root: &Path, excludes: &[S
     let Ok(event) = event else { return false };
     event.paths.iter().any(|path| {
         let relative = path.strip_prefix(root).unwrap_or(path);
-        let inside_excluded = relative.components().any(|part| excludes.iter().any(|name| part.as_os_str() == name.as_str()));
-        !inside_excluded
+        !is_excluded(relative, excludes)
+    })
+}
+
+/// The excludes as rsync reads them: a name matches a folder of that name
+/// anywhere, `/path` only that path from the project's root.
+fn is_excluded(relative: &Path, excludes: &[String]) -> bool {
+    excludes.iter().any(|exclude| match exclude.strip_prefix('/') {
+        Some(from_root) => relative.starts_with(from_root),
+        None => relative.components().any(|part| part.as_os_str() == exclude.as_str()),
     })
 }
 
@@ -103,5 +111,15 @@ mod tests {
         assert!(!is_relevant(&event("/home/.tmp/p/node_modules/x/index.js"), root, &excludes));
         assert!(!is_relevant(&event("/home/.tmp/p/.git/index"), root, &excludes));
         assert!(!is_relevant(&Err(notify::Error::generic("x")), root, &excludes));
+    }
+
+    #[test]
+    fn an_anchored_exclude_matches_only_from_the_project_root() {
+        let excludes = vec!["/data".to_string(), "cache".to_string()];
+        assert!(is_excluded(Path::new("data/db.bin"), &excludes));
+        assert!(is_excluded(Path::new("data"), &excludes));
+        assert!(!is_excluded(Path::new("app/data/keep.txt"), &excludes), "a data folder deeper down is not the mounted one");
+        assert!(!is_excluded(Path::new("database/x"), &excludes), "a longer name is a different folder");
+        assert!(is_excluded(Path::new("app/cache/x"), &excludes), "a plain name still matches anywhere");
     }
 }
