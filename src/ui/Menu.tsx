@@ -82,6 +82,11 @@ export function Menu({ label, onClose, className, width = "w-44", children }: { 
   );
 }
 
+/** A line between groups of items: everyday ones, rarer ones, then the one that removes. */
+export function MenuSeparator() {
+  return <div role="separator" className="my-0.5 border-t border-line" />;
+}
+
 /** One action in a `Menu`. `keepOpen` is for a first click that only asks
  * for a second one, like "Remove" turning into "Confirm remove". */
 export function MenuItem({ onClick, children, danger = false, disabled = false, keepOpen = false }: { onClick: () => void; children: ReactNode; danger?: boolean; disabled?: boolean; keepOpen?: boolean }) {

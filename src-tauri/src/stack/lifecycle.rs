@@ -61,6 +61,19 @@ pub async fn down(app: AppHandle, stack: Stack, remove_volumes: bool) -> anyhow:
     run_compose(&app, &stack, &machine.alias(), &stack.compose_cmd(args), "compose down").await
 }
 
+/// `compose stop`: the containers stay, so Start brings them back quickly.
+/// Removing them is `down`.
+pub async fn stop(app: AppHandle, stack: Stack) -> anyhow::Result<()> {
+    let state = app.state::<AppState>();
+    let machine = state.store.machine(&stack.machine_id).context("the machine no longer exists")?;
+    cancel_job(&app, &stack.id);
+    set_status(&app, &stack.id, |status| {
+        status.phase = Phase::Stopping;
+        status.message = None;
+    });
+    run_compose(&app, &stack, &machine.alias(), &stack.compose_cmd("stop"), "compose stop").await
+}
+
 pub async fn restart(app: AppHandle, stack: Stack) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
     let machine = state.store.machine(&stack.machine_id).context("the machine no longer exists")?;

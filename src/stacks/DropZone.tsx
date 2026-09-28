@@ -5,10 +5,12 @@ import { api, errorMessage } from "../lib/ipc";
 import { dropTarget, visibleMachines } from "../lib/machines";
 import type { Machine } from "../lib/types";
 import { useStore } from "../state/store";
-import { FolderIcon, LogoMark } from "../ui/icons";
+import { FolderIcon, LogoMark, PlusIcon } from "../ui/icons";
 import { Button } from "../ui/primitives";
 
-function useBrowse() {
+/** Picks a compose file, the same as dropping it on the window: the drop
+ * sheet opens on the machine whose page is open. */
+export function useBrowse() {
   const readComposeFile = useStore((state) => state.readComposeFile);
   const pushNotice = useStore((state) => state.pushNotice);
   return async () => {
@@ -61,20 +63,22 @@ export function DropHero({ extra }: { extra?: ReactNode }) {
   );
 }
 
-/** The slim target shown above existing stacks; named after the machine
- * whose page is open. */
-export function DropStrip({ machine }: { machine?: Machine }) {
-  const dropError = useStore((state) => state.dropError);
+/** The way to add a stack once some exist; dropping a file anywhere in the
+ * window still works, and the button's hint says so. */
+export function NewStackButton({ machine }: { machine?: Machine }) {
   const browse = useBrowse();
-  const invitation = machine ? `Drop a compose file or project folder anywhere in the window to run it on ${machine.name}.` : "Drop another compose file or project folder anywhere in the window.";
+  const where = machine ? ` to run on ${machine.name}` : "";
   return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-hairline px-4 py-2.5 text-[12px] text-ink-3">
-      <span>{dropError ? <span className="text-critical">{dropError}</span> : invitation}</span>
-      <Button size="sm" tone="ghost" onClick={() => void browse()}>
-        <FolderIcon /> Browse
-      </Button>
-    </div>
+    <Button tone="primary" onClick={() => void browse()} title={`Pick a compose file or project folder${where}, or drop one anywhere in the window`}>
+      <PlusIcon /> New stack…
+    </Button>
   );
+}
+
+/** Why the last dropped or picked file could not be read, until the next one. */
+export function DropErrorLine() {
+  const dropError = useStore((state) => state.dropError);
+  return dropError ? <p className="text-[12px] text-critical">{dropError}</p> : null;
 }
 
 /** Covers the window while a file is dragged over it. */

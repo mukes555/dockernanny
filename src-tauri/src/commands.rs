@@ -310,6 +310,14 @@ pub async fn up_stack(app: AppHandle, state: State<'_, AppState>, id: String, re
     Ok(())
 }
 
+/// Stop keeps the containers (`compose stop`); `down_stack` removes them.
+#[tauri::command]
+pub async fn stop_stack(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    let stack = state.store.stack(&id).ok_or("unknown stack")?;
+    spawn_logged(stack::stop(app, stack));
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn down_stack(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
     let stack = state.store.stack(&id).ok_or("unknown stack")?;

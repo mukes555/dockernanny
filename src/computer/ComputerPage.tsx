@@ -26,12 +26,20 @@ export function ComputerPage() {
     void loadComputerInfo().catch((err) => setError(errorMessage(err)));
   }, [loadComputerInfo]);
 
+  const parts = [
+    { id: "overview", label: "Overview" },
+    ...(settings?.use_machines ? [{ id: "ready", label: "Ready to use machines" }] : []),
+    { id: "docker-here", label: "Docker here" },
+    { id: "sharing", label: "Sharing" },
+  ];
+
   return (
     <div className="mx-auto max-w-3xl space-y-5 pb-10">
       <button type="button" onClick={() => setView("stacks")} className="inline-flex items-center gap-1 text-[12px] text-ink-3 transition hover:text-ink">
         <ArrowLeftIcon size={13} /> Back
       </button>
-      <header className="rounded-2xl border border-line bg-surface p-5">
+      <PageParts parts={parts} />
+      <header id="overview" className="scroll-mt-14 rounded-2xl border border-line bg-surface p-5">
         <Eyebrow>This computer</Eyebrow>
         <div className="mt-1 flex items-center gap-2.5">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-accent">
@@ -56,12 +64,32 @@ export function ComputerPage() {
         {error ? <div className="mt-3 text-[12px] text-critical">{error}</div> : null}
       </header>
 
-      {settings?.use_machines ? <Readiness /> : null}
-      <DockerHere />
-      <section id="sharing" className="scroll-mt-4">
+      {settings?.use_machines ? (
+        <section id="ready" className="scroll-mt-14">
+          <Readiness />
+        </section>
+      ) : null}
+      <section id="docker-here" className="scroll-mt-14">
+        <DockerHere />
+      </section>
+      <section id="sharing" className="scroll-mt-14">
         <SharingSections />
       </section>
     </div>
+  );
+}
+
+/** Four jobs share this page; the links stay at the top and jump to each. */
+function PageParts({ parts }: { parts: { id: string; label: string }[] }) {
+  const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ block: "start" });
+  return (
+    <nav aria-label="Parts of this page" className="sticky top-0 z-10 -mx-2 flex flex-wrap gap-1 bg-plane/85 px-2 py-2 backdrop-blur">
+      {parts.map((part) => (
+        <button key={part.id} type="button" onClick={() => jump(part.id)} className="rounded-full border border-line px-3 py-1 text-[12px] text-ink-2 transition hover:bg-surface-2 hover:text-ink">
+          {part.label}
+        </button>
+      ))}
+    </nav>
   );
 }
 

@@ -409,10 +409,15 @@ export const mockApi: Api = {
     const stack = stacks.find((s) => s.id === id);
     if (stack) void pretendUp(stack);
   },
-  downStack: async (id) => {
+  stopStack: async (id) => {
     publish(id, { phase: "stopping" });
     await wait(800);
     publish(id, { phase: "stopped", services: (statuses[id]?.services ?? []).map((s) => ({ ...s, state: "exited" })) });
+  },
+  downStack: async (id) => {
+    publish(id, { phase: "stopping" });
+    await wait(800);
+    publish(id, { phase: "stopped", services: [] });
   },
   restartStack: async (id) => {
     publish(id, { phase: "starting" });

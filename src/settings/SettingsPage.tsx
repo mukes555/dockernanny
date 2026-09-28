@@ -5,7 +5,7 @@ import { hiddenMachines } from "../lib/machines";
 import type { Settings, Theme } from "../lib/types";
 import { useStore } from "../state/store";
 import { SpinnerIcon } from "../ui/icons";
-import { Button, Card, Field, PageHeader, Select, TextInput, Toggle } from "../ui/primitives";
+import { Button, Card, Eyebrow, Field, PageHeader, Select, TextInput, Toggle } from "../ui/primitives";
 
 /** Mirrors `pairing::PORT` in the backend. */
 const DEFAULT_PAIRING_PORT = 47433;
@@ -60,6 +60,8 @@ export function SettingsPage() {
       <PageHeader eyebrow="This computer" title="Settings" onBack={() => setView("stacks")} />
       {error ? <div className="text-[12px] text-critical">{error}</div> : null}
 
+      {/* Everyday choices first; ports and repairs, rarely touched, at the end. */}
+      <Eyebrow className="pt-1">General</Eyebrow>
       <Card title="Roles" description="Both can be on at the same time.">
         <div className="space-y-3">
           <RoleRow checked={draft.use_machines} onChange={(on) => commit({ use_machines: on })} label="Use other machines" hint="Send your compose stacks to other machines and keep using localhost here." />
@@ -82,8 +84,9 @@ export function SettingsPage() {
         <Toggle checked={draft.check_updates} onChange={(on) => commit({ check_updates: on })} label="Look for a new version at start and every hour" />
       </Card>
 
+      {draft.use_machines || draft.share_this_computer ? <Eyebrow className="pt-3">Machines and stacks</Eyebrow> : null}
       {draft.use_machines ? (
-        <Card title="Using other machines" description="Defaults for new machines and stacks; each one can still differ.">
+        <Card title="New machines and stacks" description="Defaults for new machines and stacks; each one can still differ.">
           <div className="space-y-3">
             <Field label="Private key" hint="Offered when adding a machine. Empty means the first key found in ~/.ssh.">
               <div className="flex gap-2">
@@ -93,9 +96,6 @@ export function SettingsPage() {
             </Field>
             <ExcludesField value={draft.excludes} onCommit={(excludes) => commit({ excludes })} />
             <HelperImageField value={draft.helper_image} onCommit={(helper_image) => commit({ helper_image })} />
-            <div className="grid grid-cols-2 gap-3">
-              <PortField label="Setup script port" hint="Where Prepare another machine serves the Windows setup script." value={draft.script_port} onCommit={(script_port) => commit({ script_port })} />
-            </div>
           </div>
         </Card>
       ) : null}
@@ -119,9 +119,11 @@ export function SettingsPage() {
         </Card>
       ) : null}
 
-      <Card title="Pairing" description="Both computers must use the same port: the shared one listens on it, the other connects to it.">
+      <Eyebrow className="pt-3">Advanced</Eyebrow>
+      <Card title="Network ports" description="Both computers must use the same pairing port: the shared one listens on it, the other connects to it.">
         <div className="grid grid-cols-2 gap-3">
           <PortField label="Pairing port" hint={`Default ${DEFAULT_PAIRING_PORT}.`} value={draft.pairing_port} onCommit={(pairing_port) => commit({ pairing_port })} />
+          {draft.use_machines ? <PortField label="Setup script port" hint="Where Prepare another machine serves the Windows setup script." value={draft.script_port} onCommit={(script_port) => commit({ script_port })} /> : null}
         </div>
       </Card>
 
