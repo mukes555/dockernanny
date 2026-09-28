@@ -37,6 +37,12 @@ getrandom = "0.3"
 tar = { version = "0.4", default-features = false }
 # Updates from the GitHub release: signed, checked by the app every hour, installed when the user says so.
 tauri-plugin-updater = "2"
+# The updater's own HTTP client, given a connect timeout (updates.rs); the same crate the updater uses.
+reqwest = { version = "0.13", default-features = false }
+
+[dev-dependencies]
+# A test builds its own HTTP client, which needs the crypto provider the updater installs for its own.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [target.'cfg(windows)'.dependencies]
 # The elevated helper (UAC relaunch) and its token check; the job object that ends children with the app.

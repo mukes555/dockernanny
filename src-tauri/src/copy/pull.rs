@@ -152,11 +152,11 @@ mod tests {
 
     #[test]
     fn the_source_copy_goes_only_when_it_fits_the_destination() {
-        assert_eq!(cannot_send("this computer", "Mk", Some("linux/amd64"), Some("linux/amd64")), None);
-        assert_eq!(cannot_send("this computer", "Mk", Some("linux/arm64/v8"), Some("linux/arm64")), None);
+        assert_eq!(cannot_send("this computer", "studio", Some("linux/amd64"), Some("linux/amd64")), None);
+        assert_eq!(cannot_send("this computer", "studio", Some("linux/arm64/v8"), Some("linux/arm64")), None);
         // What the MinIO copy met: an Apple silicon copy for an Intel machine.
-        assert_eq!(cannot_send("this computer", "Mk", Some("linux/arm64"), Some("linux/amd64")).unwrap(), "this computer's copy is built for linux/arm64, and Mk needs linux/amd64.");
-        assert_eq!(cannot_send("this computer", "Mk", None, Some("linux/amd64")).unwrap(), "this computer does not have it either.");
-        assert!(cannot_send("this computer", "Mk", Some("linux/amd64"), None).unwrap().contains("did not say"));
+        assert_eq!(cannot_send("this computer", "studio", Some("linux/arm64"), Some("linux/amd64")).unwrap(), "this computer's copy is built for linux/arm64, and studio needs linux/amd64.");
+        assert_eq!(cannot_send("this computer", "studio", None, Some("linux/amd64")).unwrap(), "this computer does not have it either.");
+        assert!(cannot_send("this computer", "studio", Some("linux/amd64"), None).unwrap().contains("did not say"));
     }
 }
