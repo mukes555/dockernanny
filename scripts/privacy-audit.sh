@@ -113,6 +113,9 @@ for binary in "${binaries[@]+"${binaries[@]}"}"; do
   home_hits=$(grep -c -F "$HOME" "$work/strings" || true)
   if [ "$term_hits" -gt 0 ] || [ "$home_hits" -gt 0 ]; then
     echo "   $term_hits deny-list matches, $home_hits copies of $HOME"
+    # The strings themselves, so a real name tells itself apart from a short
+    # word that compressed bytes happen to spell out (like "x<Ab" for a word:Ab).
+    { matching_lines "$work/strings"; grep -F "$HOME" "$work/strings" || true; } | cut -c1-120 | head -20 | sed 's/^/     /'
     found=1
   else
     echo "   clean"
