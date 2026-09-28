@@ -110,7 +110,7 @@ pub struct StatusEvent {
 #[derive(Debug, Clone, Serialize)]
 pub struct OutputEvent {
     pub stack_id: String,
-    pub line: Line,
+    pub lines: Vec<Line>,
 }
 
 fn derive_phase(services: &[ServiceState]) -> Phase {
@@ -125,17 +125,16 @@ fn derive_phase(services: &[ServiceState]) -> Phase {
 }
 
 pub fn output_sink(app: &AppHandle, stack_id: &str) -> impl FnMut(Line) + Send + 'static {
+    lines_to_window(app, OUTPUT_EVENT, stack_id)
+}
+
+/// A stack's lines sent as `event`, in batches (see `job::batched`).
+pub fn lines_to_window(app: &AppHandle, event: &'static str, stack_id: &str) -> impl FnMut(Line) + Send + 'static {
     let app = app.clone();
     let stack_id = stack_id.to_string();
-    move |line| {
-        let _ = app.emit(
-            OUTPUT_EVENT,
-            OutputEvent {
-                stack_id: stack_id.clone(),
-                line,
-            },
-        );
-    }
+    crate::job::batched(move |lines| {
+        let _ = app.emit(event, OutputEvent { stack_id: stack_id.clone(), lines });
+    })
 }
 
 /// Applies a change and publishes the result, but only when something changed.

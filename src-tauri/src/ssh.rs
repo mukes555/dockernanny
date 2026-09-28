@@ -88,6 +88,8 @@ impl Ssh {
     /// quoting is ever needed, and the login shell gives the remote's real PATH
     /// (docker in /usr/local/bin on a Mac, ~/.local/bin on Linux).
     pub fn command(&self, alias: &str) -> Command {
+        // Off unless RUST_LOG asks for it: counts what the app sends to machines.
+        tracing::debug!(target: "dockernanny::remote", "ssh {alias}");
         let mut cmd = tools::unix("ssh");
         cmd.arg("-F").arg(self.config_path()).arg(alias).arg("sh").arg("-l");
         cmd

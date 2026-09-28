@@ -15,6 +15,8 @@ use crate::ssh::Ssh;
 use crate::{forward, AppState};
 
 const POLL_EVERY: Duration = Duration::from_secs(3);
+/// While nobody can see the window; the bridges keep themselves up meanwhile.
+const POLL_EVERY_HIDDEN: Duration = Duration::from_secs(15);
 const POLL_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn spawn_status_loop(app: AppHandle) {
@@ -64,7 +66,7 @@ pub fn spawn_status_loop(app: AppHandle) {
                     });
                 }
             }
-            tokio::time::sleep(POLL_EVERY).await;
+            crate::tray::until_next_poll(&app, POLL_EVERY, POLL_EVERY_HIDDEN).await;
         }
     });
 }

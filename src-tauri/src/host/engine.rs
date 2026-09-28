@@ -20,8 +20,12 @@ use crate::stack::now_ms;
 use crate::store;
 
 const PROBE_EVERY: Duration = Duration::from_secs(10);
+/// While nobody can see the window: on Windows a probe starts wsl.exe and
+/// PowerShell, the dearest things this app runs.
+const PROBE_EVERY_HIDDEN: Duration = Duration::from_secs(60);
 /// The connection table is cheap to read; inside WSL it is one wsl.exe call.
 const PEERS_EVERY: Duration = Duration::from_secs(5);
+const PEERS_EVERY_HIDDEN: Duration = Duration::from_secs(60);
 const MAX_LOG_LINES: usize = 600;
 
 fn env_flag(name: &str) -> bool {
@@ -272,7 +276,9 @@ impl Loop {
 
     fn every_second(&mut self) {
         let setup_running = self.setup_running.load(Ordering::SeqCst);
-        let probe_due = self.last_probe.map(|t| t.elapsed() >= PROBE_EVERY).unwrap_or(true);
+        let in_view = crate::tray::window_in_view(&self.app);
+        let probe_every = if in_view { PROBE_EVERY } else { PROBE_EVERY_HIDDEN };
+        let probe_due = self.last_probe.map(|t| t.elapsed() >= probe_every).unwrap_or(true);
         if probe_due && !setup_running {
             self.probe();
         }
@@ -290,7 +296,7 @@ impl Loop {
         }
         self.listen_if_ready();
         self.drain_pairing_events();
-        self.look_at_peers();
+        self.look_at_peers(if in_view { PEERS_EVERY } else { PEERS_EVERY_HIDDEN });
         let armed = self.code.lock().expect("code lock").is_armed();
         if self.was_armed && !armed {
             self.was_armed = false;
@@ -300,8 +306,8 @@ impl Loop {
     }
 
     /// Who has an ssh session open, matched against the paired list for a name.
-    fn look_at_peers(&mut self) {
-        let due = self.last_peers.map(|t| t.elapsed() >= PEERS_EVERY).unwrap_or(true);
+    fn look_at_peers(&mut self, every: Duration) {
+        let due = self.last_peers.map(|t| t.elapsed() >= every).unwrap_or(true);
         if !due {
             return;
         }

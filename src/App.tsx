@@ -63,13 +63,13 @@ export default function App() {
       onStats: (event) => setStats(event.machine_id, event.stats),
       onDoctor: (event) => pushDoctorRow(event.machine_id, event.row),
       onStackStatus: (event) => setStatus(event.stack_id, event.status),
-      onStackOutput: (event) => appendOutput(event.stack_id, event.line),
-      onStackLog: (event) => appendLog(event.stack_id, event.line),
+      onStackOutput: (event) => appendOutput(event.stack_id, event.lines),
+      onStackLog: (event) => appendLog(event.stack_id, event.lines),
       onForward: (event) => setForward(event.stack_id, event.state),
       onScriptFetched: setScriptFetched,
       onHostSnapshot: setHost,
       onHostLog: (event) => appendHostLog(event.line),
-      onContainerLog: (event) => appendContainerLog(event.id, event.line),
+      onContainerLog: (event) => appendContainerLog(event.id, event.lines),
       onCopyProgress: (progress) => {
         // Notice the failure once, when it lands, so a closed panel does not hide it.
         const prev = useStore.getState().copies[progress.stack_id];

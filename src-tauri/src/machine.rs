@@ -17,9 +17,14 @@ use crate::AppState;
 
 pub const STATS_EVENT: &str = "machine:stats";
 const POLL_EVERY: Duration = Duration::from_secs(10);
+/// While nobody can see the window, the numbers need not be fresh.
+const POLL_EVERY_HIDDEN: Duration = Duration::from_secs(60);
 const POLL_TIMEOUT: Duration = Duration::from_secs(20);
-/// An unreachable machine is retried every third tick, so every 30s, not 10s.
+/// An unreachable machine is retried every third tick: every 30 s, or every
+/// 3 minutes while the window is hidden.
 const BACKOFF_TICKS: u32 = 3;
+/// Every this many readings is a full one (about once a minute).
+const FULL_EVERY: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Machine {
@@ -111,17 +116,28 @@ pub async fn set_docker_context(machine: &Machine, enabled: bool) -> anyhow::Res
     Ok(())
 }
 
+/// A full reading of the machine.
 pub async fn poll(ssh: &Ssh, machine: &Machine) -> MachineStats {
+    poll_with(ssh, machine, None).await
+}
+
+/// Given the last full reading, only what changes is read again and the
+/// rest is taken from it.
+async fn poll_with(ssh: &Ssh, machine: &Machine, full: Option<&Probe>) -> MachineStats {
     let offline = |error: String| MachineStats {
         error: Some(error),
         ..Default::default()
     };
-    match timeout(POLL_TIMEOUT, ssh.run(&machine.alias(), probe::SCRIPT)).await {
-        Ok(Ok(out)) if out.ok() => MachineStats {
-            online: true,
-            probe: probe::parse(&out.stdout),
-            error: None,
-        },
+    let script = probe::script(full.is_none());
+    match timeout(POLL_TIMEOUT, ssh.run(&machine.alias(), &script)).await {
+        Ok(Ok(out)) if out.ok() => {
+            let read = probe::parse(&out.stdout);
+            let probe = match full {
+                Some(full) => probe::with_fixed_facts(read, full),
+                None => read,
+            };
+            MachineStats { online: true, probe, error: None }
+        }
         Ok(Ok(out)) => offline(first_line(&out.stderr)),
         Ok(Err(err)) => offline(format!("{err:#}")),
         Err(_) => offline("timed out".into()),
@@ -141,7 +157,7 @@ pub async fn probe_this_computer() -> Probe {
         .spawn();
     let Ok(mut child) = spawned else { return Probe::default() };
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(probe::SCRIPT.as_bytes()).await;
+        let _ = stdin.write_all(probe::script(true).as_bytes()).await;
         let _ = stdin.shutdown().await;
     }
     match timeout(POLL_TIMEOUT, child.wait_with_output()).await {
@@ -150,12 +166,15 @@ pub async fn probe_this_computer() -> Probe {
     }
 }
 
-/// Polls every machine on a fixed beat and publishes the result. Machines
+/// Polls every machine on a beat and publishes the result: every ten
+/// seconds while the window can be seen, every minute while not. Machines
 /// that failed last time are skipped on most ticks so a machine that is off
-/// does not cost a connection attempt every ten seconds.
+/// does not cost a connection attempt each time. Most readings are light,
+/// see `probe::script`.
 pub fn spawn_stats_loop(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut failures: HashMap<String, u32> = HashMap::new();
+        let mut full_readings: HashMap<String, FullReading> = HashMap::new();
         let mut tick: u32 = 0;
         loop {
             let state = app.state::<AppState>();
@@ -172,21 +191,45 @@ pub fn spawn_stats_loop(app: AppHandle) {
             let mut polls = JoinSet::new();
             for machine in due {
                 let ssh = state.ssh.clone();
+                let full = full_readings.get(&machine.id).filter(|kept| kept.light_since < FULL_EVERY).map(|kept| kept.probe.clone());
                 polls.spawn(async move {
-                    let stats = poll(&ssh, &machine).await;
-                    (machine.id, stats)
+                    let stats = poll_with(&ssh, &machine, full.as_ref()).await;
+                    (machine.id, stats, full.is_none())
                 });
             }
-            while let Some(Ok((machine_id, stats))) = polls.join_next().await {
+            while let Some(Ok((machine_id, stats, was_full))) = polls.join_next().await {
                 let count = failures.entry(machine_id.clone()).or_default();
                 *count = if stats.online { 0 } else { *count + 1 };
+                remember(&mut full_readings, &machine_id, &stats, was_full);
                 publish(&app, machine_id, stats);
             }
 
             tick = tick.wrapping_add(1);
-            tokio::time::sleep(POLL_EVERY).await;
+            crate::tray::until_next_poll(&app, POLL_EVERY, POLL_EVERY_HIDDEN).await;
         }
     });
+}
+
+/// A machine's last full reading and how many light ones came after it.
+struct FullReading {
+    probe: Probe,
+    light_since: u32,
+}
+
+/// A machine that stops answering is read in full when it answers again:
+/// it may have been changed meanwhile.
+fn remember(readings: &mut HashMap<String, FullReading>, machine_id: &str, stats: &MachineStats, was_full: bool) {
+    if !stats.online {
+        readings.remove(machine_id);
+        return;
+    }
+    if was_full {
+        readings.insert(machine_id.to_string(), FullReading { probe: stats.probe.clone(), light_since: 0 });
+        return;
+    }
+    if let Some(kept) = readings.get_mut(machine_id) {
+        kept.light_since += 1;
+    }
 }
 
 pub fn publish(app: &AppHandle, machine_id: String, stats: MachineStats) {

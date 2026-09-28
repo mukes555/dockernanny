@@ -145,9 +145,10 @@ export interface Container {
 
 export type ContainerAction = "start" | "stop" | "restart";
 
+/** Lines arrive in batches, at most every 100 ms. */
 export interface ContainerLogEvent {
   id: string;
-  line: OutputLine;
+  lines: OutputLine[];
 }
 
 export type EndpointRef = { kind: "this_computer" } | { kind: "machine"; machine_id: string };
@@ -260,9 +261,10 @@ export interface StackStatusEvent {
   status: StackStatus;
 }
 
+/** Lines arrive in batches, at most every 100 ms. */
 export interface StackOutputEvent {
   stack_id: string;
-  line: OutputLine;
+  lines: OutputLine[];
 }
 
 export interface ScriptRequest {

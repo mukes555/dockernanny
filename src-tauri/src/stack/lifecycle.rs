@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
-use super::{derive_phase, now_ms, output_sink, set_status, shell_quote, OutputEvent, Phase, Stack, LOG_EVENT};
+use super::{derive_phase, lines_to_window, now_ms, output_sink, set_status, shell_quote, Phase, Stack, LOG_EVENT};
 use crate::compose;
 use crate::job::LastError;
 use crate::{forward, sync, AppState};
@@ -113,19 +113,7 @@ pub fn logs_start(app: &AppHandle, stack: &Stack) -> anyhow::Result<()> {
     logs_stop(app, &stack.id);
     let state = app.state::<AppState>();
     let machine = state.store.machine(&stack.machine_id).context("the machine no longer exists")?;
-    let sink = {
-        let app = app.clone();
-        let stack_id = stack.id.clone();
-        move |line| {
-            let _ = app.emit(
-                LOG_EVENT,
-                OutputEvent {
-                    stack_id: stack_id.clone(),
-                    line,
-                },
-            );
-        }
-    };
+    let sink = lines_to_window(app, LOG_EVENT, &stack.id);
     let job = state.ssh.job(&machine.alias(), &stack.compose_cmd("logs -f --tail 200 --no-color"), sink)?;
     let handle = job.handle();
     let key = logs_key(&stack.id);
