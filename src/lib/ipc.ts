@@ -118,6 +118,9 @@ const tauriApi = {
   createStack: (stack: Stack) => invoke<Stack[]>("create_stack", { stack }),
   /** Start syncs and runs `up -d`; `rebuild` adds `--build`. */
   upStack: (id: string, rebuild: boolean) => invoke<void>("up_stack", { id, rebuild }),
+  /** `compose stop`: the containers stay, so Start is quick. */
+  stopStack: (id: string) => invoke<void>("stop_stack", { id }),
+  /** `compose down`: the containers go; volumes and the folder stay. */
   downStack: (id: string) => invoke<void>("down_stack", { id }),
   restartStack: (id: string) => invoke<void>("restart_stack", { id }),
   removeStack: (id: string, volumes: boolean) => invoke<Stack[]>("remove_stack", { id, volumes }),

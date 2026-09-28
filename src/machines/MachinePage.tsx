@@ -3,10 +3,11 @@ import { useEffect, useState } from "react";
 import { api, errorMessage } from "../lib/ipc";
 import type { Machine } from "../lib/types";
 import { useStore } from "../state/store";
-import { DropStrip } from "../stacks/DropZone";
-import { StackCard } from "../stacks/StackCard";
+import { DropErrorLine, NewStackButton, useBrowse } from "../stacks/DropZone";
+import { STACK_GRID, StackCard } from "../stacks/StackCard";
 import { OsGlyph } from "../ui/Badges";
-import { MachineIcon, SpinnerIcon, TerminalIcon, TrashIcon } from "../ui/icons";
+import { MachineIcon, SpinnerIcon, TerminalIcon } from "../ui/icons";
+import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import { Button, Chip, cx, EmptyPanel, Eyebrow } from "../ui/primitives";
 import { Fact, ProbeFacts } from "../ui/ProbeFacts";
 import { Term } from "../ui/Term";
@@ -35,13 +36,7 @@ export function MachinePage({ machine }: { machine: Machine }) {
   const [terminal, setTerminal] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // "Remove…" in the rail's menu opens this strip, whether or not the page was open already.
-  const removeAsked = useStore((state) => state.askRemoveFor === machine.id);
-  useEffect(() => {
-    if (!removeAsked) return;
-    setRemoving(true);
-    useStore.setState({ askRemoveFor: null });
-  }, [removeAsked]);
+  const browse = useBrowse();
 
   const online = stats?.online ?? false;
   const ports = stacks.reduce((count, stack) => count + (forwards[stack.id]?.up ? forwards[stack.id].ports.length : 0), 0);
@@ -59,6 +54,20 @@ export function MachinePage({ machine }: { machine: Machine }) {
       setChecking(false);
     }
   };
+  const refreshNumbers = () => void api.pollMachine(machine.id).catch((err) => setError(errorMessage(err)));
+  const copyHere = () => setCopyOpen({ open: true, destinationMachineId: machine.id });
+
+  // An action chosen in the rail's menu is carried out here, whether or not the page was open already.
+  const asked = useStore((state) => (state.machineAsk?.machineId === machine.id ? state.machineAsk.action : null));
+  useEffect(() => {
+    if (!asked) return;
+    useStore.setState({ machineAsk: null });
+    if (asked === "remove") setRemoving(true);
+    if (asked === "terminal") setTerminal(true);
+    if (asked === "check") void check();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked]);
+
   const remove = async () => {
     try {
       setMachines(await api.removeMachine(machine.id));
@@ -106,9 +115,16 @@ export function MachinePage({ machine }: { machine: Machine }) {
             <Button onClick={() => setTerminal(true)}>
               <TerminalIcon /> Terminal
             </Button>
-            <Button tone="danger" onClick={() => setRemoving(true)} aria-label="Remove machine">
-              <TrashIcon size={12} /> Remove
-            </Button>
+            {/* Removing lives in here, away from the everyday buttons. */}
+            <Menu label={`More for ${machine.name}`} width="w-48">
+              <MenuItem onClick={() => void browse()}>New stack here…</MenuItem>
+              <MenuItem onClick={copyHere}>Copy a stack here…</MenuItem>
+              <MenuItem onClick={refreshNumbers}>Refresh its numbers</MenuItem>
+              <MenuSeparator />
+              <MenuItem onClick={() => setRemoving(true)} danger>
+                Remove machine…
+              </MenuItem>
+            </Menu>
           </div>
         </div>
 
@@ -153,12 +169,13 @@ export function MachinePage({ machine }: { machine: Machine }) {
           icon={<MachineIcon size={26} />}
           title={`Nothing runs on ${machine.name} yet`}
           action={
-            <Button tone="primary" onClick={() => setCopyOpen({ open: true, destinationMachineId: machine.id })}>
-              Copy a stack here
-            </Button>
+            <div className="flex gap-2">
+              <NewStackButton machine={machine} />
+              <Button onClick={copyHere}>Copy a stack here</Button>
+            </div>
           }
         >
-          Drop a compose file or a project folder on the window to run it here, or bring a stack over from this computer or another machine.
+          Pick or drop a compose file or a project folder to run it here, or bring a stack over from this computer or another machine.
         </EmptyPanel>
       ) : (
         <>
@@ -167,12 +184,15 @@ export function MachinePage({ machine }: { machine: Machine }) {
               <Eyebrow>Stacks on {machine.name}</Eyebrow>
               <h2 className="mt-1 text-lg font-semibold tracking-tight">Running here, reachable on this computer</h2>
             </div>
-            <Button onClick={() => setCopyOpen({ open: true, destinationMachineId: machine.id })} title="Copy a stack from this computer or another machine to here">
-              Copy a stack here
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={copyHere} title="Copy a stack from this computer or another machine to here">
+                Copy a stack here
+              </Button>
+              <NewStackButton machine={machine} />
+            </div>
           </div>
-          <DropStrip machine={machine} />
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <DropErrorLine />
+          <div className={STACK_GRID}>
             {stacks.map((stack) => (
               <StackCard key={stack.id} stack={stack} />
             ))}

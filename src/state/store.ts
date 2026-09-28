@@ -31,6 +31,14 @@ export interface CopyIntent {
   /** Opened from this computer's page to bring a stack back here. */
   toThisComputer?: boolean;
 }
+/** What a machine's rail menu can ask its page to do: the page holds the
+ * check's rows, the terminal dialog and the remove question. */
+export type MachineAction = "check" | "terminal" | "remove";
+export interface MachineAsk {
+  machineId: string;
+  action: MachineAction;
+}
+
 const MAX_HOST_LOG_LINES = 600;
 const MAX_OUTPUT_LINES = 400;
 const MAX_LOG_LINES = 2000;
@@ -55,9 +63,9 @@ interface State {
   setUpdateOpen: (open: boolean) => void;
   /** The Add machine dialog, opened from the rail or from the welcome. */
   addMachineOpen: boolean;
-  /** The machine whose page should open with the remove question showing. */
-  askRemoveFor: string | null;
-  askRemoveMachine: (id: string) => void;
+  /** Something chosen in a machine's rail menu, carried out on its page. */
+  machineAsk: MachineAsk | null;
+  askMachine: (machineId: string, action: MachineAction) => void;
   /** Which OS this computer runs, for saying what each role needs here. */
   os: HostOs;
   machines: Machine[];
@@ -166,7 +174,7 @@ export const useStore = create<State>((set, get) => ({
   updateProgress: null,
   updateOpen: false,
   addMachineOpen: false,
-  askRemoveFor: null,
+  machineAsk: null,
   os: "macos",
   machines: [],
   stats: {},
@@ -202,7 +210,7 @@ export const useStore = create<State>((set, get) => ({
   setUpdateProgress: (updateProgress) => set({ updateProgress }),
   setUpdateOpen: (updateOpen) => set({ updateOpen }),
   setAddMachineOpen: (addMachineOpen) => set({ addMachineOpen }),
-  askRemoveMachine: (id) => set({ askRemoveFor: id, selectedMachineId: id, view: "stacks" }),
+  askMachine: (machineId, action) => set({ machineAsk: { machineId, action }, selectedMachineId: machineId, view: "stacks" }),
   selectMachine: (selectedMachineId) => set({ selectedMachineId, view: "stacks" }),
   setCopyOpen: (copy) => set({ copy }),
   setCopyProgress: (progress) => set((state) => ({ copies: { ...state.copies, [progress.stack_id]: progress } })),

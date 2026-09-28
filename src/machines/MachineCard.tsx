@@ -3,10 +3,12 @@ import { useState } from "react";
 import { api, errorMessage } from "../lib/ipc";
 import type { Machine, MachineStats } from "../lib/types";
 import { useStore } from "../state/store";
-import { BatteryPill, OsGlyph, uptimeText } from "../ui/Badges";
+import type { MachineAction } from "../state/store";
+import { useBrowse } from "../stacks/DropZone";
+import { BatteryPill, OsGlyph } from "../ui/Badges";
 import { TerminalIcon } from "../ui/icons";
-import { Menu, MenuItem } from "../ui/Menu";
-import { gigabytes, loadPercent, memoryPercent, Meter } from "../ui/Meter";
+import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
+import { gigabytes } from "../ui/Meter";
 import { cx } from "../ui/primitives";
 
 /** One machine in the rail: who it is, whether it answers, how it is doing.
@@ -16,8 +18,14 @@ export function MachineCard({ machine, stats, stackCount, selected, onSelect }: 
   const online = stats?.online ?? false;
   const hostname = stats?.hostname || machine.host;
 
-  // Removing is asked on the machine's page, where the strip says what it does.
-  const askRemove = () => useStore.getState().askRemoveMachine(machine.id);
+  const browse = useBrowse();
+  // Checking, the terminal and removing happen on the machine's page, which shows their results.
+  const ask = (action: MachineAction) => useStore.getState().askMachine(machine.id, action);
+  const newStackHere = () => {
+    useStore.getState().selectMachine(machine.id);
+    void browse();
+  };
+  const copyHere = () => useStore.getState().setCopyOpen({ open: true, destinationMachineId: machine.id });
   const refresh = () => {
     void api.pollMachine(machine.id).catch((err) => setError(errorMessage(err)));
   };
@@ -47,9 +55,15 @@ export function MachineCard({ machine, stats, stackCount, selected, onSelect }: 
         </div>
         {online && stats ? <LiveNumbers stats={stats} stackCount={stackCount} /> : <div className="mt-2 text-[11px] text-ink-3">{stats?.error ?? "checking…"}</div>}
       </button>
-      <Menu label={`${machine.name} menu`} className="absolute top-2 right-2">
+      <Menu label={`${machine.name} menu`} className="absolute top-2 right-2" width="w-48">
+        <MenuItem onClick={() => ask("check")}>Check connection</MenuItem>
+        <MenuItem onClick={() => ask("terminal")}>Use from a terminal…</MenuItem>
+        <MenuSeparator />
+        <MenuItem onClick={newStackHere}>New stack here…</MenuItem>
+        <MenuItem onClick={copyHere}>Copy a stack here…</MenuItem>
         <MenuItem onClick={refresh}>Refresh its numbers</MenuItem>
-        <MenuItem onClick={askRemove} danger>
+        <MenuSeparator />
+        <MenuItem onClick={() => ask("remove")} danger>
           Remove…
         </MenuItem>
       </Menu>
@@ -58,19 +72,26 @@ export function MachineCard({ machine, stats, stackCount, selected, onSelect }: 
   );
 }
 
+/** One line: enough to tell how the machine is doing at a glance. The
+ * machine's page has the meters, the system and the rest. */
 function LiveNumbers({ stats, stackCount }: { stats: MachineStats; stackCount: number }) {
+  const hasMemory = stats.mem_total_mb > 0;
+  const memoryShare = hasMemory ? Math.round((stats.mem_used_mb / stats.mem_total_mb) * 100) : 0;
+  const noDocker = !stats.docker_version;
+  // Each item stays whole; a narrow rail moves the last ones to a second line.
   return (
-    <div className="mt-2.5 space-y-1.5">
-      <Meter label="load" value={loadPercent(stats.load1, stats.cpus)} text={`${stats.load1.toFixed(1)} / ${stats.cpus}`} />
-      {stats.mem_total_mb > 0 ? <Meter label="ram" value={memoryPercent(stats.mem_used_mb, stats.mem_total_mb)} text={`${gigabytes(stats.mem_used_mb)} / ${gigabytes(stats.mem_total_mb)} GB`} /> : null}
-      <div className="truncate text-[11px] text-ink-3" title={stats.os ?? undefined}>
-        {stats.os ?? (stats.docker_version ? `Docker ${stats.docker_version}` : "Docker not found")}
-      </div>
-      <div className="flex items-center gap-2 text-[11px] text-ink-3">
-        <BatteryPill battery={stats.battery} />
-        {stats.uptime_s > 0 ? <span className="tabular">{uptimeText(stats.uptime_s)}</span> : null}
-        <span className="tabular ml-auto">{stackCount === 1 ? "1 stack" : `${stackCount} stacks`}</span>
-      </div>
+    <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 whitespace-nowrap text-[11px] text-ink-3">
+      <span className="tabular" title="Load over the last minute, and the CPUs">
+        load {stats.load1.toFixed(1)}/{stats.cpus}
+      </span>
+      {hasMemory ? (
+        <span className="tabular" title={`Memory in use: ${gigabytes(stats.mem_used_mb)} of ${gigabytes(stats.mem_total_mb)} GB`}>
+          ram {memoryShare}%
+        </span>
+      ) : null}
+      <BatteryPill battery={stats.battery} />
+      {noDocker ? <span className="text-warning">no Docker</span> : null}
+      <span className="tabular ml-auto">{stackCount === 1 ? "1 stack" : `${stackCount} stacks`}</span>
     </div>
   );
 }

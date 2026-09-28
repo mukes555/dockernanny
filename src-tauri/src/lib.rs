@@ -128,6 +128,7 @@ pub fn run() {
             commands::stack_statuses,
             commands::create_stack,
             commands::up_stack,
+            commands::stop_stack,
             commands::down_stack,
             commands::restart_stack,
             commands::remove_stack,

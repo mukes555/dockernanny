@@ -2,8 +2,8 @@ import { visibleMachines } from "../lib/machines";
 import { MachinePage } from "../machines/MachinePage";
 import { useStore } from "../state/store";
 import { Button, EmptyPanel, Eyebrow } from "../ui/primitives";
-import { DropHero, DropStrip } from "./DropZone";
-import { StackCard } from "./StackCard";
+import { DropErrorLine, DropHero, NewStackButton } from "./DropZone";
+import { STACK_GRID, StackCard } from "./StackCard";
 
 /** The main area of the "use other machines" role: one machine's page when
  * one is picked in the rail, otherwise every stack grouped by machine. */
@@ -64,15 +64,18 @@ export function StacksView() {
           <Eyebrow>All machines</Eyebrow>
           <h1 className="mt-1 text-lg font-semibold tracking-tight">Running elsewhere, reachable here</h1>
         </div>
-        {copyButton}
+        <div className="flex gap-2">
+          {copyButton}
+          <NewStackButton />
+        </div>
       </div>
-      <DropStrip />
+      <DropErrorLine />
       {groups.map((group) => (
         <section key={group.machine.id} className="space-y-3">
           <Eyebrow className="pt-2">
             on {group.machine.name} · {group.stacks.length} {group.stacks.length === 1 ? "stack" : "stacks"}
           </Eyebrow>
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <div className={STACK_GRID}>
             {group.stacks.map((stack) => (
               <StackCard key={stack.id} stack={stack} />
             ))}
@@ -82,7 +85,7 @@ export function StacksView() {
       {orphans.length > 0 ? (
         <section className="space-y-3">
           <Eyebrow className="pt-2">on a removed machine</Eyebrow>
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <div className={STACK_GRID}>
             {orphans.map((stack) => (
               <StackCard key={stack.id} stack={stack} />
             ))}

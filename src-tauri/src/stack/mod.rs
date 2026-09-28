@@ -16,7 +16,7 @@ use crate::compose::ServiceState;
 use crate::job::Line;
 use crate::AppState;
 
-pub use lifecycle::{down, logs_start, logs_stop, refresh_now, remove, restart, resync, start_watcher, stop_watcher, up};
+pub use lifecycle::{down, logs_start, logs_stop, refresh_now, remove, restart, resync, start_watcher, stop, stop_watcher, up};
 pub use poll::spawn_status_loop;
 
 pub const STATUS_EVENT: &str = "stack:status";

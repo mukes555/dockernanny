@@ -4,11 +4,15 @@ import { api, errorMessage } from "../lib/ipc";
 import type { Phase, ServiceState, Stack } from "../lib/types";
 import { localPort } from "../lib/types";
 import { isBusy, useStore } from "../state/store";
-import { ExternalIcon, LogsIcon, PlayIcon, RefreshIcon, SpinnerIcon, StopIcon } from "../ui/icons";
-import { Menu, MenuItem } from "../ui/Menu";
+import { ExternalIcon, LogsIcon, PlayIcon, SpinnerIcon, StopIcon } from "../ui/icons";
+import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import { Button, Chip, cx } from "../ui/primitives";
 import type { ChipTone } from "../ui/primitives";
 import { BridgeControl } from "./Bridge";
+
+/** Cards as wide as there is room for: one stack fills the width, and a
+ * second sits beside it once both fit. */
+export const STACK_GRID = "grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(100%,26rem),1fr))]";
 
 const PHASE_LABEL: Record<Phase, { text: string; tone: ChipTone }> = {
   idle: { text: "not started", tone: "neutral" },
@@ -44,8 +48,10 @@ export function StackCard({ stack }: { stack: Stack }) {
   const phase = status?.phase ?? "idle";
   const busy = isBusy(status);
   const lines = output ?? [];
-  const canStop = busy || phase === "running" || phase === "partial";
-  const primary = phase === "running" || phase === "partial" ? "Rebuild" : "Start";
+  const running = phase === "running" || phase === "partial";
+  const canStop = busy || running;
+  const ports = openablePorts(stack, status?.services ?? [], forward?.up ?? false);
+  const hasContainers = (status?.services.length ?? 0) > 0;
   // Only a poll that came back without an answer means offline; no poll yet means not known.
   const machineOffline = machine !== undefined && machineStats !== undefined && !machineStats.online;
   const chip = machineOffline ? { text: "machine offline", tone: "neutral" as ChipTone } : PHASE_LABEL[phase];
@@ -56,6 +62,7 @@ export function StackCard({ stack }: { stack: Stack }) {
   }, [removing]);
 
   const call = (action: Promise<unknown>) => action.catch((err) => setError(errorMessage(err)));
+  const toggleBridge = () => void call(api.setForwardPorts(stack.id, !stack.forward_ports).then(setStacks));
   const remove = async () => {
     setRemoving("working");
     try {
@@ -83,34 +90,46 @@ export function StackCard({ stack }: { stack: Stack }) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <Button
-            size="sm"
-            tone="primary"
-            disabled={busy || !machine}
-            onClick={() => void call(api.upStack(stack.id, primary === "Rebuild"))}
-            title={primary === "Start" ? "Sync the folder and start the stack on the machine; images are built only if missing" : "Sync the folder, build every image again and restart what needs it"}
-          >
-            {primary === "Start" ? <PlayIcon size={11} /> : <RefreshIcon size={11} />} {primary}
-          </Button>
-          <Button size="sm" disabled={!canStop} onClick={() => void call(api.downStack(stack.id))} title="Stop and remove the containers; volumes and the folder stay">
+          {/* The first thing wanted: a stopped stack starts, a running one opens. Rebuilding, the heaviest action, is in the menu. */}
+          {!running ? (
+            <Button size="sm" tone="primary" disabled={busy || !machine} onClick={() => void call(api.upStack(stack.id, false))} title="Sync the folder and start the stack on the machine; images are built only if missing">
+              <PlayIcon size={11} /> Start
+            </Button>
+          ) : ports.length > 0 ? (
+            <Button size="sm" tone="primary" onClick={() => void api.openLocal(ports[0])} title={`Open http://localhost:${ports[0]} in the browser`}>
+              <ExternalIcon size={11} /> Open
+            </Button>
+          ) : null}
+          <Button size="sm" disabled={!canStop} onClick={() => void call(api.stopStack(stack.id))} title="Stop the containers; they stay, so Start brings them back quickly">
             <StopIcon size={11} /> Stop
           </Button>
           <Button size="sm" tone={logsOpen ? "primary" : "secondary"} disabled={!machine} onClick={() => openLogs(logsOpen ? null : stack.id)} title="Follow the stack's logs">
             <LogsIcon size={11} /> Logs
           </Button>
-          <Menu label={`More actions for ${stack.name}`} width="w-40">
-            {/* Always there, so the items do not move under the cursor when the state changes. */}
-            <MenuItem onClick={() => void call(api.restartStack(stack.id))} disabled={!(phase === "running" || phase === "partial")}>
-              Restart
+          {/* Always the same items, so none moves under the cursor when the state changes. */}
+          <Menu label={`More actions for ${stack.name}`} width="w-56">
+            <MenuItem onClick={() => void call(api.syncStack(stack.id))} disabled={busy || !machine}>
+              Sync the folder now
             </MenuItem>
             <MenuItem onClick={() => void call(api.upStack(stack.id, true))} disabled={busy || !machine}>
-              Rebuild
+              Rebuild images and restart
             </MenuItem>
+            <MenuItem onClick={() => void call(api.restartStack(stack.id))} disabled={!running}>
+              Restart containers
+            </MenuItem>
+            <MenuSeparator />
             <MenuItem onClick={() => setCopyOpen({ open: true, sourceStackId: stack.id })} disabled={busy || !machine}>
               Copy to…
             </MenuItem>
+            <MenuItem onClick={toggleBridge} disabled={!machine && !stack.forward_ports}>
+              {stack.forward_ports ? "Turn the bridge off" : "Turn the bridge on"}
+            </MenuItem>
+            <MenuItem onClick={() => void call(api.downStack(stack.id))} disabled={busy || !machine || !hasContainers}>
+              Remove containers (keep data)
+            </MenuItem>
+            <MenuSeparator />
             <MenuItem onClick={() => setRemoving("ask")} danger>
-              Remove
+              Remove stack…
             </MenuItem>
           </Menu>
         </div>
@@ -141,9 +160,6 @@ export function StackCard({ stack }: { stack: Stack }) {
         <div className="flex items-center gap-3">
           <SyncLine syncedAt={status?.synced_at_ms ?? null} files={status?.synced_files ?? 0} />
           {stack.live_sync ? <span className="text-accent">live</span> : null}
-          <button type="button" className="hover:text-ink disabled:opacity-40" disabled={busy || !machine} onClick={() => void call(api.syncStack(stack.id))} title="rsync the project folder again">
-            re-sync
-          </button>
           {copy ? (
             <button type="button" className={cx("inline-flex items-center gap-1", copy.finished_ms ? (copy.failed ? "text-critical" : "hover:text-ink") : "text-accent")} onClick={() => openProgress(stack.id)} title="Show the copy's steps, bytes and result">
               {!copy.finished_ms ? <SpinnerIcon size={10} /> : null}
@@ -191,6 +207,15 @@ export function StackCard({ stack }: { stack: Stack }) {
       ) : null}
     </section>
   );
+}
+
+/** The ports that open in a browser right now: TCP, of a running service,
+ * through a bridge that is up; each once, as this computer numbers it. */
+function openablePorts(stack: Stack, services: ServiceState[], forwardUp: boolean): number[] {
+  if (!stack.forward_ports || !forwardUp) return [];
+  const running = services.filter((service) => service.state === "running");
+  const ports = running.flatMap((service) => service.ports.filter((port) => port.protocol === "tcp").map((port) => localPort(stack, port.published)));
+  return [...new Set(ports)];
 }
 
 function ServiceRow({ stack, service, forwardUp }: { stack: Stack; service: ServiceState; forwardUp: boolean }) {

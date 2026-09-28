@@ -3,7 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api, errorMessage } from "../lib/ipc";
 import type { Container, ContainerAction, Machine } from "../lib/types";
 import { useStore } from "../state/store";
-import { LogsIcon, PlayIcon, RefreshIcon, SpinnerIcon, StopIcon } from "../ui/icons";
+import { RefreshIcon, SpinnerIcon } from "../ui/icons";
+import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import { Button, Card, Chip, cx, Toggle } from "../ui/primitives";
 
 const RUNNING_LIKE = ["running", "restarting"];
@@ -115,24 +116,27 @@ function ContainerRow({ container, busy, first, onAct, onLogs }: { container: Co
       <div className="hidden w-40 shrink-0 truncate text-[11px] text-ink-3 sm:block" title={container.status}>
         {container.status}
       </div>
+      {/* Words, not a row of look-alike icons: restarting a container and refreshing the list share one. */}
       <div className="flex shrink-0 items-center gap-1">
-        {running ? (
-          <>
-            <Button size="sm" tone="ghost" disabled={busy} onClick={() => onAct("restart")} title="Restart" aria-label={`Restart ${container.name}`}>
-              {busy ? <SpinnerIcon size={11} /> : <RefreshIcon size={11} />}
-            </Button>
-            <Button size="sm" tone="ghost" disabled={busy} onClick={() => onAct("stop")} title="Stop" aria-label={`Stop ${container.name}`}>
-              <StopIcon size={11} />
-            </Button>
-          </>
-        ) : (
-          <Button size="sm" tone="ghost" disabled={busy} onClick={() => onAct("start")} title="Start" aria-label={`Start ${container.name}`}>
-            {busy ? <SpinnerIcon size={11} /> : <PlayIcon size={11} />}
-          </Button>
-        )}
-        <Button size="sm" tone="ghost" onClick={onLogs} title="Follow its logs" aria-label={`Logs of ${container.name}`}>
-          <LogsIcon size={11} />
-        </Button>
+        {busy ? <SpinnerIcon size={11} /> : null}
+        <Menu label={`Actions for ${container.name}`} width="w-40">
+          <MenuItem onClick={onLogs}>Follow its logs</MenuItem>
+          <MenuSeparator />
+          {running ? (
+            <>
+              <MenuItem onClick={() => onAct("restart")} disabled={busy}>
+                Restart
+              </MenuItem>
+              <MenuItem onClick={() => onAct("stop")} disabled={busy}>
+                Stop
+              </MenuItem>
+            </>
+          ) : (
+            <MenuItem onClick={() => onAct("start")} disabled={busy}>
+              Start
+            </MenuItem>
+          )}
+        </Menu>
       </div>
     </div>
   );
