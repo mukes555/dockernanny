@@ -162,16 +162,35 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The update file comes from GitHub's download servers: one name, several
+/// addresses. From some networks one of them never answers, and without a
+/// connect timeout each such address costs the operating system's own limit
+/// (about 75 s on macOS) before the next one is tried. The HTTP library
+/// divides this timeout across a name's addresses, so with four addresses a
+/// dead one costs 5 s.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+/// The whole check, so "Checking…" can never hang; the next look retries.
+/// The updater applies it to the check only, never to the download, which
+/// may take long on a slow link.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// On Windows the updater ends the app itself to run the installer; the
 /// app's normal shutdown runs first there too.
 fn updater(app: &AppHandle) -> tauri_plugin_updater::Result<tauri_plugin_updater::Updater> {
     let handle = app.clone();
     app.updater_builder()
+        .configure_client(http_client)
+        .timeout(CHECK_TIMEOUT)
         .on_before_exit(move || {
             crate::shut_down(&handle);
             handle.cleanup_before_exit();
         })
         .build()
+}
+
+/// The HTTP client settings for both the check and the download.
+pub fn http_client(client: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    client.connect_timeout(CONNECT_TIMEOUT)
 }
 
 fn millis(time: SystemTime) -> u64 {
@@ -192,6 +211,36 @@ mod tests {
         // Asleep all night: the first look after waking checks.
         assert!(is_due(true, Some(now - Duration::from_secs(9 * 60 * 60)), now));
         assert!(is_due(true, Some(now + Duration::from_secs(60)), now), "a clock set back does not block checks");
+    }
+
+    /// What one of GitHub's download servers did from one network: the name's
+    /// first address never answers. The next address is tried after a share
+    /// of the connect timeout (5 s of 20 with four addresses), not after the
+    /// operating system gives up. Takes those 5 s.
+    #[tokio::test]
+    async fn a_dead_address_is_skipped_within_the_connect_timeout() {
+        use std::io::{Read, Write};
+        use std::net::{SocketAddr, TcpListener};
+
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = server.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = server.accept() else { return };
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        });
+        // As the updater does before it builds its client.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        // A private address nothing answers on, then three times this test's server.
+        let dead = SocketAddr::from(([10, 255, 255, 1], port));
+        let live = SocketAddr::from(([127, 0, 0, 1], port));
+        let client = http_client(reqwest::Client::builder()).resolve_to_addrs("updates.dockernanny.test", &[dead, live, live, live]).build().unwrap();
+
+        let started = std::time::Instant::now();
+        let body = client.get(format!("http://updates.dockernanny.test:{port}/")).send().await.unwrap().text().await.unwrap();
+        assert_eq!(body, "ok");
+        assert!(started.elapsed() < CONNECT_TIMEOUT / 2, "the dead address held the check for {:?}", started.elapsed());
     }
 
     #[test]

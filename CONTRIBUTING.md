@@ -29,6 +29,9 @@ easiest to review.
 - Write for the reader: early returns, named intermediate conditions, comments
   that say why. Keep files under about 300 lines.
 - No personal data in the repository: use RFC 5737 addresses (`192.0.2.x`),
-  made up names and `/home/alex/...` paths in mocks, tests and docs.
+  made up names and `/home/alex/...` paths in mocks, tests and docs. Before
+  publishing, `scripts/privacy-audit.sh --github` checks the code and the
+  repository's text on GitHub against your own `.privacy-denylist`, a
+  gitignored list of the names, hosts and paths that are yours.
 - User facing words: "this computer" for where the app runs, "machine" for the
   other side. Never assume an operating system unless the text is about one.
