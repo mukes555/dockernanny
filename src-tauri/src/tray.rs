@@ -2,6 +2,8 @@
 //! tray icon with Show, Pairing and Quit, and a close button that hides the
 //! window instead of ending the app while this computer is shared.
 
+use std::time::Duration;
+
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
@@ -18,6 +20,32 @@ pub fn show_main_window(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+    came_into_view(app);
+}
+
+/// Whether someone can see the window: shown and not minimized. The polls
+/// slow down while nobody can, and catch up when the window comes back.
+pub fn window_in_view(app: &AppHandle) -> bool {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW) else { return false };
+    let shown = window.is_visible().unwrap_or(true);
+    let minimized = window.is_minimized().unwrap_or(false);
+    shown && !minimized
+}
+
+/// Waits for a poll's next turn: `in_view` while the window can be seen,
+/// `hidden` while not. The window coming back ends the wait at once, so
+/// what it shows is fresh.
+pub async fn until_next_poll(app: &AppHandle, in_view: Duration, hidden: Duration) {
+    let every = if window_in_view(app) { in_view } else { hidden };
+    let window_back = &app.state::<AppState>().window_back;
+    tokio::select! {
+        _ = tokio::time::sleep(every) => {}
+        _ = window_back.notified() => {}
+    }
+}
+
+fn came_into_view(app: &AppHandle) {
+    app.state::<AppState>().window_back.notify_waiters();
 }
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
@@ -67,6 +95,10 @@ fn menu(app: &AppHandle, update: Option<&str>) -> tauri::Result<Menu<tauri::Wry>
 /// Closing the window only hides it while this computer is shared: other
 /// computers depend on the sharing role staying up. Quit lives in the tray.
 pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
+    if matches!(event, WindowEvent::Focused(true)) {
+        came_into_view(window.app_handle());
+        return;
+    }
     let WindowEvent::CloseRequested { api, .. } = event else { return };
     let shared = window.state::<AppState>().store.settings().map(|s| s.share_this_computer).unwrap_or(false);
     if shared {

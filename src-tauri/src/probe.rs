@@ -9,21 +9,54 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-/// The script. Each section survives its tools being absent: Linux, macOS
-/// and Ubuntu inside WSL2 all fill what they can. Inside WSL the Windows
-/// side answers too (its version and the laptop's battery) through the
-/// interop socket, which an ssh session has to pick up by hand.
-pub const SCRIPT: &str = r#"echo HOST; hostname; uname -sr; if [ -r /etc/os-release ]; then . /etc/os-release; echo "$PRETTY_NAME"; elif command -v sw_vers >/dev/null 2>&1; then echo "macOS $(sw_vers -productVersion)"; fi
-echo CPU; if command -v lscpu >/dev/null 2>&1; then lscpu | sed -n 's/^Model name:[ ]*//p' | head -1; else sysctl -n machdep.cpu.brand_string 2>/dev/null; fi; nproc 2>/dev/null || sysctl -n hw.ncpu
-echo LOAD; uptime
-echo UPTIME; cut -d' ' -f1 /proc/uptime 2>/dev/null || sysctl -n kern.boottime 2>/dev/null
-echo MEM; free -m 2>/dev/null || { sysctl -n hw.memsize; vm_stat; }
-echo DISK; d=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null); [ -d "$d" ] || d=$HOME; df -Pk "$d" 2>/dev/null | tail -1
-echo BATTERY; if command -v pmset >/dev/null 2>&1; then pmset -g batt; else for b in /sys/class/power_supply/BAT*; do [ -r "$b/capacity" ] && echo "$(cat "$b/capacity") $(cat "$b/status")"; done; fi
-echo WINDOWS; if grep -qi microsoft /proc/version 2>/dev/null; then [ -z "$WSL_INTEROP" ] && WSL_INTEROP=$(ls -t /run/WSL/*_interop 2>/dev/null | head -1) && export WSL_INTEROP; timeout 8 /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -NonInteractive -Command '$o = Get-CimInstance Win32_OperatingSystem; "$($o.Caption) $($o.Version)"; $b = Get-CimInstance Win32_Battery | Select-Object -First 1; if ($b) { "battery $($b.EstimatedChargeRemaining) $($b.BatteryStatus)" }' 2>/dev/null | tr -d '\r'; fi
-echo DOCKER; docker version --format '{{.Server.Version}}' 2>/dev/null; docker info --format '{{.OperatingSystem}}' 2>/dev/null; docker ps -q 2>/dev/null | wc -l
-true
-"#;
+// The script's sections. Each survives its tools being absent: Linux, macOS
+// and Ubuntu inside WSL2 all fill what they can. Inside WSL the Windows side
+// answers too (its version and the laptop's battery) through the interop
+// socket, which an ssh session has to pick up by hand.
+const HOST: &str = r#"echo HOST; hostname; uname -sr; if [ -r /etc/os-release ]; then . /etc/os-release; echo "$PRETTY_NAME"; elif command -v sw_vers >/dev/null 2>&1; then echo "macOS $(sw_vers -productVersion)"; fi"#;
+const CPU: &str = r#"echo CPU; if command -v lscpu >/dev/null 2>&1; then lscpu | sed -n 's/^Model name:[ ]*//p' | head -1; else sysctl -n machdep.cpu.brand_string 2>/dev/null; fi; nproc 2>/dev/null || sysctl -n hw.ncpu"#;
+const LOAD: &str = "echo LOAD; uptime";
+const UPTIME: &str = "echo UPTIME; cut -d' ' -f1 /proc/uptime 2>/dev/null || sysctl -n kern.boottime 2>/dev/null";
+const MEM: &str = "echo MEM; free -m 2>/dev/null || { sysctl -n hw.memsize; vm_stat; }";
+// One `docker info` answers DISK and DOCKER both; DOCKER reads `$di` again.
+const DISK: &str = r#"echo DISK; di=$(docker info --format '{{.DockerRootDir}}|{{.OperatingSystem}}' 2>/dev/null); d=${di%%|*}; [ -d "$d" ] || d=$HOME; df -Pk "$d" 2>/dev/null | tail -1"#;
+const BATTERY: &str = r#"echo BATTERY; if command -v pmset >/dev/null 2>&1; then pmset -g batt; else for b in /sys/class/power_supply/BAT*; do [ -r "$b/capacity" ] && echo "$(cat "$b/capacity") $(cat "$b/status")"; done; fi"#;
+const WINDOWS: &str = r#"echo WINDOWS; if grep -qi microsoft /proc/version 2>/dev/null; then [ -z "$WSL_INTEROP" ] && WSL_INTEROP=$(ls -t /run/WSL/*_interop 2>/dev/null | head -1) && export WSL_INTEROP; timeout 8 /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -NonInteractive -Command '$o = Get-CimInstance Win32_OperatingSystem; "$($o.Caption) $($o.Version)"; $b = Get-CimInstance Win32_Battery | Select-Object -First 1; if ($b) { "battery $($b.EstimatedChargeRemaining) $($b.BatteryStatus)" }' 2>/dev/null | tr -d '\r'; fi"#;
+// Always three lines (version, what it runs on, containers), even with no
+// Docker at all: the parse is positional.
+const DOCKER: &str = r#"echo DOCKER; v=$(docker version --format '{{.Server.Version}}' 2>/dev/null); echo "$v"; echo "${di#*|}"; docker ps -q 2>/dev/null | wc -l"#;
+
+/// What never changes on a computer. WINDOWS also carries a WSL machine's
+/// battery, which only Windows reports; a full reading every minute or so
+/// keeps it fresh enough.
+const FIXED: [&str; 3] = [HOST, CPU, WINDOWS];
+/// What changes, read every time. DISK comes before DOCKER, see above.
+const CHANGING: [&str; 6] = [LOAD, UPTIME, MEM, DISK, BATTERY, DOCKER];
+
+/// The whole reading, or with `full` false only what changes: the fixed
+/// facts cost a PowerShell start on a Windows machine and several processes
+/// everywhere, every ten seconds, for answers that do not change.
+pub fn script(full: bool) -> String {
+    let mut sections: Vec<&str> = Vec::new();
+    if full {
+        sections.extend(FIXED);
+    }
+    sections.extend(CHANGING);
+    sections.push("true");
+    sections.join("\n") + "\n"
+}
+
+/// A light reading with the facts only a full one has.
+pub fn with_fixed_facts(light: Probe, full: &Probe) -> Probe {
+    Probe {
+        hostname: full.hostname.clone(),
+        os: full.os.clone(),
+        cpu_model: full.cpu_model.clone(),
+        cpus: full.cpus,
+        battery: light.battery.or(full.battery),
+        ..light
+    }
+}
 
 const SECTIONS: [&str; 9] = ["HOST", "CPU", "LOAD", "UPTIME", "MEM", "DISK", "BATTERY", "WINDOWS", "DOCKER"];
 
@@ -268,6 +301,37 @@ mod tests {
         assert_eq!(parse_battery(&["95 Not charging".to_string()], None), Some(Battery { percent: 95, charging: true }));
         assert_eq!(parse_battery(&[], Some("battery 60 2")), Some(Battery { percent: 60, charging: true }));
         assert_eq!(parse_battery(&[], None), None);
+    }
+
+    #[test]
+    fn a_light_reading_keeps_the_fixed_facts_of_the_full_one() {
+        let full = parse(WSL);
+        let light_text = "LOAD\n load average: 2.50, 0.20, 0.30\nUPTIME\n18060.00\nMEM\nMem:           16000        6000       10000           0         500       9500\nDISK\n/dev/sdd        1000000000 200000000 800000000      20% /var/lib/docker\nBATTERY\nDOCKER\n27.3.1\nUbuntu 24.04.1 LTS\n3\n";
+        let light = with_fixed_facts(parse(light_text), &full);
+        assert_eq!(light.hostname.as_deref(), Some("workshop"));
+        assert_eq!(light.os, full.os);
+        assert_eq!((light.cpu_model.clone(), light.cpus), (full.cpu_model.clone(), 8));
+        assert_eq!(light.battery, full.battery, "only Windows reports a WSL machine's battery, in the full reading");
+        assert_eq!((light.load1, light.mem_used_mb, light.containers_running), (2.50, 6000, 3), "what changes comes from the light reading");
+    }
+
+    #[test]
+    fn the_light_script_skips_the_fixed_sections_and_asks_docker_info_once() {
+        let full = script(true);
+        let light = script(false);
+        assert!(full.contains("echo HOST") && full.contains("echo WINDOWS"));
+        assert!(!light.contains("echo HOST") && !light.contains("echo CPU") && !light.contains("powershell"));
+        assert_eq!(light.matches("docker info").count(), 1);
+        assert!(light.find("echo DISK").unwrap() < light.find("echo DOCKER").unwrap(), "DOCKER reads what DISK asked");
+    }
+
+    #[test]
+    fn a_machine_without_docker_has_no_docker_version() {
+        // What the DOCKER section prints then: two empty lines and the count.
+        let probe = parse("DOCKER\n\n\n0\n");
+        assert_eq!(probe.docker_version, None);
+        assert_eq!(probe.flavor, None);
+        assert_eq!(probe.containers_running, 0);
     }
 
     #[test]

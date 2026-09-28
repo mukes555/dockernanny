@@ -160,10 +160,7 @@ fn make_platform(config: &HostConfig) -> Arc<dyn Platform> {
 
 #[cfg(windows)]
 fn real_platform(config: &HostConfig) -> Arc<dyn Platform> {
-    Arc::new(windows::Windows {
-        distro: config.wsl_distro.clone(),
-        ssh_port: config.wsl_ssh_port,
-    })
+    Arc::new(windows::Windows::new(config.wsl_distro.clone(), config.wsl_ssh_port))
 }
 
 #[cfg(target_os = "macos")]

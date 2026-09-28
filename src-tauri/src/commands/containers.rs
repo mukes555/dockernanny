@@ -17,7 +17,7 @@ pub const LOG_EVENT: &str = "container:log";
 #[derive(Debug, Clone, Serialize)]
 pub struct ContainerLogEvent {
     pub id: String,
-    pub line: Line,
+    pub lines: Vec<Line>,
 }
 
 fn alias_of(state: &AppState, machine_id: &str) -> CmdResult<String> {
@@ -64,9 +64,9 @@ pub async fn start_container_logs(app: AppHandle, state: State<'_, AppState>, ma
     let sink = {
         let app = app.clone();
         let id = id.clone();
-        move |line| {
-            let _ = app.emit(LOG_EVENT, ContainerLogEvent { id: id.clone(), line });
-        }
+        crate::job::batched(move |lines| {
+            let _ = app.emit(LOG_EVENT, ContainerLogEvent { id: id.clone(), lines });
+        })
     };
     let script = format!("docker logs -f --tail 200 {id}");
     let job = state.ssh.job(&alias, &script, sink).map_err(|err| format!("{err:#}"))?;

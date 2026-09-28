@@ -134,12 +134,12 @@ interface State {
   setStacks: (stacks: Stack[]) => void;
   setStatus: (stackId: string, status: StackStatus) => void;
   setForward: (stackId: string, state: ForwardState) => void;
-  appendOutput: (stackId: string, line: OutputLine) => void;
+  appendOutput: (stackId: string, lines: OutputLine[]) => void;
   clearOutput: (stackId: string) => void;
-  appendLog: (stackId: string, line: OutputLine) => void;
+  appendLog: (stackId: string, lines: OutputLine[]) => void;
   clearLogs: () => void;
   openLogs: (stackId: string | null) => void;
-  appendContainerLog: (id: string, line: OutputLine) => void;
+  appendContainerLog: (id: string, lines: OutputLine[]) => void;
   openContainerLogs: (target: ContainerTarget | null) => void;
   setDragging: (dragging: boolean) => void;
   setPreview: (preview: Preview | null) => void;
@@ -301,27 +301,27 @@ export const useStore = create<State>((set, get) => ({
   setStacks: (stacks) => set({ stacks }),
   setStatus: (stackId, status) => set((state) => ({ statuses: { ...state.statuses, [stackId]: status } })),
   setForward: (stackId, forward) => set((state) => ({ forwards: { ...state.forwards, [stackId]: forward } })),
-  appendOutput: (stackId, line) =>
+  appendOutput: (stackId, added) =>
     set((state) => {
-      const lines = [...(state.output[stackId] ?? []), line];
+      const lines = [...(state.output[stackId] ?? []), ...added];
       const trimmed = lines.length > MAX_OUTPUT_LINES ? lines.slice(lines.length - MAX_OUTPUT_LINES) : lines;
       return { output: { ...state.output, [stackId]: trimmed } };
     }),
   clearOutput: (stackId) => set((state) => ({ output: { ...state.output, [stackId]: [] } })),
-  appendLog: (stackId, line) =>
+  appendLog: (stackId, added) =>
     set((state) => {
       // A late line from a drawer that was already closed is dropped.
       if (state.logsFor !== stackId) return {};
-      const lines = [...state.logs, line];
+      const lines = [...state.logs, ...added];
       return { logs: lines.length > MAX_LOG_LINES ? lines.slice(lines.length - MAX_LOG_LINES) : lines };
     }),
   clearLogs: () => set({ logs: [] }),
   openLogs: (stackId) => set(stackId ? { logsFor: stackId, logs: [], progressFor: null, containerLogsFor: null } : { logsFor: null, logs: [] }),
-  appendContainerLog: (id, line) =>
+  appendContainerLog: (id, added) =>
     set((state) => {
       // A late line from a container whose drawer already closed is dropped.
       if (state.containerLogsFor?.id !== id) return {};
-      const lines = [...state.containerLog, line];
+      const lines = [...state.containerLog, ...added];
       return { containerLog: lines.length > MAX_LOG_LINES ? lines.slice(lines.length - MAX_LOG_LINES) : lines };
     }),
   openContainerLogs: (containerLogsFor) => set(containerLogsFor ? { containerLogsFor, containerLog: [], logsFor: null, progressFor: null } : { containerLogsFor: null, containerLog: [] }),

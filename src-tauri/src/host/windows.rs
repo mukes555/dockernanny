@@ -4,18 +4,126 @@
 
 use std::path::PathBuf;
 use std::process::Child;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use super::platform::{host_key_from_pub, parse_ipconfig, parse_rule, row, run, FirewallRules, Installed, NetworkProfile, Outcome, Output, Picture, Platform, Row, Rule, Say, SetupOptions, State};
 use super::{windows_steps, MIN_WINDOWS_BUILD};
+
+/// PowerShell and wsl.exe are the dearest things this app starts, and the
+/// sharing page probes every ten seconds. What rarely changes is kept this
+/// long once all of it is fine, and read again after Set up.
+const STEADY_FOR: Duration = Duration::from_secs(10 * 60);
+/// The firewall rules and the network's category, once both are fine.
+const NETWORK_FOR: Duration = Duration::from_secs(60);
 
 pub struct Windows {
     /// The WSL distribution that runs Docker and sshd.
     pub distro: String,
     /// Where sshd inside it listens.
     pub ssh_port: u16,
+    steady: Mutex<Option<Steady>>,
+    network: Mutex<Option<Network>>,
+}
+
+/// What rarely changes: the Windows build, WSL, the distribution and its
+/// user, rsync inside it, the memory.
+#[derive(Clone)]
+struct Steady {
+    read_at: Instant,
+    total_memory_gb: u32,
+    user: Option<String>,
+    /// Windows, WSL 2, the distribution and its user, in the page's order.
+    rows: Vec<Row>,
+    /// Shown later on the page, after the SSH server.
+    rsync: Option<Row>,
+    /// WSL and the distribution answer, so the rest can be asked.
+    distro_ready: bool,
+}
+
+#[derive(Clone)]
+struct Network {
+    read_at: Instant,
+    rules: FirewallRules,
+    profile: Option<NetworkProfile>,
+}
+
+/// Kept only when every row is fine: while something is missing the user
+/// is likely fixing it, and the page must see the change at once.
+fn steady_worth_keeping(steady: &Steady) -> bool {
+    let rows_fine = steady.rows.iter().chain(steady.rsync.iter()).all(|row| row.state == State::Ok);
+    steady.distro_ready && rows_fine
+}
+
+fn network_worth_keeping(rules: &FirewallRules, profile: Option<&NetworkProfile>) -> bool {
+    let rules_there = rules.ssh != Rule::Missing && rules.pairing != Rule::Missing;
+    let network_private = profile.map(|p| !p.public).unwrap_or(true);
+    rules_there && network_private
 }
 
 impl Windows {
+    pub fn new(distro: String, ssh_port: u16) -> Self {
+        Self { distro, ssh_port, steady: Mutex::new(None), network: Mutex::new(None) }
+    }
+
+    fn steady(&self) -> Steady {
+        let kept = self.steady.lock().expect("steady lock").clone().filter(|s| s.read_at.elapsed() < STEADY_FOR);
+        if let Some(kept) = kept {
+            return kept;
+        }
+        let fresh = self.read_steady();
+        *self.steady.lock().expect("steady lock") = steady_worth_keeping(&fresh).then(|| fresh.clone());
+        fresh
+    }
+
+    fn read_steady(&self) -> Steady {
+        let mut steady = Steady { read_at: Instant::now(), total_memory_gb: self.total_memory_gb(), user: None, rows: Vec::new(), rsync: None, distro_ready: false };
+        let build = self.windows_build();
+        steady.rows.push(row("Windows", build >= MIN_WINDOWS_BUILD, if build == 0 { "version unknown".into() } else { format!("build {build}") }));
+
+        let wsl = self.wsl(&["--version"]);
+        let version = wsl.stdout.lines().find(|l| l.starts_with("WSL version")).and_then(|l| l.split(':').nth(1)).map(|v| v.trim().to_string());
+        let wsl_ok = version.as_deref().map(|v| !v.starts_with("1.") && !v.starts_with("0.")).unwrap_or(false);
+        steady.rows.push(row("WSL 2", wsl_ok, version.unwrap_or_else(|| "not installed (Set up installs it)".into())));
+        if !wsl_ok {
+            return steady;
+        }
+
+        let has_distro = self.has_distro();
+        let distro_detail = if has_distro { format!("{} installed", self.distro) } else { format!("{} not installed (Set up installs it)", self.distro) };
+        steady.rows.push(row("Linux distribution", has_distro, distro_detail));
+        if !has_distro {
+            return steady;
+        }
+
+        let user = self.distro_user();
+        steady.rows.push(row("Linux user", user.is_some(), user.clone().unwrap_or_else(|| "none yet (Set up creates one)".into())));
+        steady.user = user;
+
+        let rsync = self.in_distro("command -v rsync");
+        steady.rsync = Some(row("rsync", rsync.ok && !rsync.text().is_empty(), if rsync.ok { "installed" } else { "missing" }));
+        steady.distro_ready = true;
+        steady
+    }
+
+    fn firewall_and_network(&self) -> (FirewallRules, Option<NetworkProfile>) {
+        let kept = self.network.lock().expect("network lock").clone().filter(|n| n.read_at.elapsed() < NETWORK_FOR);
+        if let Some(kept) = kept {
+            return (kept.rules, kept.profile);
+        }
+        let rules = self.firewall_rules();
+        let profile = self.network_profile();
+        let keep = network_worth_keeping(&rules, profile.as_ref());
+        *self.network.lock().expect("network lock") = keep.then(|| Network { read_at: Instant::now(), rules, profile: profile.clone() });
+        (rules, profile)
+    }
+
+    /// Set up may have changed any of it.
+    fn forget_what_was_read(&self) {
+        *self.steady.lock().expect("steady lock") = None;
+        *self.network.lock().expect("network lock") = None;
+    }
+
     pub fn wsl(&self, args: &[&str]) -> Output {
         run("wsl.exe", args, None, &[("WSL_UTF8", "1")])
     }
@@ -103,33 +211,18 @@ impl Platform for Windows {
     }
 
     fn probe(&self) -> Picture {
+        let steady = self.steady();
         let mut picture = Picture {
             ssh_port: self.ssh_port,
-            total_memory_gb: self.total_memory_gb(),
+            total_memory_gb: steady.total_memory_gb,
+            user: steady.user.clone(),
+            rows: steady.rows.clone(),
             ..Default::default()
         };
+        if !steady.distro_ready {
+            return picture;
+        }
         let port = self.ssh_port;
-        let build = self.windows_build();
-        picture.rows.push(row("Windows", build >= MIN_WINDOWS_BUILD, if build == 0 { "version unknown".into() } else { format!("build {build}") }));
-
-        let wsl = self.wsl(&["--version"]);
-        let version = wsl.stdout.lines().find(|l| l.starts_with("WSL version")).and_then(|l| l.split(':').nth(1)).map(|v| v.trim().to_string());
-        let wsl_ok = version.as_deref().map(|v| !v.starts_with("1.") && !v.starts_with("0.")).unwrap_or(false);
-        picture.rows.push(row("WSL 2", wsl_ok, version.unwrap_or_else(|| "not installed (Set up installs it)".into())));
-        if !wsl_ok {
-            return picture;
-        }
-
-        let has_distro = self.has_distro();
-        let distro_detail = if has_distro { format!("{} installed", self.distro) } else { format!("{} not installed (Set up installs it)", self.distro) };
-        picture.rows.push(row("Linux distribution", has_distro, distro_detail));
-        if !has_distro {
-            return picture;
-        }
-
-        let user = self.distro_user();
-        picture.rows.push(row("Linux user", user.is_some(), user.clone().unwrap_or_else(|| "none yet (Set up creates one)".into())));
-        picture.user = user;
 
         let docker = self.in_distro("docker version --format '{{.Server.Version}}' 2>/dev/null");
         let docker_ok = docker.ok && !docker.text().is_empty();
@@ -138,12 +231,10 @@ impl Platform for Windows {
         let listening = self.in_distro("ss -ltn 2>/dev/null").stdout.contains(&format!(":{port} "));
         picture.sshd_listening = listening;
         picture.rows.push(row("SSH server", listening, if listening { format!("listening on {port}") } else { format!("not listening on {port}") }));
-
-        let rsync = self.in_distro("command -v rsync");
-        picture.rows.push(row("rsync", rsync.ok && !rsync.text().is_empty(), if rsync.ok { "installed" } else { "missing" }));
+        picture.rows.extend(steady.rsync.clone());
 
         // Pairing may listen once both rules exist; a port changed since only needs Set up again.
-        let rules = self.firewall_rules();
+        let (rules, network) = self.firewall_and_network();
         let firewall_open = rules.ssh != Rule::Missing && rules.pairing != Rule::Missing;
         picture.ready_for_pairing = firewall_open;
         let firewall_detail = match (&rules.ssh, firewall_open) {
@@ -153,7 +244,7 @@ impl Platform for Windows {
         };
         picture.rows.push(row("Firewall", firewall_open && rules.ssh.opens(port), firewall_detail));
 
-        picture.network = self.network_profile();
+        picture.network = network;
         if let Some(network) = &picture.network {
             let detail = if network.public { format!("{} is marked Public, which blocks the firewall rules", network.name) } else { format!("{} (Private)", network.name) };
             picture.rows.push(row("Network", !network.public, detail));
@@ -170,7 +261,9 @@ impl Platform for Windows {
     }
 
     fn setup(&self, options: &SetupOptions, say: &mut Say) -> Vec<(&'static str, Outcome)> {
-        windows_steps::run_all(self, options, say)
+        let results = windows_steps::run_all(self, options, say);
+        self.forget_what_was_read();
+        results
     }
 
     fn host_key(&self) -> String {
@@ -215,5 +308,33 @@ impl Platform for Windows {
 
     fn hostname(&self) -> String {
         std::env::var("COMPUTERNAME").unwrap_or_else(|_| "windows".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn steady(rows: Vec<Row>, rsync: bool, distro_ready: bool) -> Steady {
+        Steady { read_at: Instant::now(), total_memory_gb: 16, user: Some("alex".into()), rows, rsync: Some(row("rsync", rsync, "")), distro_ready }
+    }
+
+    #[test]
+    fn only_a_fully_fine_computer_is_remembered() {
+        let fine = vec![row("Windows", true, ""), row("WSL 2", true, ""), row("Linux distribution", true, ""), row("Linux user", true, "")];
+        assert!(steady_worth_keeping(&steady(fine.clone(), true, true)));
+        assert!(!steady_worth_keeping(&steady(fine.clone(), false, true)), "rsync missing: the user is about to fix it");
+        assert!(!steady_worth_keeping(&steady(vec![row("Windows", true, ""), row("WSL 2", false, "")], true, false)));
+    }
+
+    #[test]
+    fn the_network_is_remembered_once_rules_exist_and_it_is_private() {
+        let open = FirewallRules { ssh: Rule::Open(Some(2222)), pairing: Rule::Open(Some(47433)) };
+        let private = NetworkProfile { name: "Home".into(), public: false };
+        let public = NetworkProfile { name: "Cafe".into(), public: true };
+        assert!(network_worth_keeping(&open, Some(&private)));
+        assert!(network_worth_keeping(&open, None));
+        assert!(!network_worth_keeping(&open, Some(&public)));
+        assert!(!network_worth_keeping(&FirewallRules { ssh: Rule::Missing, pairing: Rule::Open(None) }, Some(&private)));
     }
 }

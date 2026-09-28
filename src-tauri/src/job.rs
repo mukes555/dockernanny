@@ -3,6 +3,8 @@
 //! cancelled; `Output` is what a command left behind once it finished.
 
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Context;
 use serde::Serialize;
@@ -52,6 +54,33 @@ impl LastError {
 pub fn reads_like_error(text: &str) -> bool {
     let lower = text.to_lowercase();
     lower.contains("error") || lower.contains("failed")
+}
+
+/// Lines reach the window in batches: a build can print thousands a
+/// second, and a message per line kept the window busy drawing.
+const BATCH_EVERY: Duration = Duration::from_millis(100);
+
+/// A sink that hands `send` what arrived every 100 ms while lines come, and
+/// the rest once the sink is dropped, which is when its job has ended.
+pub fn batched(mut send: impl FnMut(Vec<Line>) + Send + 'static) -> impl FnMut(Line) + Send + 'static {
+    let buffer: Arc<Mutex<Vec<Line>>> = Arc::default();
+    let flusher = buffer.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(BATCH_EVERY).await;
+            // Looked at before taking, so a line pushed just before the sink
+            // went is in this batch or the next, never lost.
+            let sink_gone = Arc::strong_count(&flusher) == 1;
+            let lines = std::mem::take(&mut *flusher.lock().expect("batch lock"));
+            if !lines.is_empty() {
+                send(lines);
+            }
+            if sink_gone {
+                return;
+            }
+        }
+    });
+    move |line| buffer.lock().expect("batch lock").push(line)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -288,6 +317,23 @@ mod tests {
             reads,
             vec![("one".into(), false), ("two".into(), false), ("bar 10%".into(), true), ("bar 20%".into(), true), ("last".into(), false)]
         );
+    }
+
+    #[tokio::test]
+    async fn lines_arrive_in_order_and_the_last_ones_after_the_end() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<String>>();
+        let mut sink = batched(move |lines| {
+            let _ = tx.send(lines.into_iter().map(|line| line.text).collect());
+        });
+        for n in 0..5 {
+            sink(Line { stream: Stream::Stdout, text: format!("line {n}") });
+        }
+        drop(sink);
+        let mut received = Vec::new();
+        while let Some(batch) = rx.recv().await {
+            received.extend(batch);
+        }
+        assert_eq!(received, (0..5).map(|n| format!("line {n}")).collect::<Vec<_>>());
     }
 
     #[test]

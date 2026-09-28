@@ -132,15 +132,22 @@ pub fn stop(app: &AppHandle, stack_id: &str) {
 }
 
 /// Tells every forwarder that may still be running from an earlier instance
-/// to exit. Harmless when there is none.
+/// to exit. Harmless when there is none. Each is its own process (a wsl.exe
+/// start on Windows), and the window waits for them at start, so they run
+/// side by side rather than one after another.
 pub fn exit_all(ssh: &Ssh, stack_ids: impl Iterator<Item = String>, aliases: &HashMap<String, String>) {
-    for stack_id in stack_ids {
-        let socket = ssh.forward_socket(&stack_id);
-        if let Some(alias) = aliases.get(&stack_id) {
-            ssh.exit_master(alias, Some(&socket));
+    let stack_ids: Vec<String> = stack_ids.collect();
+    std::thread::scope(|scope| {
+        for stack_id in &stack_ids {
+            scope.spawn(move || {
+                let socket = ssh.forward_socket(stack_id);
+                if let Some(alias) = aliases.get(stack_id) {
+                    ssh.exit_master(alias, Some(&socket));
+                }
+                tools::remove_file(&socket);
+            });
         }
-        tools::remove_file(&socket);
-    }
+    });
 }
 
 async fn run(app: AppHandle, stack_id: String, alias: String, ports: Vec<ForwardPort>, mut cancelled: watch::Receiver<bool>, previous: Option<tauri::async_runtime::JoinHandle<()>>) {

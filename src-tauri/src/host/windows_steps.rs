@@ -206,7 +206,7 @@ fn power_marker() -> std::path::PathBuf {
 /// the power settings change only when `keep_awake` was left ticked.
 pub fn elevated_batch(pairing_port: u16, ssh_port: u16, keep_awake: bool, private_network: Option<&str>, log_path: &std::path::Path) -> i32 {
     // Only the firewall and PowerShell helpers are used here; they do not touch the distribution.
-    let win = Windows { distro: String::new(), ssh_port };
+    let win = Windows::new(String::new(), ssh_port);
     let mut report = Report::default();
 
     for (name, port) in [("dockerNanny SSH", ssh_port), ("dockerNanny Pair", pairing_port)] {

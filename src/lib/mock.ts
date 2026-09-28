@@ -237,12 +237,12 @@ async function pretendUp(stack: Stack) {
   publish(stack.id, { phase: "syncing", message: null });
   for (const file of ["docker-compose.yml", "html/index.html", ".env"]) {
     await wait(250);
-    handlers?.onStackOutput({ stack_id: stack.id, line: { stream: "stdout", text: `>f+++++++++ ${file}` } });
+    handlers?.onStackOutput({ stack_id: stack.id, lines: [{ stream: "stdout", text: `>f+++++++++ ${file}` }] });
   }
   publish(stack.id, { phase: "starting", synced_at_ms: Date.now(), synced_files: 3 });
   for (const line of [" Network sample-stack_default Creating", " Container sample-stack-web-1 Starting", " Container sample-stack-echo-1 Started", " Container sample-stack-web-1 Started"]) {
     await wait(400);
-    handlers?.onStackOutput({ stack_id: stack.id, line: { stream: "stderr", text: line } });
+    handlers?.onStackOutput({ stack_id: stack.id, lines: [{ stream: "stderr", text: line }] });
   }
   publish(stack.id, {
     phase: "running",
@@ -513,7 +513,7 @@ export const mockApi: Api = {
     logTimer = window.setInterval(() => {
       const service = services[n % services.length];
       n += 1;
-      handlers?.onStackLog({ stack_id: id, line: { stream: "stdout", text: `${stack.name}-${service}-1  | ${new Date().toISOString()} request ${n} handled in ${(Math.random() * 40).toFixed(1)}ms` } });
+      handlers?.onStackLog({ stack_id: id, lines: [{ stream: "stdout", text: `${stack.name}-${service}-1  | ${new Date().toISOString()} request ${n} handled in ${(Math.random() * 40).toFixed(1)}ms` }] });
     }, 700);
   },
   stopLogs: async () => {
@@ -541,7 +541,7 @@ export const mockApi: Api = {
     let n = 0;
     ctrLogTimer = window.setInterval(() => {
       n += 1;
-      handlers?.onContainerLog({ id, line: { stream: n % 5 === 0 ? "stderr" : "stdout", text: `${new Date().toISOString()} INFO  handled event ${n} in ${(Math.random() * 30).toFixed(1)}ms` } });
+      handlers?.onContainerLog({ id, lines: [{ stream: n % 5 === 0 ? "stderr" : "stdout", text: `${new Date().toISOString()} INFO  handled event ${n} in ${(Math.random() * 30).toFixed(1)}ms` }] });
     }, 600);
   },
   stopContainerLogs: async () => {

@@ -56,6 +56,9 @@ pub struct AppState {
     pub script_server: Mutex<Option<guide::ScriptServer>>,
     /// The latest state of every copy started in this run, by the card's stack id.
     pub copies: Mutex<HashMap<String, copy::progress::CopyProgress>>,
+    /// The window came back into view: polls waiting out their slow beat
+    /// run at once (see `tray::until_next_poll`).
+    pub window_back: tokio::sync::Notify,
 }
 
 pub fn run() {
@@ -239,6 +242,7 @@ fn boot() -> anyhow::Result<AppState> {
         watchers: Mutex::new(HashMap::new()),
         script_server: Mutex::new(None),
         copies: Mutex::new(HashMap::new()),
+        window_back: tokio::sync::Notify::new(),
     })
 }
 
