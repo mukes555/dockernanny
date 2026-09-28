@@ -38,8 +38,8 @@ export function DropHero({ extra }: { extra?: ReactNode }) {
   const target = useDropTarget();
 
   return (
-    <div className="flex h-full items-center justify-center">
-      <div className="w-full max-w-xl rounded-3xl border-2 border-dashed border-hairline bg-surface/40 px-10 py-12 text-center">
+    <div className="flex justify-center pt-6">
+      <div className="w-full max-w-xl rounded-2xl border-2 border-dashed border-hairline bg-surface/40 px-10 py-12 text-center">
         <LogoMark size={44} className="mx-auto text-accent" />
         <h1 className="mt-5 text-xl font-semibold tracking-tight text-ink">Drop a docker-compose.yml here</h1>
         <p className="mx-auto mt-2 max-w-md text-[13px] leading-relaxed text-ink-2">
@@ -48,7 +48,7 @@ export function DropHero({ extra }: { extra?: ReactNode }) {
               Or a project folder that has one. The stack runs on <span className="font-medium text-ink">{target.name}</span> and its ports show up on this computer as localhost.
             </>
           ) : (
-            <>Or a project folder that has one. Add a machine on the left first, so there is somewhere to run it.</>
+            <>Or a project folder that has one. Add a machine in the sidebar first, so there is somewhere to run it.</>
           )}
         </p>
         <div className="mt-6 flex justify-center gap-2">

@@ -6,90 +6,75 @@ import { visibleMachines } from "../lib/machines";
 import type { LocalProject } from "../lib/types";
 import { useStore } from "../state/store";
 import { OsGlyph } from "../ui/Badges";
-import { ArrowLeftIcon, ExternalIcon, RefreshIcon, SpinnerIcon } from "../ui/icons";
-import { Button, Card, Chip, Eyebrow } from "../ui/primitives";
+import { ExternalIcon, RefreshIcon, SpinnerIcon } from "../ui/icons";
+import { Page, Tabs } from "../ui/Page";
+import { Button, Card, Chip } from "../ui/primitives";
 import { ProbeFacts } from "../ui/ProbeFacts";
 import { Readiness } from "./Readiness";
 
-/** This computer as a place: who it is and how it is doing, what its own
- * Docker runs (the starting point for sending a project to a machine), and
- * the sharing role underneath. */
+/** This computer as a place, in three parts: who it is and whether it can
+ * reach machines, what its own Docker runs (the starting point for sending
+ * a project to a machine), and the sharing role. */
 export function ComputerPage() {
   const info = useStore((state) => state.computerInfo);
   const computerName = useStore((state) => state.computerName);
   const loadComputerInfo = useStore((state) => state.loadComputerInfo);
-  const setView = useStore((state) => state.setView);
   const settings = useStore((state) => state.settings);
+  const tab = useStore((state) => state.computerTab);
+  const openComputer = useStore((state) => state.openComputer);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void loadComputerInfo().catch((err) => setError(errorMessage(err)));
   }, [loadComputerInfo]);
 
-  const parts = [
-    { id: "overview", label: "Overview" },
-    ...(settings?.use_machines ? [{ id: "ready", label: "Ready to use machines" }] : []),
-    { id: "docker-here", label: "Docker here" },
-    { id: "sharing", label: "Sharing" },
-  ];
+  const who = info ? `${info.user}@${info.probe.hostname ?? computerName}` : "This computer";
+  const roles = [settings?.use_machines ? "uses other machines" : null, settings?.share_this_computer ? "shared with others" : null].filter(Boolean).join(" and ");
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 pb-10">
-      <button type="button" onClick={() => setView("stacks")} className="inline-flex items-center gap-1 text-[12px] text-ink-3 transition hover:text-ink">
-        <ArrowLeftIcon size={13} /> Back
-      </button>
-      <PageParts parts={parts} />
-      <header id="overview" className="scroll-mt-14 rounded-2xl border border-line bg-surface p-5">
-        <Eyebrow>This computer</Eyebrow>
-        <div className="mt-1 flex items-center gap-2.5">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-accent">
-            <OsGlyph os={info?.probe.os} size={18} />
-          </span>
-          <h1 className="truncate text-xl font-semibold tracking-tight text-ink">{computerName || "this computer"}</h1>
-        </div>
-        {info ? (
-          <div className="mono mt-1 text-[12px] text-ink-3">
-            {info.user}@{info.probe.hostname ?? computerName}
-          </div>
-        ) : null}
-        <div className="mt-4">
-          {info ? (
-            <ProbeFacts probe={info.probe} />
-          ) : error ? null : (
-            <div className="flex items-center gap-2 text-[13px] text-ink-2">
-              <SpinnerIcon /> Looking at this computer…
-            </div>
-          )}
-        </div>
-        {error ? <div className="mt-3 text-[12px] text-critical">{error}</div> : null}
-      </header>
-
-      {settings?.use_machines ? (
-        <section id="ready" className="scroll-mt-14">
-          <Readiness />
-        </section>
+    <Page
+      title={
+        <>
+          <OsGlyph os={info?.probe.os} size={18} className="shrink-0 text-accent" />
+          <span className="truncate">{computerName || "This computer"}</span>
+        </>
+      }
+      summary={
+        <>
+          <span className="mono">{who}</span>
+          {roles ? ` · ${roles}` : ""}
+        </>
+      }
+      tabs={
+        <Tabs
+          value={tab}
+          onChange={openComputer}
+          tabs={[
+            { id: "overview", label: "Overview" },
+            { id: "docker", label: "Docker here" },
+            { id: "sharing", label: "Sharing" },
+          ]}
+        />
+      }
+    >
+      {tab === "overview" ? (
+        <>
+          <Card title="This computer">
+            {info ? (
+              <ProbeFacts probe={info.probe} />
+            ) : error ? null : (
+              <div className="flex items-center gap-2 text-[13px] text-ink-2">
+                <SpinnerIcon /> Looking at this computer…
+              </div>
+            )}
+            {error ? <div className="mt-3 text-[12px] text-critical">{error}</div> : null}
+          </Card>
+          {settings?.use_machines ? <Readiness /> : null}
+        </>
       ) : null}
-      <section id="docker-here" className="scroll-mt-14">
-        <DockerHere />
-      </section>
-      <section id="sharing" className="scroll-mt-14">
-        <SharingSections />
-      </section>
-    </div>
-  );
-}
-
-/** Four jobs share this page; the links stay at the top and jump to each. */
-function PageParts({ parts }: { parts: { id: string; label: string }[] }) {
-  const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ block: "start" });
-  return (
-    <nav aria-label="Parts of this page" className="sticky top-0 z-10 -mx-2 flex flex-wrap gap-1 bg-plane/85 px-2 py-2 backdrop-blur">
-      {parts.map((part) => (
-        <button key={part.id} type="button" onClick={() => jump(part.id)} className="rounded-full border border-line px-3 py-1 text-[12px] text-ink-2 transition hover:bg-surface-2 hover:text-ink">
-          {part.label}
-        </button>
-      ))}
-    </nav>
+      {tab === "docker" ? <DockerHere /> : null}
+      {tab === "sharing" ? <SharingSections /> : null}
+    </Page>
   );
 }
 
@@ -120,7 +105,7 @@ function DockerHere() {
       title="Docker on this computer"
       description="Compose projects running in the local Docker. Copy one to a machine to run it there instead."
       actions={
-        <Button size="sm" tone="ghost" onClick={refresh} disabled={projects === null} aria-label="Refresh">
+        <Button size="sm" tone="ghost" onClick={refresh} busy={projects === null && !error} aria-label="Refresh">
           <RefreshIcon />
         </Button>
       }

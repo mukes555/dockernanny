@@ -10,8 +10,8 @@ No agent, no custom protocol. dockerNanny only uses what is already there:
 
 ## Two roles, one app
 
-- **Use other machines**: this computer sends stacks elsewhere. The stacks
-  view, the machine list and the port map belong to this role.
+- **Use other machines**: this computer sends stacks elsewhere. The Stacks
+  and Ports pages and the machines in the sidebar belong to this role.
 - **Share this computer**: this computer runs stacks for others. The sharing
   page checks what this computer has, sets up what is missing (Docker, sshd,
   rsync, the firewall; WSL2 Ubuntu on Windows), shows the pairing code, and
@@ -57,7 +57,7 @@ this computer (dockerNanny)                        machine (Linux, macOS, or WSL
    `node_modules` and whatever else you exclude), `docker compose up -d --build`
    runs on the machine, and one `ssh -N` per stack forwards every published TCP
    port back to `localhost`. If the connection drops, the forward reconnects
-   with backoff. The port map in the top bar lists every forwarded port.
+   with backoff. The Ports page lists every forwarded port.
 
 Everything dockerNanny keeps lives in `~/.dockernanny` on this computer: the
 machine list, the stacks, the settings, one generated ssh config, the pinned
@@ -106,8 +106,8 @@ The **bridge** is the set of localhost ports this computer hands to a
 machine for one stack (ssh forwards). Every stack card shows its bridge
 live: connected with the port count and since when, connecting with the
 attempt count and the last error, waiting for the stack, or off, with a
-Start and Stop button. The port map (top bar) lists every bridged port
-with the same state and a Restart all.
+Start and Stop button. The Ports page lists every bridged port with the
+same state and a Restart all.
 
 ### Pairing and security
 

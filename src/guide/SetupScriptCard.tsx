@@ -142,8 +142,8 @@ export function SetupScriptCard() {
         {serving ? (
           <Button onClick={() => void stop()}>Stop serving the script</Button>
         ) : (
-          <Button tone="primary" onClick={() => void serve()} disabled={working || !keyPath.trim()}>
-            {working ? <SpinnerIcon /> : null} Share the setup script
+          <Button tone="primary" onClick={() => void serve()} busy={working} disabled={!keyPath.trim()}>
+            Share the setup script
           </Button>
         )}
       </div>

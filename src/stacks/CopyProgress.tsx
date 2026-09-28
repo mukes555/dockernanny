@@ -16,14 +16,14 @@ export function CopyProgressDrawer() {
   const progress = useStore((state) => (state.progressFor ? state.copies[state.progressFor] : undefined));
   const openProgress = useStore((state) => state.openProgress);
   const selectMachine = useStore((state) => state.selectMachine);
-  const setView = useStore((state) => state.setView);
+  const openComputer = useStore((state) => state.openComputer);
   const now = useNow(1000);
   useEscape(Boolean(stackId), () => openProgress(null));
 
   const openDestination = () => {
     if (!progress) return;
     if (progress.destination.kind === "machine") selectMachine(progress.destination.machine_id);
-    else setView("computer");
+    else openComputer("docker");
     openProgress(null);
   };
 
@@ -31,7 +31,7 @@ export function CopyProgressDrawer() {
     <AnimatePresence>
       {stackId && progress ? (
         <motion.aside
-          className="fixed top-14 bottom-0 right-0 z-20 flex w-[520px] max-w-[80vw] flex-col border-l border-line bg-surface shadow-2xl"
+          className="fixed top-0 bottom-0 right-0 z-20 flex w-[520px] max-w-[80vw] flex-col border-l border-line bg-surface shadow-2xl"
           initial={{ x: 40, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           exit={{ x: 40, opacity: 0 }}

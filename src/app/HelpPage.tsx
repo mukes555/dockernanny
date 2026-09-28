@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { api, errorMessage } from "../lib/ipc";
-import type { UpdateStatus } from "../lib/types";
 import { useStore } from "../state/store";
-import { BookIcon, ExternalIcon, FolderIcon, LogsIcon, SpinnerIcon } from "../ui/icons";
-import { Button, Card, PageHeader } from "../ui/primitives";
+import { BookIcon, ExternalIcon, FolderIcon, LogsIcon } from "../ui/icons";
+import { Page } from "../ui/Page";
+import { Button, Card } from "../ui/primitives";
 import { GLOSSARY } from "../ui/Term";
 
 const VERSION = __APP_VERSION__;
@@ -19,8 +19,9 @@ const LINKS: Array<{ label: string; url: string }> = [
 
 const OS_NAMES = { macos: "macOS", windows: "Windows", linux: "Linux" } as const;
 
-/** Where a stranger goes when unsure: what the app is, where its files are,
- * what its words mean, and a report they can paste into an issue safely. */
+/** Where a stranger goes when unsure: how to begin, what to do when
+ * something breaks (a report they can paste into an issue safely, the log,
+ * the data folder), and what the app's words mean. */
 export function HelpPage() {
   const setView = useStore((state) => state.setView);
   const setWelcomeOpen = useStore((state) => state.setWelcomeOpen);
@@ -31,33 +32,26 @@ export function HelpPage() {
   const reveal = (which: "folder" | "log") => void api.revealAppFile(which).catch((err) => setError(errorMessage(err)));
 
   return (
-    <div className="mx-auto max-w-2xl space-y-4 pb-10">
-      <PageHeader eyebrow="Help" title="Help and about" onBack={() => setView("stacks")} description={`dockerNanny ${VERSION} for ${OS_NAMES[os]}. Run Docker Compose stacks on other computers and use them on localhost here.`} />
+    <Page title="Help" summary={`dockerNanny ${VERSION} for ${OS_NAMES[os]}: run Docker Compose stacks on other computers and use them on localhost here`} width="max-w-3xl">
       {error ? <div className="text-[12px] text-critical">{error}</div> : null}
 
-      <Card title="Getting started">
+      <Card title="Getting started" description="The three-step welcome, and how to get a machine ready by hand.">
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => setWelcomeOpen(true)}>Show the welcome again</Button>
           <Button onClick={() => setView("guide")}>
-            <BookIcon /> Prepare another machine
+            <BookIcon /> How to prepare a machine
           </Button>
         </div>
       </Card>
 
-      <UpdatesCard />
-
-      <Diagnostics onOpenIssue={() => open(`${REPO}/issues/new/choose`)} />
-
-      <Card title="Files on this computer" description="Settings, machines, stacks and the log all live in one folder; nothing is kept anywhere else.">
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={() => reveal("folder")}>
-            <FolderIcon /> Open the data folder
-          </Button>
-          <Button onClick={() => reveal("log")}>
-            <LogsIcon /> Show the log file
-          </Button>
-        </div>
-      </Card>
+      <Diagnostics onOpenIssue={() => open(`${REPO}/issues/new/choose`)}>
+        <Button onClick={() => reveal("log")}>
+          <LogsIcon /> Show the log file
+        </Button>
+        <Button onClick={() => reveal("folder")} title="Settings, machines, stacks and the log all live in this one folder">
+          <FolderIcon /> Open the data folder
+        </Button>
+      </Diagnostics>
 
       <Card title="Words used here">
         <dl className="space-y-3">
@@ -79,60 +73,14 @@ export function HelpPage() {
           ))}
         </div>
       </Card>
-    </div>
+    </Page>
   );
-}
-
-/** The app checks every hour by itself; this shows its last answer and asks now. */
-function UpdatesCard() {
-  const update = useStore((state) => state.update);
-  const status = useStore((state) => state.updateStatus);
-  const setUpdateStatus = useStore((state) => state.setUpdateStatus);
-  const setUpdateOpen = useStore((state) => state.setUpdateOpen);
-  const [checking, setChecking] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const checkNow = async () => {
-    setChecking(true);
-    setError(null);
-    try {
-      setUpdateStatus(await api.checkForUpdate());
-    } catch (err) {
-      setError(`Could not check: ${errorMessage(err)}`);
-    } finally {
-      setChecking(false);
-    }
-  };
-  const answer = error ?? lastCheck(status);
-
-  return (
-    <Card title="Updates" description={`This is dockerNanny ${VERSION}. It looks for a new version on the project's GitHub releases at start and every hour, unless Settings turns that off.`}>
-      <div className="flex flex-wrap items-center gap-3">
-        {update ? (
-          <Button tone="primary" onClick={() => setUpdateOpen(true)}>
-            See what is new in {update.version}
-          </Button>
-        ) : (
-          <Button onClick={() => void checkNow()} disabled={checking}>
-            {checking ? <SpinnerIcon /> : null} Check for updates
-          </Button>
-        )}
-        {answer ? <span className="text-[12px] text-ink-2">{answer}</span> : null}
-      </div>
-    </Card>
-  );
-}
-
-/** "Last checked 23:40: up to date", or nothing before the first answer. */
-function lastCheck(status: UpdateStatus | null): string | null {
-  if (!status?.checked_ms) return status?.checking ? "Checking…" : null;
-  const time = new Date(status.checked_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return `Last checked ${time}: ${status.result ?? ""}`;
 }
 
 /** Copies a redacted report and shows exactly what was copied, so nobody
- * pastes something into a public issue without seeing it first. */
-export function Diagnostics({ onOpenIssue }: { onOpenIssue?: () => void }) {
+ * pastes something into a public issue without seeing it first. The page
+ * adds its own buttons after the two here. */
+function Diagnostics({ onOpenIssue, children }: { onOpenIssue: () => void; children?: ReactNode }) {
   const [report, setReport] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -154,14 +102,13 @@ export function Diagnostics({ onOpenIssue }: { onOpenIssue?: () => void }) {
   return (
     <Card title="When something goes wrong" description="Copy a report to paste into an issue. Names, addresses, users and paths are replaced with placeholders before it is copied.">
       <div className="flex flex-wrap gap-2">
-        <Button tone="primary" onClick={() => void copy()} disabled={busy}>
-          {busy ? <SpinnerIcon /> : null} Copy diagnostics
+        <Button tone="primary" onClick={() => void copy()} busy={busy}>
+          Copy diagnostics
         </Button>
-        {onOpenIssue ? (
-          <Button onClick={onOpenIssue}>
-            Report a problem <ExternalIcon size={11} />
-          </Button>
-        ) : null}
+        <Button onClick={onOpenIssue}>
+          Report a problem <ExternalIcon size={11} />
+        </Button>
+        {children}
       </div>
       {error ? <div className="mt-3 text-[12px] text-critical">{error}</div> : null}
       {report ? (

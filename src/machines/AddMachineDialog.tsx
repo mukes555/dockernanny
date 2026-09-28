@@ -4,7 +4,6 @@ import { api, errorMessage } from "../lib/ipc";
 import type { Machine } from "../lib/types";
 import { useStore } from "../state/store";
 import { Dialog } from "../ui/Dialog";
-import { SpinnerIcon } from "../ui/icons";
 import { Button, Eyebrow, Field, TextInput } from "../ui/primitives";
 import { DoctorRows } from "./DoctorRows";
 import { PairSection } from "./PairSection";
@@ -146,13 +145,13 @@ export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: ()
           {paired ? "Close" : "Cancel"}
         </Button>
         {paired ? (
-          <Button tone="primary" onClick={onClose} disabled={checking}>
-            {checking ? <SpinnerIcon /> : null} Done
+          <Button tone="primary" onClick={onClose} busy={checking}>
+            Done
           </Button>
         ) : (
           <div className="flex gap-2">
-            <Button onClick={() => void check()} disabled={checking || !host.trim() || !user.trim()}>
-              {checking ? <SpinnerIcon /> : null} {checked ? "Check again" : "Check connection"}
+            <Button onClick={() => void check()} busy={checking} disabled={!host.trim() || !user.trim()}>
+              {checked ? "Check again" : "Check connection"}
             </Button>
             <Button tone="primary" onClick={() => void add()} disabled={!sshOk || checking || !name.trim()} title={!sshOk ? "Run the connection check first" : !name.trim() ? "Give it a name" : undefined}>
               Add machine

@@ -42,7 +42,7 @@ export function ContainerLogsDrawer() {
     <AnimatePresence>
       {target ? (
         <motion.aside
-          className="fixed top-14 bottom-0 right-0 z-20 flex w-[560px] max-w-[80vw] flex-col border-l border-line bg-surface shadow-2xl"
+          className="fixed top-0 bottom-0 right-0 z-20 flex w-[560px] max-w-[80vw] flex-col border-l border-line bg-surface shadow-2xl"
           initial={{ x: 40, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           exit={{ x: 40, opacity: 0 }}

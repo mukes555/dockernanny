@@ -98,8 +98,9 @@ body {
   user-select: none;
 }
 
-/* A faint grid and two accent glows give the plane depth without competing with data.
-   Behind everything: a fixed layer without a z-index would paint over buttons and cards. */
+/* Two soft accent glows give the plane some depth; no pattern, so pages read
+   as calm surfaces. Behind everything: a fixed layer without a z-index would
+   paint over buttons and cards. */
 body::before {
   content: "";
   position: fixed;
@@ -108,12 +109,8 @@ body::before {
   pointer-events: none;
   background-image:
     radial-gradient(60rem 30rem at 12% -10%, var(--accent-soft), transparent 60%),
-    radial-gradient(40rem 24rem at 100% 110%, var(--accent-soft), transparent 60%),
-    linear-gradient(var(--hairline) 1px, transparent 1px),
-    linear-gradient(90deg, var(--hairline) 1px, transparent 1px);
-  background-size: auto, auto, 48px 48px, 48px 48px;
-  opacity: 0.55;
-  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.35));
+    radial-gradient(40rem 24rem at 100% 110%, var(--accent-soft), transparent 60%);
+  opacity: 0.45;
 }
 
 .mono {

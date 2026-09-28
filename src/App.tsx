@@ -3,23 +3,21 @@ import { useEffect, useRef } from "react";
 import { ErrorBoundary } from "./app/ErrorBoundary";
 import { HelpPage } from "./app/HelpPage";
 import { NoticeStack } from "./app/NoticeStack";
+import { Sidebar } from "./app/Sidebar";
 import { Welcome } from "./app/Welcome";
-import { TopBar } from "./app/TopBar";
-import { UpdateDialog } from "./app/UpdateDialog";
 import { PrepareGuide } from "./guide/PrepareGuide";
 import { ComputerPage } from "./computer/ComputerPage";
 import { watchFileDrop } from "./lib/dragdrop";
 import { api, errorMessage } from "./lib/ipc";
-import { MachineRail } from "./machines/MachineRail";
 import { SettingsPage } from "./settings/SettingsPage";
-import { ActivityPanel } from "./stacks/ActivityPanel";
+import { ActivityPage } from "./stacks/ActivityPage";
 import { DropOverlay } from "./stacks/DropZone";
 import { DropSheet } from "./stacks/DropSheet";
 import { LogDrawer } from "./stacks/LogDrawer";
 import { ContainerLogsDrawer } from "./machines/ContainerLogsDrawer";
 import { CopyProgressDrawer } from "./stacks/CopyProgress";
 import { CopySheet } from "./stacks/CopySheet";
-import { PortMap } from "./stacks/PortMap";
+import { PortsPage } from "./stacks/PortsPage";
 import { StacksView } from "./stacks/StacksView";
 import { useStore } from "./state/store";
 
@@ -80,7 +78,7 @@ export default function App() {
       },
       onUpdateStatus: (status) => useStore.getState().setUpdateStatus(status),
       onUpdateProgress: (fraction) => useStore.getState().setUpdateProgress(fraction),
-      onOpenUpdate: () => useStore.getState().setUpdateOpen(true),
+      onOpenUpdate: () => useStore.getState().openSettings("updates"),
     });
     const started = (what: string, run: () => Promise<unknown>) => void run().catch((err) => pushNotice(`Could not load ${what}: ${errorMessage(err)}`));
     started("settings", loadSettings);
@@ -116,31 +114,27 @@ export default function App() {
     });
   }, [setDragging]);
 
-  // Two boundaries: a broken page keeps the top bar and rail usable; anything
-  // else that breaks (a sheet, a drawer) shows the recovery screen, not a blank window.
+  // Two boundaries: a broken page keeps the sidebar usable; anything else
+  // that breaks (a sheet, a drawer) shows the recovery screen, not a blank window.
   return (
     <ErrorBoundary>
-      <div className="flex h-full flex-col">
-        <TopBar />
-        <div className="flex min-h-0 flex-1">
-          <MachineRail />
-          <main ref={mainRef} className="min-h-0 flex-1 overflow-auto p-6">
-            <ErrorBoundary>
-              {view === "guide" ? <PrepareGuide /> : null}
-              {view === "settings" ? <SettingsPage /> : null}
-              {view === "help" ? <HelpPage /> : null}
-              {view === "computer" ? <ComputerPage /> : null}
-              {view === "stacks" ? <StacksView /> : null}
-            </ErrorBoundary>
-          </main>
-        </div>
+      <div className="flex h-full">
+        <Sidebar />
+        <main ref={mainRef} className="min-h-0 min-w-0 flex-1 overflow-auto">
+          <ErrorBoundary>
+            {view === "stacks" ? <StacksView /> : null}
+            {view === "ports" ? <PortsPage /> : null}
+            {view === "activity" ? <ActivityPage /> : null}
+            {view === "computer" ? <ComputerPage /> : null}
+            {view === "guide" ? <PrepareGuide /> : null}
+            {view === "settings" ? <SettingsPage /> : null}
+            {view === "help" ? <HelpPage /> : null}
+          </ErrorBoundary>
+        </main>
         <Welcome />
-        <UpdateDialog />
         <DropOverlay />
         <DropSheet />
         <CopySheet />
-        <PortMap />
-        <ActivityPanel />
         <NoticeStack />
         <LogDrawer />
         <ContainerLogsDrawer />

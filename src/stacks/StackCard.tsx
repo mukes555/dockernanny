@@ -199,8 +199,8 @@ export function StackCard({ stack }: { stack: Stack }) {
             <Button size="sm" tone="ghost" onClick={() => setRemoving(null)} disabled={removing === "working"}>
               Keep
             </Button>
-            <Button size="sm" tone="danger" onClick={() => void remove()} disabled={removing === "working"}>
-              {removing === "working" ? <SpinnerIcon size={11} /> : null} Remove
+            <Button size="sm" tone="danger" onClick={() => void remove()} busy={removing === "working"}>
+              Remove
             </Button>
           </div>
         </div>
