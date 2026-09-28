@@ -5,7 +5,6 @@ import { dropTarget, visibleMachines } from "../lib/machines";
 import type { Preview, Stack } from "../lib/types";
 import { useStore } from "../state/store";
 import { Dialog, DialogActions } from "../ui/Dialog";
-import { SpinnerIcon } from "../ui/icons";
 import { Button, Chip, Field, Select, TextInput, Toggle } from "../ui/primitives";
 import { BindMounts, excludeFor } from "./BindMounts";
 
@@ -213,8 +212,8 @@ export function DropSheet() {
         <Button tone="ghost" onClick={() => setPreview(null)}>
           Cancel
         </Button>
-        <Button tone="primary" onClick={() => void run()} disabled={submitting || !machine || !name.trim()}>
-          {submitting ? <SpinnerIcon /> : null} Run on {machine?.name ?? "…"}
+        <Button tone="primary" onClick={() => void run()} busy={submitting} disabled={!machine || !name.trim()}>
+          Run on {machine?.name ?? "…"}
         </Button>
       </DialogActions>
     </Dialog>

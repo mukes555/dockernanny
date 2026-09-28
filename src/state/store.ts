@@ -3,7 +3,10 @@ import { create } from "zustand";
 import { api, errorMessage } from "../lib/ipc";
 import type { AvailableUpdate, ComputerInfo, CopyProgress, DoctorRow, Fetched, ForwardState, HostOs, HostSnapshot, Machine, MachineStats, OutputLine, Preview, Settings, Stack, StackStatus, Theme, UpdateStatus } from "../lib/types";
 
-export type View = "stacks" | "guide" | "settings" | "computer" | "help";
+/** The pages the sidebar leads to. A machine's page is "stacks" with a machine selected. */
+export type View = "stacks" | "ports" | "activity" | "computer" | "guide" | "settings" | "help";
+export type SettingsSection = "general" | "updates" | "machines" | "sharing" | "advanced";
+export type ComputerTab = "overview" | "docker" | "sharing";
 
 /** Which container's logs the drawer streams, and where it lives. */
 export interface ContainerTarget {
@@ -45,6 +48,9 @@ const MAX_LOG_LINES = 2000;
 
 interface State {
   view: View;
+  /** Kept in the store because the sidebar, the tray and other pages open these parts directly. */
+  settingsSection: SettingsSection;
+  computerTab: ComputerTab;
   /** Null until the backend has answered; then never null again. */
   settings: Settings | null;
   /** No settings file yet: the role chooser is shown once. */
@@ -53,14 +59,12 @@ interface State {
   welcomeOpen: boolean;
   /** A newer release the app's checks found; installing waits for the user. */
   update: AvailableUpdate | null;
-  /** The last check's answer, for Help. */
+  /** The last check's answer, for Settings, Updates. */
   updateStatus: UpdateStatus | null;
   /** The share of an update downloaded while it installs. */
   updateProgress: number | null;
-  updateOpen: boolean;
   setUpdateStatus: (status: UpdateStatus) => void;
   setUpdateProgress: (fraction: number | null) => void;
-  setUpdateOpen: (open: boolean) => void;
   /** The Add machine dialog, opened from the rail or from the welcome. */
   addMachineOpen: boolean;
   /** Something chosen in a machine's rail menu, carried out on its page. */
@@ -105,12 +109,12 @@ interface State {
   /** The sharing role's view of this computer; null while the role is off. */
   host: HostSnapshot | null;
   hostLog: string[];
-  portMapOpen: boolean;
-  activityOpen: boolean;
   /** Toast notices for failures the user should see; auto-dismissed. */
   notices: Notice[];
 
   setView: (view: View) => void;
+  openSettings: (section: SettingsSection) => void;
+  openComputer: (tab: ComputerTab) => void;
   setWelcomeOpen: (open: boolean) => void;
   setAddMachineOpen: (open: boolean) => void;
   selectMachine: (id: string | null) => void;
@@ -125,14 +129,12 @@ interface State {
   loadSettings: () => Promise<void>;
   saveSettings: (settings: Settings) => Promise<void>;
   setScriptFetched: (fetched: Fetched | null) => void;
-  setPortMapOpen: (open: boolean) => void;
-  setActivityOpen: (open: boolean) => void;
   pushNotice: (text: string, tone?: NoticeTone) => void;
   dismissNotice: (id: number) => void;
   /** Reads a dropped or chosen compose file and opens the new-stack sheet;
    * says so while Docker reads it, and says why when it cannot. */
   readComposeFile: (path: string) => Promise<void>;
-  /** This computer's page, scrolled to its sharing part (the last section). */
+  /** This computer's page, on its Sharing tab. */
   showSharing: () => void;
   load: () => Promise<void>;
   setMachines: (machines: Machine[]) => void;
@@ -166,13 +168,14 @@ function applyTheme(theme: Theme) {
 
 export const useStore = create<State>((set, get) => ({
   view: "stacks",
+  settingsSection: "general",
+  computerTab: "overview",
   settings: null,
   firstRun: false,
   welcomeOpen: false,
   update: null,
   updateStatus: null,
   updateProgress: null,
-  updateOpen: false,
   addMachineOpen: false,
   machineAsk: null,
   os: "macos",
@@ -200,15 +203,14 @@ export const useStore = create<State>((set, get) => ({
   progressFor: null,
   host: null,
   hostLog: [],
-  portMapOpen: false,
-  activityOpen: false,
   notices: [],
 
   setView: (view) => set({ view }),
+  openSettings: (settingsSection) => set({ view: "settings", settingsSection }),
+  openComputer: (computerTab) => set({ view: "computer", computerTab }),
   setWelcomeOpen: (welcomeOpen) => set({ welcomeOpen }),
   setUpdateStatus: (updateStatus) => set({ updateStatus, update: updateStatus.available }),
   setUpdateProgress: (updateProgress) => set({ updateProgress }),
-  setUpdateOpen: (updateOpen) => set({ updateOpen }),
   setAddMachineOpen: (addMachineOpen) => set({ addMachineOpen }),
   askMachine: (machineId, action) => set({ machineAsk: { machineId, action }, selectedMachineId: machineId, view: "stacks" }),
   selectMachine: (selectedMachineId) => set({ selectedMachineId, view: "stacks" }),
@@ -251,9 +253,6 @@ export const useStore = create<State>((set, get) => ({
     }
   },
   setScriptFetched: (scriptFetched) => set({ scriptFetched }),
-  // The port map and the activity list take the same corner; one replaces the other.
-  setPortMapOpen: (portMapOpen) => set(portMapOpen ? { portMapOpen, activityOpen: false } : { portMapOpen }),
-  setActivityOpen: (activityOpen) => set(activityOpen ? { activityOpen, portMapOpen: false } : { activityOpen }),
   pushNotice: (text, tone = "error") =>
     set((state) => {
       // Collapse a repeat of the same line, so a retry loop cannot flood the corner.
@@ -261,11 +260,7 @@ export const useStore = create<State>((set, get) => ({
       return { notices: [...without, { id: nextNoticeId++, text, tone }].slice(-4) };
     }),
   dismissNotice: (id) => set((state) => ({ notices: state.notices.filter((n) => n.id !== id) })),
-  showSharing: () => {
-    set({ view: "computer" });
-    // After the page has rendered and been scrolled to its top.
-    window.setTimeout(() => document.getElementById("sharing")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
-  },
+  showSharing: () => set({ view: "computer", computerTab: "sharing" }),
   readComposeFile: async (path) => {
     const file = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
     const reading = `Reading ${file}…`;

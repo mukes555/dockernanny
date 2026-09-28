@@ -1,37 +1,55 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import { MoreIcon } from "./icons";
 import { cx } from "./primitives";
 
 const CloseMenu = createContext<() => void>(() => {});
 
+/** Below this much room under the button, the list opens upwards. */
+const ROOM_FOR_LIST = 280;
+
 /** A "…" button with a short list of actions under it. It opens on click and
- * closes on Escape, a click outside, or a chosen item; the keyboard moves
- * through the items with the arrow keys and lands back on the button. */
-export function Menu({ label, onClose, className, width = "w-44", children }: { label: string; onClose?: () => void; className?: string; width?: string; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+ * closes on Escape, a click outside, a scroll, or a chosen item; the keyboard
+ * moves through the items with the arrow keys and lands back on the button.
+ * The list is drawn on top of the whole window, next to the button, so no
+ * scrolling sidebar or rounded table around the button can cut it off. */
+export function Menu({ label, onClose, className, width = "w-44", icon, children }: { label: string; onClose?: () => void; className?: string; width?: string; icon?: ReactNode; children: ReactNode }) {
+  const [place, setPlace] = useState<CSSProperties | null>(null);
+  const open = place !== null;
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLDivElement>(null);
   // Kept in a ref so the listeners below are set up once per opening.
   const closed = useRef(onClose);
   useEffect(() => {
     closed.current = onClose;
   });
 
+  const openList = () => {
+    const rect = button.current?.getBoundingClientRect();
+    if (!rect) return;
+    const right = window.innerWidth - rect.right;
+    const roomBelow = window.innerHeight - rect.bottom;
+    setPlace(roomBelow < ROOM_FOR_LIST ? { bottom: window.innerHeight - rect.top + 4, right } : { top: rect.bottom + 4, right });
+  };
   const close = (refocus: boolean) => {
-    setOpen(false);
+    setPlace(null);
     closed.current?.();
     if (refocus) button.current?.focus();
   };
 
   useEffect(() => {
     if (!open) return;
-    const items = () => Array.from(root.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? []);
+    const items = () => Array.from(list.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? []);
     items()[0]?.focus();
     const onPointer = (event: PointerEvent) => {
-      const outside = !root.current?.contains(event.target as Node);
+      const target = event.target as Node;
+      const outside = !root.current?.contains(target) && !list.current?.contains(target);
       if (outside) close(false);
     };
+    // The list stays where it was drawn, so anything that moves the button closes it.
+    const onMove = () => close(false);
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -46,21 +64,25 @@ export function Menu({ label, onClose, className, width = "w-44", children }: { 
       const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
       if (step === 0) return;
       event.preventDefault();
-      const list = items();
-      const at = list.indexOf(document.activeElement as HTMLElement);
-      list[(at + step + list.length) % list.length]?.focus();
+      const all = items();
+      const at = all.indexOf(document.activeElement as HTMLElement);
+      all[(at + step + all.length) % all.length]?.focus();
     };
     document.addEventListener("pointerdown", onPointer);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
     return () => {
       document.removeEventListener("pointerdown", onPointer);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   return (
-    // The wrapper positions the list; a caller may place it absolutely instead of relatively.
+    // The wrapper places the button; a caller may place it absolutely instead of relatively.
     <div ref={root} className={className ?? "relative"}>
       <button
         ref={button}
@@ -69,15 +91,18 @@ export function Menu({ label, onClose, className, width = "w-44", children }: { 
         aria-haspopup="menu"
         aria-expanded={open}
         className={cx("rounded-md p-1 text-ink-3 transition hover:bg-surface-2 hover:text-ink", open && "bg-surface-2 text-ink")}
-        onClick={() => (open ? close(false) : setOpen(true))}
+        onClick={() => (open ? close(false) : openList())}
       >
-        <MoreIcon />
+        {icon ?? <MoreIcon />}
       </button>
-      {open ? (
-        <div role="menu" aria-label={label} className={cx("absolute top-full right-0 z-20 mt-1 overflow-hidden rounded-lg border border-line bg-surface-2 py-0.5 shadow-xl", width)}>
-          <CloseMenu.Provider value={() => close(true)}>{children}</CloseMenu.Provider>
-        </div>
-      ) : null}
+      {place
+        ? createPortal(
+            <div ref={list} role="menu" aria-label={label} style={place} className={cx("fixed z-50 overflow-hidden rounded-lg border border-line bg-surface-2 py-0.5 shadow-xl", width)}>
+              <CloseMenu.Provider value={() => close(true)}>{children}</CloseMenu.Provider>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

@@ -336,8 +336,8 @@ export function CopySheet() {
         <Button tone="ghost" onClick={close}>
           Cancel
         </Button>
-        <Button tone="primary" onClick={() => void copy()} disabled={working || planning || !plan || !request() || blocked || (!config && !data)} title={blocked ? "Pick other local ports or leave the source stopped" : undefined}>
-          {working ? <SpinnerIcon /> : null} Copy to {destination ? machineName(destination) : "…"}
+        <Button tone="primary" onClick={() => void copy()} busy={working} disabled={planning || !plan || !request() || blocked || (!config && !data)} title={blocked ? "Pick other local ports or leave the source stopped" : undefined}>
+          Copy to {destination ? machineName(destination) : "…"}
         </Button>
       </DialogActions>
     </Dialog>

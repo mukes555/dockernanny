@@ -4,7 +4,6 @@ import { api, errorMessage } from "../lib/ipc";
 import type { Machine, TerminalInfo } from "../lib/types";
 import { useStore } from "../state/store";
 import { Dialog } from "../ui/Dialog";
-import { SpinnerIcon } from "../ui/icons";
 import { Button, CodeBlock } from "../ui/primitives";
 
 /** The same machine from a terminal: the ssh alias, and an optional Docker
@@ -89,12 +88,12 @@ export function TerminalDialog({ machine, onClose }: { machine: Machine | null; 
               Close
             </Button>
             {machine.docker_context ? (
-              <Button tone="danger" disabled={working} onClick={() => void toggle(false)}>
-                {working ? <SpinnerIcon /> : null} Remove the context
+              <Button tone="danger" busy={working} onClick={() => void toggle(false)}>
+                Remove the context
               </Button>
             ) : (
-              <Button tone="primary" disabled={working} onClick={() => void toggle(true)}>
-                {working ? <SpinnerIcon /> : null} Create context {contextName}
+              <Button tone="primary" busy={working} onClick={() => void toggle(true)}>
+                Create context {contextName}
               </Button>
             )}
           </div>

@@ -180,12 +180,37 @@ export function MoreIcon({ size = 14, className }: IconProps) {
   );
 }
 
-export function HelpIcon({ size = 14, className }: IconProps) {
+export function LifebuoyIcon({ size = 14, className }: IconProps) {
   return (
     <svg {...base(size)} className={className} aria-hidden>
       <circle cx="12" cy="12" r="9" />
-      <path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.6" />
-      <path d="M12 17h.01" />
+      <circle cx="12" cy="12" r="3.5" />
+      <path d="m5.6 5.6 3.9 3.9M14.5 14.5l3.9 3.9M18.4 5.6l-3.9 3.9M9.5 14.5l-3.9 3.9" />
+    </svg>
+  );
+}
+
+export function StacksIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className} aria-hidden>
+      <path d="m12 3 9 4.5-9 4.5-9-4.5z" />
+      <path d="m3 12 9 4.5 9-4.5M3 16.5 12 21l9-4.5" />
+    </svg>
+  );
+}
+
+export function PlugIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className} aria-hidden>
+      <path d="M9 3v4M15 3v4M6 7h12v4a6 6 0 0 1-12 0zM12 17v4" />
+    </svg>
+  );
+}
+
+export function ChevronRightIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg {...base(size)} className={className} aria-hidden>
+      <path d="m9 6 6 6-6 6" />
     </svg>
   );
 }

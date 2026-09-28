@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import { api, errorMessage } from "../lib/ipc";
 import type { ForwardState, Stack, StackStatus } from "../lib/types";
 import { useStore } from "../state/store";
-import { SpinnerIcon } from "../ui/icons";
 import { Button, cx } from "../ui/primitives";
 import type { ChipTone } from "../ui/primitives";
 
@@ -62,8 +61,8 @@ export function BridgeControl({ stack }: { stack: Stack }) {
       <span className={cx("truncate", bridge.state === "connecting" ? "text-warning" : "text-ink-3")} title={bridge.text}>
         {bridge.text}
       </span>
-      <Button size="sm" tone="ghost" onClick={() => void flip()} disabled={working} title={stack.forward_ports ? "Drop the localhost ports for this stack" : "Hand this stack's ports to localhost again"}>
-        {working ? <SpinnerIcon size={10} /> : null} {stack.forward_ports ? "Stop bridge" : "Start bridge"}
+      <Button size="sm" tone="ghost" onClick={() => void flip()} busy={working} title={stack.forward_ports ? "Drop the localhost ports for this stack" : "Hand this stack's ports to localhost again"}>
+        {stack.forward_ports ? "Stop bridge" : "Start bridge"}
       </Button>
       {error ? <span className="text-critical">{error}</span> : null}
     </div>

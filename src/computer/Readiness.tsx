@@ -4,7 +4,7 @@ import { api, errorMessage } from "../lib/ipc";
 import type { DoctorRow } from "../lib/types";
 import { DoctorRows } from "../machines/DoctorRows";
 import { useStore } from "../state/store";
-import { RefreshIcon, SpinnerIcon } from "../ui/icons";
+import { RefreshIcon } from "../ui/icons";
 import { Button, Card } from "../ui/primitives";
 
 /** What this computer needs before it can use a machine, in checking order.
@@ -80,8 +80,8 @@ export function Readiness() {
       title="Ready to use other machines?"
       description={allReady ? "Everything this computer needs is here." : "What this computer needs to reach a machine over ssh."}
       actions={
-        <Button size="sm" tone="ghost" onClick={check} disabled={checking} aria-label="Check again">
-          {checking ? <SpinnerIcon /> : <RefreshIcon />}
+        <Button size="sm" tone="ghost" onClick={check} busy={checking} aria-label="Check again">
+          <RefreshIcon />
         </Button>
       }
     >
@@ -89,16 +89,16 @@ export function Readiness() {
       {canInstallTools ? (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-surface-2/40 px-3 py-2.5">
           <span className="text-[12px] text-ink-2">Installs openssh-client and rsync inside the WSL distribution with apt-get, as its root user. Windows is not changed.</span>
-          <Button tone="primary" onClick={() => void installTools()} disabled={installing}>
-            {installing ? <SpinnerIcon /> : null} Install in WSL
+          <Button tone="primary" onClick={() => void installTools()} busy={installing}>
+            Install in WSL
           </Button>
         </div>
       ) : null}
       {keyMissing ? (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-surface-2/40 px-3 py-2.5">
           <span className="text-[12px] text-ink-2">A new ed25519 key without a passphrase, saved where the row above says. Nothing leaves this computer.</span>
-          <Button tone="primary" onClick={() => void createKey()} disabled={creating}>
-            {creating ? <SpinnerIcon /> : null} Create a key
+          <Button tone="primary" onClick={() => void createKey()} busy={creating}>
+            Create a key
           </Button>
         </div>
       ) : null}

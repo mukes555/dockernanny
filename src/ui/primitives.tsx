@@ -5,7 +5,7 @@ import { useState } from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
 
 import { api } from "../lib/ipc";
-import { ArrowLeftIcon } from "./icons";
+import { SpinnerIcon } from "./icons";
 
 export function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
@@ -14,23 +14,34 @@ export function cx(...parts: Array<string | false | null | undefined>): string {
 type Tone = "primary" | "secondary" | "ghost" | "danger";
 
 const BUTTON: Record<Tone, string> = {
-  primary: "bg-accent text-white hover:brightness-110 disabled:opacity-40",
-  secondary: "border border-line bg-surface-2 text-ink-2 hover:text-ink disabled:opacity-40",
-  ghost: "text-ink-2 hover:bg-surface-2 hover:text-ink disabled:opacity-40",
-  danger: "border border-line text-ink-2 hover:border-critical hover:text-critical disabled:opacity-40",
+  primary: "bg-accent text-white hover:brightness-110",
+  secondary: "border border-line bg-surface-2 text-ink-2 hover:text-ink",
+  ghost: "text-ink-2 hover:bg-surface-2 hover:text-ink",
+  danger: "border border-line text-ink-2 hover:border-critical hover:text-critical",
 };
 
+/** `busy` shows a spinner over the label instead of beside it: the button
+ * keeps its exact size, so nothing around it jumps while it works. The label
+ * is only faded out, so screen readers still hear what the button is. */
 export function Button({
   tone = "secondary",
   size = "md",
+  busy = false,
   className,
   children,
+  disabled,
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { tone?: Tone; size?: "sm" | "md" }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { tone?: Tone; size?: "sm" | "md"; busy?: boolean }) {
   const pad = size === "sm" ? "px-2.5 py-1 text-[12px]" : "px-3.5 py-1.5 text-[13px]";
+  const faded = disabled && !busy;
   return (
-    <button className={cx("inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition", BUTTON[tone], pad, className)} {...rest}>
-      {children}
+    <button disabled={disabled || busy} aria-busy={busy || undefined} className={cx("relative inline-flex items-center justify-center rounded-lg font-medium transition", BUTTON[tone], pad, faded && "opacity-40", busy && "cursor-wait", className)} {...rest}>
+      <span className={cx("inline-flex items-center gap-1.5", busy && "opacity-0")}>{children}</span>
+      {busy ? (
+        <span className="absolute inset-0 flex items-center justify-center">
+          <SpinnerIcon size={size === "sm" ? 12 : 14} />
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -52,14 +63,16 @@ export function Chip({ tone = "neutral", children, className, title }: { tone?: 
   );
 }
 
+/** A titled block of a page. The title is a real heading, so a page reads
+ * as sections instead of a column of look-alike boxes. */
 export function Card({ title, description, actions, children, className }: { title?: ReactNode; description?: ReactNode; actions?: ReactNode; children?: ReactNode; className?: string }) {
   return (
-    <section className={cx("rounded-2xl border border-line bg-surface p-4", className)}>
+    <section className={cx("rounded-xl border border-line bg-surface p-5", className)}>
       {title || actions ? (
-        <header className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            {title ? <h2 className="text-[11px] uppercase tracking-[0.14em] text-ink-3">{title}</h2> : null}
-            {description ? <p className="mt-1 text-[13px] text-ink-2">{description}</p> : null}
+            {title ? <h2 className="text-[14px] font-semibold text-ink">{title}</h2> : null}
+            {description ? <p className="mt-1 text-[13px] leading-relaxed text-ink-2">{description}</p> : null}
           </div>
           {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
         </header>
@@ -81,8 +94,8 @@ function widthOf(className: string | undefined): string {
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="text-[11px] uppercase tracking-[0.12em] text-ink-3">{label}</span>
-      <div className="mt-1">{children}</div>
+      <span className="text-[12px] font-medium text-ink-2">{label}</span>
+      <div className="mt-1.5">{children}</div>
       {hint ? <span className="mt-1 block text-[11px] text-ink-3">{hint}</span> : null}
     </label>
   );
@@ -131,29 +144,6 @@ export function EmptyPanel({ icon, title, action, children, className }: { icon?
 
 export function Eyebrow({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={cx("text-[11px] uppercase tracking-[0.14em] text-ink-3", className)}>{children}</div>;
-}
-
-/** The top of a sub-page: a back link, then the eyebrow and title, with room
- * for actions on the right. Used so Settings, the guide and the pages all
- * begin the same way. */
-export function PageHeader({ eyebrow, title, description, onBack, actions }: { eyebrow: string; title: string; description?: ReactNode; onBack?: () => void; actions?: ReactNode }) {
-  return (
-    <header>
-      {onBack ? (
-        <button type="button" onClick={onBack} className="mb-3 inline-flex items-center gap-1 text-[12px] text-ink-3 transition hover:text-ink">
-          <ArrowLeftIcon size={13} /> Back
-        </button>
-      ) : null}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <Eyebrow>{eyebrow}</Eyebrow>
-          <h1 className="mt-1 text-xl font-semibold tracking-tight text-ink">{title}</h1>
-          {description ? <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-ink-2">{description}</p> : null}
-        </div>
-        {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
-      </div>
-    </header>
-  );
 }
 
 /** A command the user is meant to paste into a terminal, with a copy button

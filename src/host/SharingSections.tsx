@@ -39,12 +39,11 @@ export function SharingSections() {
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <Eyebrow>Sharing</Eyebrow>
-          <h2 className="mt-1 text-lg font-semibold tracking-tight">Let other computers run their stacks here</h2>
-          <p className="mt-2 text-[13px] leading-relaxed text-ink-2">Two steps: make this computer ready, then pair it with the computer that will use it. After that, that computer runs Docker stacks here by itself.</p>
+          <h2 className="text-[15px] font-semibold text-ink">Let other computers run their stacks here</h2>
+          <p className="mt-1 text-[13px] leading-relaxed text-ink-2">Two steps: make this computer ready, then pair it with the computer that will use it. After that, that computer runs Docker stacks here by itself.</p>
         </div>
         {settings?.share_this_computer ? (
-          <Button size="sm" tone="ghost" className="mt-5 shrink-0" onClick={() => run(() => saveSettings({ ...settings, share_this_computer: false }))} title="Stop sharing: the pairing port closes and nothing else is touched. Paired computers keep their keys and can be let back in by turning it on again.">
+          <Button size="sm" className="shrink-0" onClick={() => run(() => saveSettings({ ...settings, share_this_computer: false }))} title="Stop sharing: the pairing port closes and nothing else is touched. Paired computers keep their keys and can be let back in by turning it on again.">
             Turn sharing off
           </Button>
         ) : null}
@@ -132,8 +131,8 @@ function StatusSection({ host, onError }: { host: HostSnapshot; onError: (messag
       <SetupChanges os={os} open={!allOk} keepAwake={keepAwake} onKeepAwake={setKeepAwake} publicNetwork={publicNetwork} makePrivate={makePrivate} onMakePrivate={setMakePrivate} />
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button tone="primary" onClick={setup} disabled={host.setup_running}>
-          {host.setup_running ? <SpinnerIcon /> : null} {allOk ? "Run set up again" : "Set up this computer"}
+        <Button tone="primary" onClick={setup} busy={host.setup_running}>
+          {allOk ? "Run set up again" : "Set up this computer"}
         </Button>
         {host.setup_running ? <span className="text-[13px] text-ink-2">Working. This can take a few minutes.</span> : null}
         {settings ? <Toggle checked={settings.start_at_login} onChange={(on) => void saveSettings({ ...settings, start_at_login: on }).catch((err) => onError(errorMessage(err)))} label="Start at login" /> : null}
@@ -215,7 +214,7 @@ function UsersSection({ host }: { host: HostSnapshot }) {
   const nameOf = (computer: { name: string | null; address: string }) => (computer.name ? computer.name : computer.address);
   return (
     <Card title="Computers using this one">
-      <div className="text-[10px] uppercase tracking-[0.12em] text-ink-3">Connected now</div>
+      <div className="text-[12px] font-semibold text-ink-2">Connected now</div>
       {host.connected.length === 0 ? <p className="mt-1 text-[13px] text-ink-2">No computer is connected right now.</p> : null}
       <div className="mt-1 space-y-1">
         {host.connected.map((computer) => (
@@ -227,7 +226,7 @@ function UsersSection({ host }: { host: HostSnapshot }) {
           </div>
         ))}
       </div>
-      <div className="mt-4 text-[10px] uppercase tracking-[0.12em] text-ink-3">Paired</div>
+      <div className="mt-4 text-[12px] font-semibold text-ink-2">Paired</div>
       {host.paired.length === 0 ? (
         <p className="mt-1 text-[13px] text-ink-2">
           {host.ready_for_pairing ? "No computer has paired yet. Turn pairing on above and type the code on the other computer." : "No computer has paired yet. Pairing opens once step 1 is done."}

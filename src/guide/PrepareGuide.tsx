@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 
-import { useStore } from "../state/store";
-import { CodeBlock, cx, Eyebrow, PageHeader } from "../ui/primitives";
+import { Page, Tabs } from "../ui/Page";
+import { CodeBlock } from "../ui/primitives";
 import { SetupScriptCard } from "./SetupScriptCard";
 
 type Os = "windows" | "macos" | "linux";
@@ -40,38 +40,23 @@ function rememberTab(os: Os) {
  * computer's public key. dockerNanny never changes the machine by itself;
  * the commands are meant to be run there. */
 export function PrepareGuide() {
-  const setView = useStore((state) => state.setView);
   const [os, setOsState] = useState<Os>(rememberedTab);
   const setOs = (next: Os) => {
     setOsState(next);
     rememberTab(next);
   };
   return (
-    <div className="mx-auto max-w-2xl pb-10">
-      <PageHeader
-        eyebrow="Guide"
-        title="Prepare another machine"
-        onBack={() => setView("stacks")}
-        description="A machine needs four things: sshd reachable on your network, Docker Engine with the compose plugin, rsync, and this computer's public key. Container ports never open on the network; dockerNanny reaches them through the ssh connection. The quickest way is dockerNanny on the machine with Share this computer turned on: it does all of this and shows a pairing code for Add machine. The steps below are for doing it by hand."
-      />
-
-      <div className="mt-5 flex gap-1 rounded-xl border border-line bg-surface-2/60 p-1">
-        {TABS.map((tab) => (
-          <button
-            key={tab.os}
-            type="button"
-            className={cx("flex-1 rounded-lg px-3 py-1.5 text-[13px] font-medium transition", os === tab.os ? "bg-surface text-ink shadow" : "text-ink-3 hover:text-ink")}
-            onClick={() => setOs(tab.os)}
-          >
-            {tab.label}
-          </button>
-        ))}
+    <Page title="Prepare a machine" summary="What another computer needs before it can run stacks for this one" width="max-w-3xl" tabs={<Tabs value={os} onChange={setOs} tabs={TABS.map((tab) => ({ id: tab.os, label: tab.label }))} />}>
+      <p className="text-[13px] leading-relaxed text-ink-2">
+        A machine needs four things: sshd reachable on your network, Docker Engine with the compose plugin, rsync, and this computer's public key. Container ports never open on the network; dockerNanny reaches them through the ssh connection. The quickest way is dockerNanny on the
+        machine with Share this computer turned on: it does all of this and shows a pairing code for Add machine. The steps below are for doing it by hand.
+      </p>
+      <div>
+        {os === "windows" ? <WindowsSteps /> : null}
+        {os === "macos" ? <MacSteps /> : null}
+        {os === "linux" ? <LinuxSteps /> : null}
       </div>
-
-      {os === "windows" ? <WindowsSteps /> : null}
-      {os === "macos" ? <MacSteps /> : null}
-      {os === "linux" ? <LinuxSteps /> : null}
-    </div>
+    </Page>
   );
 }
 
@@ -89,7 +74,7 @@ function WindowsSteps() {
 
       <SetupScriptCard />
 
-      <Eyebrow className="mt-8">Or by hand</Eyebrow>
+      <h2 className="mt-8 text-[13px] font-semibold text-ink-2">Or by hand</h2>
 
       <Step n={2} title="Install Docker Engine inside Ubuntu" where="Ubuntu terminal">
         <CodeBlock
@@ -214,7 +199,7 @@ sudo systemctl enable --now ssh`}
 
 function Step({ n, title, where, children }: { n: number; title: string; where: string; children: ReactNode }) {
   return (
-    <section className="mt-6 rounded-2xl border border-line bg-surface p-4">
+    <section className="mt-5 rounded-xl border border-line bg-surface p-5">
       <div className="flex items-baseline gap-3">
         <span className="tabular text-[11px] font-semibold text-accent">{String(n).padStart(2, "0")}</span>
         <h2 className="text-[14px] font-semibold text-ink">{title}</h2>

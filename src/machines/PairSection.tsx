@@ -3,7 +3,6 @@ import { useState } from "react";
 import { api, errorMessage } from "../lib/ipc";
 import type { Machine } from "../lib/types";
 import { useStore } from "../state/store";
-import { SpinnerIcon } from "../ui/icons";
 import { Button, Field, TextInput } from "../ui/primitives";
 
 /** The machine shows a pairing code (dockerNanny with sharing on): type what its screen shows, done. */
@@ -68,8 +67,8 @@ export function PairSection({ keyPath, onPaired }: { keyPath: string; onPaired: 
         </div>
       ) : null}
       <div className="mt-3 flex justify-end">
-        <Button tone="primary" onClick={() => void pair()} disabled={working || !address.trim() || code.length !== 6}>
-          {working ? <SpinnerIcon /> : null} Pair
+        <Button tone="primary" onClick={() => void pair()} busy={working} disabled={!address.trim() || code.length !== 6}>
+          Pair
         </Button>
       </div>
     </div>
