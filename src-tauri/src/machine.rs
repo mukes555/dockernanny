@@ -129,8 +129,8 @@ pub async fn poll(ssh: &Ssh, machine: &Machine) -> MachineStats {
 async fn poll_with(ssh: &Ssh, machine: &Machine, full: Option<&Probe>) -> MachineStats {
     let offline = |error: String| MachineStats { error: Some(error), ..Default::default() };
     let script = probe::script(full.is_none());
-    match timeout(POLL_TIMEOUT, ssh.run(&machine.alias(), &script)).await {
-        Ok(Ok(out)) if out.ok() => {
+    match ssh.run_within(&machine.alias(), &script, POLL_TIMEOUT).await {
+        Ok(out) if out.ok() => {
             let read = probe::parse(&out.stdout);
             let probe = match full {
                 Some(full) => probe::with_fixed_facts(read, full),
@@ -138,9 +138,8 @@ async fn poll_with(ssh: &Ssh, machine: &Machine, full: Option<&Probe>) -> Machin
             };
             MachineStats { online: true, probe, error: None }
         }
-        Ok(Ok(out)) => offline(first_line(&out.stderr)),
-        Ok(Err(err)) => offline(format!("{err:#}")),
-        Err(_) => offline("timed out".into()),
+        Ok(out) => offline(first_line(&out.stderr)),
+        Err(err) => offline(format!("{err:#}")),
     }
 }
 
@@ -150,10 +149,12 @@ async fn poll_with(ssh: &Ssh, machine: &Machine, full: Option<&Probe>) -> Machin
 /// disk are then the WSL VM's.
 pub async fn probe_this_computer() -> Probe {
     use tokio::io::AsyncWriteExt;
+    // kill_on_drop: a probe that times out (a stuck wsl.exe or PowerShell) is ended, not orphaned.
     let spawned = crate::tools::unix("sh")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
         .spawn();
     let Ok(mut child) = spawned else { return Probe::default() };
     if let Some(mut stdin) = child.stdin.take() {
@@ -197,7 +198,9 @@ pub fn spawn_stats_loop(app: AppHandle) {
                     (machine.id, stats, full.is_none())
                 });
             }
-            while let Some(Ok((machine_id, stats, was_full))) = polls.join_next().await {
+            while let Some(joined) = polls.join_next().await {
+                // A poll task that died must not drop the other machines' readings.
+                let Ok((machine_id, stats, was_full)) = joined else { continue };
                 let count = failures.entry(machine_id.clone()).or_default();
                 *count = if stats.online { 0 } else { *count + 1 };
                 remember(&mut full_readings, &machine_id, &stats, was_full);

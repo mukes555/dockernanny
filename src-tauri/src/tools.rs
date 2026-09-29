@@ -156,9 +156,13 @@ pub fn make_private_dirs(app_home: &Path, names: &[&str]) -> anyhow::Result<()> 
 /// into the app folder, owner-only, and on Windows mirrors it into the
 /// tools' home. The app folder copy is the one the app reads back.
 pub fn write_file(app_home: &Path, name: &str, contents: &str) -> anyhow::Result<()> {
+    // Written beside and renamed into place: ssh starts every few seconds
+    // and must never read a half-written config.
     let local = app_home.join(name);
-    std::fs::write(&local, contents).with_context(|| format!("write {}", local.display()))?;
-    restrict_to_owner(&local, 0o600);
+    let temp = app_home.join(format!("{name}.tmp"));
+    std::fs::write(&temp, contents).with_context(|| format!("write {}", temp.display()))?;
+    restrict_to_owner(&temp, 0o600);
+    std::fs::rename(&temp, &local).with_context(|| format!("replace {}", local.display()))?;
     #[cfg(windows)]
     wsl::put_file(&format!("{}/{name}", home(app_home)), contents.as_bytes())?;
     Ok(())
@@ -351,7 +355,8 @@ mod wsl {
 
     /// Writes bytes to a path inside the distribution, owner-only, creating the folder.
     pub fn put_file(path: &str, contents: &[u8]) -> anyhow::Result<()> {
-        sh("umask 077 && mkdir -p \"$(dirname \"$1\")\" && cat > \"$1\"", &[path.to_string()], Some(contents))
+        // Beside, then renamed into place, so ssh never reads half a file.
+        sh("umask 077 && mkdir -p \"$(dirname \"$1\")\" && cat > \"$1.tmp\" && mv -f \"$1.tmp\" \"$1\"", &[path.to_string()], Some(contents))
     }
 }
 

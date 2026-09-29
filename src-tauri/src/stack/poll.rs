@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
 use tokio::task::JoinSet;
-use tokio::time::timeout;
 
 use super::{derive_phase, set_status, Stack};
 use crate::compose;
@@ -37,13 +36,15 @@ pub fn spawn_status_loop(app: AppHandle) {
                 let Some(machine) = state.store.machine(&machine_id) else { continue };
                 let ssh: Ssh = state.ssh.clone();
                 polls.spawn(async move {
-                    let out = timeout(POLL_TIMEOUT, ssh.run(&machine.alias(), &ps_script(&stacks))).await;
+                    let out = ssh.run_within(&machine.alias(), &ps_script(&stacks), POLL_TIMEOUT).await;
                     (stacks, out)
                 });
             }
-            while let Some(Ok((stacks, out))) = polls.join_next().await {
+            while let Some(joined) = polls.join_next().await {
+                // A poll task that died must not drop the other machines' answers.
+                let Ok((stacks, out)) = joined else { continue };
                 // Unreachable right now: keep the last known picture.
-                let Ok(Ok(out)) = out else { continue };
+                let Ok(out) = out else { continue };
                 let sections = split_by_marker(&out.stdout);
                 for stack in stacks {
                     let section = sections.get(&stack.id).map(String::as_str).unwrap_or("");

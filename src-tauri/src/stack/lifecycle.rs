@@ -159,7 +159,9 @@ pub async fn remove(app: AppHandle, stack: Stack, remove_volumes: bool) -> anyho
     stop_watcher(&app, &stack.id);
     if let Some(machine) = state.store.machine(&stack.machine_id) {
         let _ = down(app.clone(), stack.clone(), remove_volumes).await;
-        let _ = state.ssh.run(&machine.alias(), &format!("rm -rf {}", shell_quote(&stack.remote_dir()))).await;
+        // A project folder with node_modules can take a while to delete.
+        let remove_folder = format!("rm -rf {}", shell_quote(&stack.remote_dir()));
+        let _ = state.ssh.run_within(&machine.alias(), &remove_folder, std::time::Duration::from_secs(600)).await;
     }
     forward::stop(&app, &stack.id);
     let mut stacks = state.store.stacks();
