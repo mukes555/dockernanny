@@ -288,10 +288,13 @@ export interface ScriptRequest {
   make_private: boolean;
 }
 
-/** What the terminal dialog shows: the config as ssh reads it, and the WSL distribution on Windows. */
+/** What the terminal dialog shows for one machine: the config as ssh reads
+ * it, the WSL distribution on Windows, the alias and the Docker context name. */
 export interface TerminalInfo {
   ssh_config: string;
   wsl_distro: string | null;
+  alias: string;
+  context_name: string;
 }
 
 export interface ServeInfo {
@@ -454,8 +457,8 @@ export interface HostPairing {
   note: string | null;
 }
 
+/** The sharing role's view of this computer; which OS it is, is `HostOs` in the store. */
 export interface HostSnapshot {
-  os: string;
   probed: boolean;
   rows: HostRow[];
   user: string | null;

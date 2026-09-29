@@ -1,43 +1,50 @@
 import { useEffect, useState } from "react";
 
-import { api, errorMessage } from "../lib/ipc";
+import { api } from "../lib/ipc";
 import type { Machine, PairedMachine } from "../lib/types";
 import { useStore } from "../state/store";
 import { Dialog } from "../ui/Dialog";
-import { Button, Eyebrow, Field, TextInput } from "../ui/primitives";
+import { Button, ErrorLine, Eyebrow, Field, Inset, TextInput } from "../ui/primitives";
+import { useAction } from "../ui/useAction";
 import { DoctorRows } from "./DoctorRows";
 import { PairSection } from "./PairSection";
 
-/** Describe a machine, check it live, add it once SSH works. */
+const NO_ROWS: never[] = [];
+
+/** Pair with a machine that shows a code, or describe one by hand, check it
+ * live, and add it once SSH works. The form mounts with the dialog, so every
+ * opening starts empty with a fresh id. */
 export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Dialog open={open} onClose={onClose} eyebrow="Machine" title="Add a machine" width={560} closeOnBackdrop={false}>
+      <AddMachineForm onClose={onClose} />
+    </Dialog>
+  );
+}
+
+function AddMachineForm({ onClose }: { onClose: () => void }) {
   const setMachines = useStore((state) => state.setMachines);
   const resetDoctor = useStore((state) => state.resetDoctor);
-  const doctorRows = useStore((state) => state.doctor);
   const [draftId, setDraftId] = useState("");
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
   const [user, setUser] = useState("");
   const [port, setPort] = useState("22");
   const [keyPath, setKeyPath] = useState("");
-  const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  /** Set once a machine paired: the machine is already saved, only the doctor is left. */
+  /** Set once a machine paired: the machine is already saved, only the check is left. */
   const [pairing, setPairing] = useState<PairedMachine | null>(null);
+  const check = useAction("inline");
+  const adding = useAction("inline");
   const paired = pairing?.machine ?? null;
-
-  // A fresh id and the default key every time the dialog opens.
-  useEffect(() => {
-    if (!open) return;
-    setChecked(false);
-    setError(null);
-    setPairing(null);
-    void api.newMachineId().then(setDraftId).catch(console.warn);
-    void api.defaultKeyPath().then(setKeyPath).catch(console.warn);
-  }, [open]);
-
-  const rows = doctorRows[paired?.id ?? draftId] ?? [];
+  const rows = useStore((state) => state.doctor[paired?.id ?? draftId] ?? NO_ROWS);
   const sshOk = rows.some((row) => row.key === "ssh" && row.ok);
+
+  useEffect(() => {
+    api.newMachineId().then(setDraftId).catch(console.warn);
+    api.defaultKeyPath().then(setKeyPath).catch(console.warn);
+  }, []);
+
   const draft = (): Machine =>
     paired ?? {
       id: draftId,
@@ -60,45 +67,22 @@ export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: ()
     }
   };
 
-  const onPaired = (result: PairedMachine) => {
-    const machine = result.machine;
-    setPairing(result);
-    setChecking(true);
+  const runCheck = async (machine: Machine) => {
     resetDoctor(machine.id);
-    void api
-      .doctor(machine)
-      .then(() => setChecked(true))
-      .catch((err) => setError(errorMessage(err)))
-      .finally(() => setChecking(false));
+    const passed = await check.run(() => api.doctor(machine));
+    if (passed) setChecked(true);
   };
 
-  const check = async () => {
-    setError(null);
-    setChecking(true);
-    resetDoctor(draftId);
-    try {
-      await api.doctor(draft());
-      setChecked(true);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setChecking(false);
-    }
+  const onPaired = (result: PairedMachine) => {
+    setPairing(result);
+    void runCheck(result.machine);
   };
 
   const add = async () => {
-    setError(null);
-    try {
-      setMachines(await api.addMachine(draft()));
-      resetDoctor(draftId);
-      setName("");
-      setHost("");
-      setUser("");
-      setPort("22");
-      onClose();
-    } catch (err) {
-      setError(errorMessage(err));
-    }
+    const added = await adding.run(async () => setMachines(await api.addMachine(draft())));
+    if (!added) return;
+    resetDoctor(draftId);
+    onClose();
   };
 
   const browseKey = async () => {
@@ -106,8 +90,11 @@ export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: ()
     if (chosen) afterEdit(setKeyPath)(chosen);
   };
 
+  const hasAddress = host.trim() !== "" && user.trim() !== "";
+  const hasName = name.trim() !== "";
+
   return (
-    <Dialog open={open} onClose={onClose} eyebrow="Machine" title="Add a machine" width={560} closeOnBackdrop={false}>
+    <>
       {paired ? (
         <>
           <p className="mt-1 text-[13px] text-ink-2">
@@ -147,40 +134,42 @@ export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: ()
         </Field>
       </div>
 
-      {rows.length > 0 || checking ? (
+      {rows.length > 0 || check.busy ? (
         <div className="mt-5">
-          <DoctorRows rows={rows} checking={checking} />
+          <DoctorRows rows={rows} checking={check.busy} />
         </div>
       ) : null}
 
-      {error ? <div className="mt-3 text-[12px] text-critical">{error}</div> : null}
+      <ErrorLine error={check.error ?? adding.error} className="mt-3" />
 
       <div className="mt-6 flex items-center justify-between gap-2">
         <Button tone="ghost" onClick={onClose}>
           {paired ? "Close" : "Cancel"}
         </Button>
         {paired ? (
-          <Button tone="primary" onClick={onClose} busy={checking}>
+          <Button tone="primary" onClick={onClose} busy={check.busy}>
             Done
           </Button>
         ) : (
           <div className="flex gap-2">
-            <Button onClick={() => void check()} busy={checking} disabled={!host.trim() || !user.trim()}>
+            <Button onClick={() => void runCheck(draft())} busy={check.busy} disabled={!hasAddress}>
               {checked ? "Check again" : "Check connection"}
             </Button>
-            <Button
-              tone="primary"
-              onClick={() => void add()}
-              disabled={!sshOk || checking || !name.trim()}
-              title={!sshOk ? "Run the connection check first" : !name.trim() ? "Give it a name" : undefined}
-            >
+            <Button tone="primary" onClick={() => void add()} busy={adding.busy} disabled={!sshOk || check.busy || !hasName} title={whyNotYet(sshOk, hasName)}>
               Add machine
             </Button>
           </div>
         )}
       </div>
-    </Dialog>
+    </>
   );
+}
+
+/** What Add machine waits for, said on hover. */
+function whyNotYet(sshOk: boolean, hasName: boolean): string | undefined {
+  if (!sshOk) return "Run the connection check first";
+  if (!hasName) return "Give it a name";
+  return undefined;
 }
 
 /** What the machine's sharing page shows too, so the two screens can be
@@ -188,7 +177,7 @@ export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: ()
 function Fingerprints({ hostKey, ownKey }: { hostKey: string | null; ownKey: string | null }) {
   if (!hostKey && !ownKey) return null;
   return (
-    <div className="mt-3 rounded-lg border border-line bg-surface-2 px-3 py-2 text-[12px] text-ink-2">
+    <Inset className="mt-3 text-[12px] text-ink-2">
       <div>The machine's screen shows the same two keys. If one differs, remove this machine: someone may be in between.</div>
       {hostKey ? (
         <div className="mt-1">
@@ -200,6 +189,6 @@ function Fingerprints({ hostKey, ownKey }: { hostKey: string | null; ownKey: str
           This computer's key <span className="mono selectable text-ink">{ownKey}</span>
         </div>
       ) : null}
-    </div>
+    </Inset>
   );
 }

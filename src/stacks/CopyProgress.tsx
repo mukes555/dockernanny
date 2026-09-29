@@ -5,7 +5,7 @@ import type { CopyProgress, CopyStep } from "../lib/types";
 import { useStore } from "../state/store";
 import { Drawer } from "../ui/Drawer";
 import { CheckIcon, SpinnerIcon, XIcon } from "../ui/icons";
-import { Button, cx } from "../ui/primitives";
+import { Button, cx, Inset } from "../ui/primitives";
 import { useNow } from "../ui/useNow";
 
 /** The side panel for one copy: every step and where it stands, the bytes
@@ -118,7 +118,7 @@ function TransferRow({ progress }: { progress: CopyProgress }) {
   const current = progress.current!;
   const percent = current.total_bytes ? Math.min(100, (current.bytes / current.total_bytes) * 100) : null;
   return (
-    <div className="mt-4 rounded-xl border border-line bg-surface-2/50 px-3 py-2.5">
+    <Inset className="mt-4">
       <div className="flex items-center justify-between gap-3 text-[12px]">
         <span className="truncate text-ink">{current.label}</span>
         <span className="tabular shrink-0 text-ink-2">
@@ -142,6 +142,6 @@ function TransferRow({ progress }: { progress: CopyProgress }) {
           <div className="h-full w-1/3 animate-pulse rounded-full bg-accent/60" />
         )}
       </div>
-    </div>
+    </Inset>
   );
 }

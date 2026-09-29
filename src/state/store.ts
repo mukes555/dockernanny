@@ -54,13 +54,10 @@ export interface CopyIntent {
   /** Opened from this computer's page to bring a stack back here. */
   toThisComputer?: boolean;
 }
-/** What a machine's rail menu can ask its page to do: the page holds the
- * check's rows, the terminal dialog and the remove question. */
-export type MachineAction = "check" | "terminal" | "remove";
-export interface MachineAsk {
-  machineId: string;
-  action: MachineAction;
-}
+/** The tabs of a machine's page. */
+export type MachineTab = "stacks" | "containers" | "details";
+/** What a machine's page can open over itself, from the page or from the sidebar's menu. */
+export type MachineDialog = "terminal" | "remove";
 
 const MAX_HOST_LOG_LINES = 600;
 const MAX_OUTPUT_LINES = 400;
@@ -104,9 +101,19 @@ interface State {
   setUpdateProgress: (fraction: number | null) => void;
   /** The Add machine dialog, opened from the rail or from the welcome. */
   addMachineOpen: boolean;
-  /** Something chosen in a machine's rail menu, carried out on its page. */
-  machineAsk: MachineAsk | null;
-  askMachine: (machineId: string, action: MachineAction) => void;
+  /** The open machine page's tab and dialog. They live here, not in the page,
+   * so the sidebar's menu can open them directly. */
+  machineTab: MachineTab;
+  machineDialog: MachineDialog | null;
+  /** Machines whose connection check runs right now. */
+  checking: Record<string, boolean>;
+  setMachineTab: (tab: MachineTab) => void;
+  /** Opens the machine's page with that dialog over it; null closes it. */
+  openMachineDialog: (machineId: string, dialog: MachineDialog | null) => void;
+  /** Runs the connection check; its rows arrive as events and show on the page's Details tab. */
+  checkMachine: (machine: Machine) => Promise<void>;
+  /** Reads the machine's numbers now instead of at the next poll. */
+  refreshMachine: (machine: Machine) => void;
   /** Which OS this computer runs, for saying what each role needs here. */
   os: HostOs;
   machines: Machine[];
@@ -216,7 +223,9 @@ export const useStore = create<State>((set, get) => ({
   updateStatus: null,
   updateProgress: null,
   addMachineOpen: false,
-  machineAsk: null,
+  machineTab: "stacks",
+  machineDialog: null,
+  checking: {},
   os: "macos",
   machines: [],
   stats: {},
@@ -251,12 +260,36 @@ export const useStore = create<State>((set, get) => ({
   setUpdateStatus: (updateStatus) => set({ updateStatus, update: updateStatus.available }),
   setUpdateProgress: (updateProgress) => set({ updateProgress }),
   setAddMachineOpen: (addMachineOpen) => set({ addMachineOpen }),
-  askMachine: (machineId, action) => set({ machineAsk: { machineId, action }, selectedMachineId: machineId, view: "stacks" }),
-  selectMachine: (selectedMachineId) => set({ selectedMachineId, view: "stacks" }),
+  selectMachine: (selectedMachineId) => set({ selectedMachineId, view: "stacks", machineTab: "stacks", machineDialog: null }),
+  setMachineTab: (machineTab) => set({ machineTab }),
+  openMachineDialog: (machineId, machineDialog) =>
+    set((state) => {
+      const samePage = state.view === "stacks" && state.selectedMachineId === machineId;
+      return { selectedMachineId: machineId, view: "stacks", machineDialog, machineTab: samePage ? state.machineTab : "stacks" };
+    }),
+  checkMachine: async (machine) => {
+    set((state) => ({
+      selectedMachineId: machine.id,
+      view: "stacks",
+      machineTab: "details",
+      machineDialog: null,
+      checking: { ...state.checking, [machine.id]: true },
+      doctor: { ...state.doctor, [machine.id]: [] },
+    }));
+    try {
+      await api.doctor(machine);
+    } catch (err) {
+      get().pushNotice(`The check of ${machine.name} did not finish: ${errorMessage(err)}`);
+    } finally {
+      set((state) => ({ checking: { ...state.checking, [machine.id]: false } }));
+    }
+  },
+  refreshMachine: (machine) => {
+    api.pollMachine(machine.id).catch((err) => get().pushNotice(`Could not refresh ${machine.name}: ${errorMessage(err)}`));
+  },
   setCopyOpen: (copy) => set({ copy }),
   setCopyProgress: (progress) => set((state) => ({ copies: { ...state.copies, [progress.stack_id]: progress } })),
   clearFinishedCopies: () => set((state) => ({ copies: Object.fromEntries(Object.entries(state.copies).filter(([, c]) => !c.finished_ms)) })),
-  // One side panel at a time: opening the progress closes the logs, and the other way round.
   // One drawer at a time: opening one closes the others; closing one leaves the rest alone.
   openProgress: (progressFor) => set(progressFor ? { progressFor, logsFor: null, containerLogsFor: null } : { progressFor: null }),
   loadComputerInfo: async () => {
@@ -336,7 +369,7 @@ export const useStore = create<State>((set, get) => ({
   removeMachine: async (id) => {
     const machines = await api.removeMachine(id);
     const stacks = await api.listStacks();
-    set((state) => ({ machines, stacks, selectedMachineId: state.selectedMachineId === id ? null : state.selectedMachineId }));
+    set((state) => ({ machines, stacks, selectedMachineId: state.selectedMachineId === id ? null : state.selectedMachineId, machineDialog: null }));
   },
   setStats: (machineId, stats) => set((state) => ({ stats: { ...state.stats, [machineId]: stats } })),
   pushDoctorRow: (machineId, row) =>

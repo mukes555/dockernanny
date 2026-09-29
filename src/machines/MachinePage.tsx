@@ -1,24 +1,21 @@
-import { useEffect, useState } from "react";
-
-import { api, errorMessage } from "../lib/ipc";
+import { plural } from "../lib/format";
 import type { Machine } from "../lib/types";
 import { useStore } from "../state/store";
 import { DropErrorLine, NewStackButton, useBrowse } from "../stacks/DropZone";
 import { STACK_GRID, StackCard } from "../stacks/StackCard";
-import { OsGlyph } from "../ui/Badges";
+import { OsGlyph, StatusDot } from "../ui/Badges";
 import { MachineIcon, TerminalIcon } from "../ui/icons";
 import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import { Page, Tabs } from "../ui/Page";
-import { Button, Card, Chip, cx, EmptyPanel } from "../ui/primitives";
+import { Button, Card, Chip, EmptyPanel, ErrorLine } from "../ui/primitives";
 import { Fact, ProbeFacts } from "../ui/ProbeFacts";
 import { Term } from "../ui/Term";
+import { useAction } from "../ui/useAction";
 import { DoctorRows } from "./DoctorRows";
 import { MachineContainers } from "./MachineContainers";
 import { TerminalDialog } from "./TerminalDialog";
 
 const NO_ROWS: never[] = [];
-
-type MachineTab = "stacks" | "containers" | "details";
 
 /** One machine's own page: its stacks first, everything its Docker runs,
  * and its details with the result of the last connection check. */
@@ -29,53 +26,24 @@ export function MachinePage({ machine }: { machine: Machine }) {
   const allStacks = useStore((state) => state.stacks);
   const stacks = allStacks.filter((s) => s.machine_id === machine.id);
   const doctorRows = useStore((state) => state.doctor[machine.id] ?? NO_ROWS);
-  const resetDoctor = useStore((state) => state.resetDoctor);
+  const checking = useStore((state) => state.checking[machine.id] ?? false);
+  const tab = useStore((state) => state.machineTab);
+  const dialog = useStore((state) => state.machineDialog);
+  const setTab = useStore((state) => state.setMachineTab);
+  const openMachineDialog = useStore((state) => state.openMachineDialog);
+  const checkMachine = useStore((state) => state.checkMachine);
+  const refreshMachine = useStore((state) => state.refreshMachine);
   const removeMachine = useStore((state) => state.removeMachine);
   const setCopyOpen = useStore((state) => state.setCopyOpen);
-  const [tab, setTab] = useState<MachineTab>("stacks");
-  const [checking, setChecking] = useState(false);
-  const [terminal, setTerminal] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const removal = useAction("inline");
   const browse = useBrowse();
 
   const online = stats?.online ?? false;
-
-  // The check's rows live on the Details tab, so a check opens it.
-  const check = async () => {
-    setError(null);
-    setTab("details");
-    setChecking(true);
-    resetDoctor(machine.id);
-    try {
-      await api.doctor(machine);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setChecking(false);
-    }
-  };
-  const refreshNumbers = () => void api.pollMachine(machine.id).catch((err) => setError(errorMessage(err)));
   const copyHere = () => setCopyOpen({ open: true, destinationMachineId: machine.id });
-
-  // An action chosen in the sidebar's menu is carried out here, whether or not the page was open already.
-  const asked = useStore((state) => (state.machineAsk?.machineId === machine.id ? state.machineAsk.action : null));
-  useEffect(() => {
-    if (!asked) return;
-    useStore.setState({ machineAsk: null });
-    if (asked === "remove") setRemoving(true);
-    if (asked === "terminal") setTerminal(true);
-    if (asked === "check") void check();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [asked]);
-
+  const closeDialog = () => openMachineDialog(machine.id, null);
   const remove = async () => {
-    try {
-      await removeMachine(machine.id);
-    } catch (err) {
-      setError(errorMessage(err));
-      setRemoving(false);
-    }
+    const removed = await removal.run(() => removeMachine(machine.id));
+    if (!removed) closeDialog();
   };
 
   const address = `${machine.user}@${stats?.hostname || machine.host}:${machine.port}`;
@@ -85,7 +53,7 @@ export function MachinePage({ machine }: { machine: Machine }) {
     <Page
       title={
         <>
-          <span className={cx("h-2.5 w-2.5 shrink-0 rounded-full", online ? "bg-good pulse" : "bg-hairline")} title={online ? "Online" : "Offline"} />
+          <StatusDot state={online ? "good" : "idle"} pulse={online} label={online ? "Online" : "Offline"} size="lg" />
           <OsGlyph os={stats?.os} size={18} className="shrink-0 text-ink-2" />
           <span className="truncate">{machine.name}</span>
           {machine.pinned ? (
@@ -109,19 +77,19 @@ export function MachinePage({ machine }: { machine: Machine }) {
       }
       actions={
         <>
-          <Button tone="primary" onClick={() => void check()} busy={checking}>
+          <Button tone="primary" onClick={() => void checkMachine(machine)} busy={checking}>
             Check connection
           </Button>
-          <Button onClick={() => setTerminal(true)}>
+          <Button onClick={() => openMachineDialog(machine.id, "terminal")} title="Use this machine from a terminal">
             <TerminalIcon /> Terminal
           </Button>
           {/* Removing lives in here, away from the everyday buttons. */}
           <Menu label={`More for ${machine.name}`} width="w-48">
             <MenuItem onClick={() => void browse()}>New stack here…</MenuItem>
             <MenuItem onClick={copyHere}>Copy a stack here…</MenuItem>
-            <MenuItem onClick={refreshNumbers}>Refresh its numbers</MenuItem>
+            <MenuItem onClick={() => refreshMachine(machine)}>Refresh its numbers</MenuItem>
             <MenuSeparator />
-            <MenuItem onClick={() => setRemoving(true)} danger>
+            <MenuItem onClick={() => openMachineDialog(machine.id, "remove")} danger>
               Remove machine…
             </MenuItem>
           </Menu>
@@ -139,19 +107,17 @@ export function MachinePage({ machine }: { machine: Machine }) {
         />
       }
     >
-      {error ? <div className="text-[12px] text-critical">{error}</div> : null}
-      {removing ? (
+      <ErrorLine error={removal.error} className="mt-0" />
+      {dialog === "remove" ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-critical/40 bg-surface-2 px-4 py-3 text-[12px]">
           <span className="text-ink">
-            Remove {machine.name} from this computer?{" "}
-            {stacks.length === 1 ? "Its stack is forgotten here and its ports" : `Its ${stacks.length} stacks are forgotten here and their ports`} on localhost
-            close. What runs on the machine stays as it is.
+            Remove {machine.name} from this computer? {stacksGo(stacks.length)} What runs on the machine stays as it is.
           </span>
           <div className="flex gap-2">
-            <Button size="sm" tone="ghost" onClick={() => setRemoving(false)}>
+            <Button size="sm" tone="ghost" onClick={closeDialog} disabled={removal.busy}>
               Keep
             </Button>
-            <Button size="sm" tone="danger" onClick={() => void remove()}>
+            <Button size="sm" tone="danger" onClick={() => void remove()} busy={removal.busy}>
               Remove
             </Button>
           </div>
@@ -182,9 +148,16 @@ export function MachinePage({ machine }: { machine: Machine }) {
           </Card>
         </>
       ) : null}
-      <TerminalDialog machine={terminal ? machine : null} onClose={() => setTerminal(false)} />
+      <TerminalDialog machine={dialog === "terminal" ? machine : null} onClose={closeDialog} />
     </Page>
   );
+}
+
+/** What removing a machine does to its stacks here, in one sentence. */
+function stacksGo(count: number): string {
+  if (count === 0) return "";
+  if (count === 1) return "Its stack is forgotten here and its ports on localhost close.";
+  return `Its ${count} stacks are forgotten here and their ports on localhost close.`;
 }
 
 function StacksTab({ machine, onCopyHere }: { machine: Machine; onCopyHere: () => void }) {
@@ -234,7 +207,7 @@ function BridgedPorts({ machine }: { machine: Machine }) {
   const ports = stacks.reduce((count, stack) => count + (forwards[stack.id]?.up ? forwards[stack.id].ports.length : 0), 0);
   return (
     <span className="tabular">
-      {stacks.length} {stacks.length === 1 ? "stack" : "stacks"} · {ports} {ports === 1 ? "port" : "ports"} bridged to localhost
+      {plural(stacks.length, "stack")} · {plural(ports, "port")} bridged to localhost
     </span>
   );
 }

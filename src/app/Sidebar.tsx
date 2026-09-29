@@ -6,7 +6,8 @@ import type { ForwardState, HostSnapshot, Stack } from "../lib/types";
 import { AddMachineDialog } from "../machines/AddMachineDialog";
 import { MachineRow } from "../machines/MachineRow";
 import { isUp, onlineCount, useStore } from "../state/store";
-import { OsGlyph } from "../ui/Badges";
+import type { DotState } from "../ui/Badges";
+import { OsGlyph, StatusDot } from "../ui/Badges";
 import { ActivityIcon, BookIcon, GearIcon, LifebuoyIcon, LogoMark, PlugIcon, PlusIcon, SpinnerIcon, StacksIcon } from "../ui/icons";
 import { cx } from "../ui/primitives";
 
@@ -84,7 +85,7 @@ export function Sidebar() {
           icon={<OsGlyph os={computerInfo?.probe.os} size={16} />}
           label="This computer"
           title={sharing.text}
-          trailing={sharing.dot ? <span className={cx("h-2 w-2 rounded-full", sharing.dot)} /> : null}
+          trailing={sharing.dot ? <StatusDot state={sharing.dot} label={sharing.text} /> : null}
           active={view === "computer"}
           onClick={() => setView("computer")}
         />
@@ -193,14 +194,7 @@ function NavItem({
       onClick={onClick}
       title={title}
       aria-current={active ? "page" : undefined}
-      className={cx(
-        "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition",
-        active
-          ? "bg-accent-soft font-medium text-ink"
-          : quiet
-            ? "text-ink-3 hover:bg-surface-2 hover:text-ink"
-            : "text-ink-2 hover:bg-surface-2 hover:text-ink",
-      )}
+      className={cx("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition", navItemLook(active, quiet))}
     >
       <span className={cx("flex w-4 shrink-0 justify-center", active ? "text-accent" : "text-ink-3")}>{icon}</span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -212,6 +206,13 @@ function NavItem({
       {trailing}
     </button>
   );
+}
+
+/** The current page stands out; "quiet" items (add, guide) read fainter than pages. */
+function navItemLook(active: boolean, quiet: boolean): string {
+  if (active) return "bg-accent-soft font-medium text-ink";
+  if (quiet) return "text-ink-3 hover:bg-surface-2 hover:text-ink";
+  return "text-ink-2 hover:bg-surface-2 hover:text-ink";
 }
 
 /** Every distinct localhost port a bridge that is up hands to a machine. */
@@ -226,13 +227,13 @@ function portsOnLocalhost(stacks: Stack[], forwards: Record<string, ForwardState
 }
 
 /** The one thing most worth knowing about sharing, as a dot and its sentence; the first match wins. */
-function sharingState(sharing: boolean, host: HostSnapshot | null): { dot: string | null; text: string } {
+function sharingState(sharing: boolean, host: HostSnapshot | null): { dot: DotState | null; text: string } {
   if (!sharing) return { dot: null, text: "Sharing is off" };
-  if (!host?.probed) return { dot: "bg-hairline", text: "Sharing: checking this computer" };
-  if (host.pairing.armed) return { dot: "bg-accent", text: `Pairing is on, code ${host.pairing.code}` };
+  if (!host?.probed) return { dot: "pending", text: "Sharing: checking this computer" };
+  if (host.pairing.armed) return { dot: "busy", text: `Pairing is on, code ${host.pairing.code}` };
   const missing = host.rows.filter((row) => row.state === "missing").length;
-  if (missing > 0) return { dot: "bg-warning", text: `Sharing: ${missing} to set up` };
-  if (host.rows.some((row) => row.state === "restart")) return { dot: "bg-warning", text: "Sharing: restart this computer once" };
-  if (host.connected.length > 0) return { dot: "bg-good", text: `Sharing: ${host.connected.length} connected` };
-  return { dot: "bg-good", text: "Sharing: ready" };
+  if (missing > 0) return { dot: "attention", text: `Sharing: ${missing} to set up` };
+  if (host.rows.some((row) => row.state === "restart")) return { dot: "attention", text: "Sharing: restart this computer once" };
+  if (host.connected.length > 0) return { dot: "good", text: `Sharing: ${host.connected.length} connected` };
+  return { dot: "good", text: "Sharing: ready" };
 }

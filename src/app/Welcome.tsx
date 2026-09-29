@@ -1,13 +1,19 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
-import { errorMessage } from "../lib/ipc";
 import type { HostOs } from "../lib/types";
 import { useStore } from "../state/store";
 import { Dialog } from "../ui/Dialog";
 import { ArrowLeftIcon, CheckIcon, LogoMark, MachineIcon } from "../ui/icons";
-import { Button, cx } from "../ui/primitives";
+import { Button, cx, ErrorLine, Inset } from "../ui/primitives";
+import { useAction } from "../ui/useAction";
 
 type Step = "intro" | "roles" | "next";
+
+const STEPS: Record<Step, { number: number; title: string }> = {
+  intro: { number: 1, title: "Welcome to dockerNanny" },
+  roles: { number: 2, title: "What is this computer for?" },
+  next: { number: 3, title: "You are set" },
+};
 
 /** What each role needs on this operating system, in one honest sentence. */
 const NEEDS: Record<"use" | "share", Record<HostOs, string>> = {
@@ -37,34 +43,34 @@ export function Welcome() {
   const [step, setStep] = useState<Step>("intro");
   const [useMachines, setUseMachines] = useState(true);
   const [share, setShare] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const saving = useAction("inline");
 
   const open = (firstRun && settings !== null) || welcomeOpen;
   // Roles must be chosen once; after that the welcome is just a guide.
   const dismissable = !firstRun;
 
-  useEffect(() => {
-    if (!open || !settings) return;
-    setStep("intro");
-    setError(null);
-    if (!firstRun) {
-      setUseMachines(settings.use_machines);
-      setShare(settings.share_this_computer);
+  // Each opening starts at the first step, with the roles as saved. Adjusted
+  // while rendering (React's way for state that follows a prop), and only
+  // when it opens: later setting changes must not reset the steps.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open && settings) {
+      setStep("intro");
+      saving.setError(null);
+      if (!firstRun) {
+        setUseMachines(settings.use_machines);
+        setShare(settings.share_this_computer);
+      }
     }
-    // Only when it opens: later setting changes must not reset the steps.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }
 
   const saveRoles = async () => {
     if (!settings) return;
-    try {
-      // Saving ends the first run, which would close the dialog; keep it open for the next step.
-      setWelcomeOpen(true);
-      await saveSettings({ ...settings, use_machines: useMachines, share_this_computer: share });
-      setStep("next");
-    } catch (err) {
-      setError(errorMessage(err));
-    }
+    // Saving ends the first run, which would close the dialog; keep it open for the next step.
+    setWelcomeOpen(true);
+    const saved = await saving.run(() => saveSettings({ ...settings, use_machines: useMachines, share_this_computer: share }));
+    if (saved) setStep("next");
   };
   const finish = (then?: () => void) => {
     setWelcomeOpen(false);
@@ -72,14 +78,12 @@ export function Welcome() {
   };
   const openSharing = useStore((state) => state.showSharing);
 
-  const titles: Record<Step, string> = { intro: "Welcome to dockerNanny", roles: "What is this computer for?", next: "You are set" };
-
   return (
     <Dialog
       open={open}
       onClose={() => (dismissable ? finish() : undefined)}
-      eyebrow={`Step ${step === "intro" ? 1 : step === "roles" ? 2 : 3} of 3`}
-      title={titles[step]}
+      eyebrow={`Step ${STEPS[step].number} of 3`}
+      title={STEPS[step].title}
       width={600}
       closeOnBackdrop={dismissable}
     >
@@ -128,14 +132,14 @@ export function Welcome() {
               needs={NEEDS.share[os]}
             />
           </div>
-          {error ? <div className="mt-3 text-[12px] text-critical">{error}</div> : null}
+          <ErrorLine error={saving.error} className="mt-3" />
           <div className="mt-6 flex items-center justify-between gap-3">
             <Button tone="ghost" onClick={() => setStep("intro")}>
               <ArrowLeftIcon size={13} /> Back
             </Button>
             <div className="flex items-center gap-3">
               <p className="text-[12px] text-ink-3">{!useMachines && !share ? "Pick at least one to continue." : null}</p>
-              <Button tone="primary" onClick={() => void saveRoles()} disabled={!useMachines && !share}>
+              <Button tone="primary" onClick={() => void saveRoles()} busy={saving.busy} disabled={!useMachines && !share}>
                 Continue
               </Button>
             </div>
@@ -201,14 +205,14 @@ function Diagram() {
 
 function Box({ title, lines }: { title: string; lines: string[] }) {
   return (
-    <div className="flex-1 rounded-xl border border-line bg-surface-2/60 px-4 py-3">
+    <Inset roomy className="flex-1">
       <div className="text-[13px] font-semibold text-ink">{title}</div>
       {lines.map((line) => (
         <div key={line} className="mt-0.5 text-[12px] text-ink-2">
           {line}
         </div>
       ))}
-    </div>
+    </Inset>
   );
 }
 
@@ -257,7 +261,7 @@ function RoleCard({
 
 function NextStep({ title, text, action, onClick, primary = false }: { title: string; text: string; action: string; onClick: () => void; primary?: boolean }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-xl border border-line bg-surface-2/40 px-4 py-3">
+    <Inset roomy className="flex items-center justify-between gap-4">
       <div>
         <div className="text-[13px] font-medium text-ink">{title}</div>
         <div className="mt-0.5 text-[12px] text-ink-2">{text}</div>
@@ -265,6 +269,6 @@ function NextStep({ title, text, action, onClick, primary = false }: { title: st
       <Button tone={primary ? "primary" : "secondary"} onClick={onClick} className="shrink-0">
         {action}
       </Button>
-    </div>
+    </Inset>
   );
 }

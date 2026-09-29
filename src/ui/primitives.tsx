@@ -162,6 +162,13 @@ export function ErrorLine({ error, className }: { error: string | null | undefin
   return <div className={cx("selectable mt-2 text-[12px] text-critical", className)}>{error}</div>;
 }
 
+/** A quieter box inside a card: a fact, an offer ("Create a key"), one step
+ * of a list. One look everywhere; `roomy` for a box that holds a title and a
+ * line. `className` is for layout (flex, margins), never padding. */
+export function Inset({ roomy = false, className, children }: { roomy?: boolean; className?: string; children: ReactNode }) {
+  return <div className={cx("rounded-xl border border-line bg-surface-2/40", roomy ? "px-4 py-3" : "px-3 py-2.5", className)}>{children}</div>;
+}
+
 /** A small dashed note, for a narrow column or inside a card. */
 export function EmptyState({ children, className }: { children: ReactNode; className?: string }) {
   return <p className={cx("rounded-xl border border-dashed border-hairline p-4 text-[13px] text-ink-2", className)}>{children}</p>;

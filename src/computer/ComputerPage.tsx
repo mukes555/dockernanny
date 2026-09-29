@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { SharingSections } from "../host/SharingSections";
+import { plural } from "../lib/format";
 import { api, errorMessage } from "../lib/ipc";
 import { visibleMachines } from "../lib/machines";
 import type { LocalProject } from "../lib/types";
@@ -8,8 +9,9 @@ import { useStore } from "../state/store";
 import { OsGlyph } from "../ui/Badges";
 import { ExternalIcon, RefreshIcon, SpinnerIcon } from "../ui/icons";
 import { Page, Tabs } from "../ui/Page";
-import { Button, Card, Chip } from "../ui/primitives";
+import { Button, Card, Chip, ErrorLine, Inset } from "../ui/primitives";
 import { ProbeFacts } from "../ui/ProbeFacts";
+import { useLoaded } from "../ui/useLoaded";
 import { Readiness } from "./Readiness";
 
 /** This computer as a place, in three parts: who it is and whether it can
@@ -62,14 +64,13 @@ export function ComputerPage() {
       {tab === "overview" ? (
         <>
           <Card title="This computer">
-            {info ? (
-              <ProbeFacts probe={info.probe} />
-            ) : error ? null : (
+            {info ? <ProbeFacts probe={info.probe} /> : null}
+            {!info && !error ? (
               <div className="flex items-center gap-2 text-[13px] text-ink-2">
                 <SpinnerIcon /> Looking at this computer…
               </div>
-            )}
-            {error ? <div className="mt-3 text-[12px] text-critical">{error}</div> : null}
+            ) : null}
+            <ErrorLine error={error} className="mt-3" />
           </Card>
           {settings?.use_machines ? <Readiness /> : null}
         </>
@@ -87,33 +88,24 @@ function DockerHere() {
   const computerInfo = useStore((state) => state.computerInfo);
   const settings = useStore((state) => state.settings);
   const setCopyOpen = useStore((state) => state.setCopyOpen);
-  const [projects, setProjects] = useState<LocalProject[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const local = useLoaded(api.localProjects);
   const machines = visibleMachines(allMachines, computerInfo);
   const canCopy = (settings?.use_machines ?? true) && machines.length > 0;
-
-  const refresh = () => {
-    setProjects(null);
-    setError(null);
-    api
-      .localProjects()
-      .then(setProjects)
-      .catch((err) => setError(errorMessage(err)));
-  };
-  useEffect(refresh, []);
+  // A failed read shows why; the last list stays hidden until a read works again.
+  const projects = local.error ? null : local.data;
 
   return (
     <Card
       title="Docker on this computer"
       description="Compose projects running in the local Docker. Copy one to a machine to run it there instead."
       actions={
-        <Button size="sm" tone="ghost" onClick={refresh} busy={projects === null && !error} aria-label="Refresh">
+        <Button size="sm" tone="ghost" onClick={() => void local.reload()} busy={local.loading} aria-label="Refresh">
           <RefreshIcon />
         </Button>
       }
     >
-      {error ? <DockerMissing detail={error} /> : null}
-      {projects === null && !error ? (
+      {local.error ? <DockerMissing detail={local.error} /> : null}
+      {local.loading && projects === null && !local.error ? (
         <div className="flex items-center gap-2 text-[13px] text-ink-2">
           <SpinnerIcon /> reading this computer's Docker
         </div>
@@ -157,9 +149,9 @@ function DockerMissing({ detail }: { detail: string }) {
 
 function ProjectRow({ project, canCopy, onCopy }: { project: LocalProject; canCopy: boolean; onCopy: () => void }) {
   const running = project.status.startsWith("running");
-  const volumes = project.volumes.length === 1 ? "1 volume" : `${project.volumes.length} volumes`;
+  const volumes = plural(project.volumes.length, "volume");
   return (
-    <div className="rounded-xl border border-line bg-surface-2/40 px-3 py-2.5">
+    <Inset>
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -193,6 +185,6 @@ function ProjectRow({ project, canCopy, onCopy }: { project: LocalProject; canCo
           </span>
         ))}
       </div>
-    </div>
+    </Inset>
   );
 }

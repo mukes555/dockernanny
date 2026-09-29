@@ -1,9 +1,8 @@
-import { api, errorMessage } from "../lib/ipc";
+import { plural } from "../lib/format";
 import type { Machine, MachineStats } from "../lib/types";
 import { useStore } from "../state/store";
-import type { MachineAction } from "../state/store";
 import { useBrowse } from "../stacks/DropZone";
-import { OsGlyph } from "../ui/Badges";
+import { OsGlyph, StatusDot } from "../ui/Badges";
 import { TerminalIcon } from "../ui/icons";
 import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import { cx } from "../ui/primitives";
@@ -27,14 +26,14 @@ export function MachineRow({
   const summary = summaryOf(stats, stackCount);
   const browse = useBrowse();
   // Checking, the terminal and removing happen on the machine's page, which shows their results.
-  const ask = (action: MachineAction) => useStore.getState().askMachine(machine.id, action);
+  const checkMachine = useStore((state) => state.checkMachine);
+  const openMachineDialog = useStore((state) => state.openMachineDialog);
+  const refreshMachine = useStore((state) => state.refreshMachine);
+  const selectMachine = useStore((state) => state.selectMachine);
+  const setCopyOpen = useStore((state) => state.setCopyOpen);
   const newStackHere = () => {
-    useStore.getState().selectMachine(machine.id);
+    selectMachine(machine.id);
     void browse();
-  };
-  const copyHere = () => useStore.getState().setCopyOpen({ open: true, destinationMachineId: machine.id });
-  const refresh = () => {
-    void api.pollMachine(machine.id).catch((err) => useStore.getState().pushNotice(`Could not refresh ${machine.name}: ${errorMessage(err)}`));
   };
 
   return (
@@ -51,8 +50,7 @@ export function MachineRow({
       >
         <span className={cx("relative shrink-0", selected ? "text-ink" : "text-ink-3")}>
           <OsGlyph os={stats?.os} size={16} />
-          <span className={cx("absolute -right-0.5 -bottom-0.5 h-2 w-2 rounded-full ring-2 ring-surface", online ? "bg-good" : "bg-hairline")} />
-          <span className="sr-only">{online ? "online" : "offline"}</span>
+          <StatusDot state={online ? "good" : "idle"} label={online ? "online" : "offline"} className="absolute -right-0.5 -bottom-0.5 ring-2 ring-surface" />
         </span>
         <span className="min-w-0 flex-1">
           <span className={cx("flex items-center gap-1.5 text-[13px] font-medium", selected ? "text-ink" : "text-ink-2 group-hover:text-ink")}>
@@ -72,15 +70,15 @@ export function MachineRow({
         className="absolute top-2 right-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100"
         width="w-48"
       >
-        <MenuItem onClick={() => ask("check")}>Check connection</MenuItem>
-        <MenuItem onClick={() => ask("terminal")}>Use from a terminal…</MenuItem>
+        <MenuItem onClick={() => void checkMachine(machine)}>Check connection</MenuItem>
+        <MenuItem onClick={() => openMachineDialog(machine.id, "terminal")}>Use from a terminal…</MenuItem>
         <MenuSeparator />
         <MenuItem onClick={newStackHere}>New stack here…</MenuItem>
-        <MenuItem onClick={copyHere}>Copy a stack here…</MenuItem>
-        <MenuItem onClick={refresh}>Refresh its numbers</MenuItem>
+        <MenuItem onClick={() => setCopyOpen({ open: true, destinationMachineId: machine.id })}>Copy a stack here…</MenuItem>
+        <MenuItem onClick={() => refreshMachine(machine)}>Refresh its numbers</MenuItem>
         <MenuSeparator />
-        <MenuItem onClick={() => ask("remove")} danger>
-          Remove…
+        <MenuItem onClick={() => openMachineDialog(machine.id, "remove")} danger>
+          Remove machine…
         </MenuItem>
       </Menu>
     </div>
@@ -92,6 +90,5 @@ function summaryOf(stats: MachineStats | undefined, stackCount: number): { text:
   if (!stats) return { text: "checking…", warn: false };
   if (!stats.online) return { text: "offline", warn: false };
   if (!stats.docker_version) return { text: "no Docker found", warn: true };
-  const stacks = stackCount === 1 ? "1 stack" : `${stackCount} stacks`;
-  return { text: `${stacks} · load ${stats.load1.toFixed(1)}/${stats.cpus}`, warn: false };
+  return { text: `${plural(stackCount, "stack")} · load ${stats.load1.toFixed(1)}/${stats.cpus}`, warn: false };
 }

@@ -56,7 +56,6 @@ pub struct PairingState {
 /// What the page shows; published whole whenever something changes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct HostSnapshot {
-    pub os: String,
     /// False until the first look at this computer finished.
     pub probed: bool,
     pub rows: Vec<Row>,

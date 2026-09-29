@@ -50,11 +50,22 @@ pub fn app_home(state: State<'_, AppState>) -> String {
 pub struct TerminalInfo {
     pub ssh_config: String,
     pub wsl_distro: Option<String>,
+    /// The machine's Host name in the ssh config: `ssh <alias>`.
+    pub alias: String,
+    /// The Docker context the app makes for it, whether or not it exists yet.
+    pub context_name: String,
 }
 
+/// What a terminal needs to reach one machine the way the app does.
 #[tauri::command]
-pub fn terminal_info(state: State<'_, AppState>) -> TerminalInfo {
-    TerminalInfo { ssh_config: state.ssh.config_path(), wsl_distro: crate::tools::wsl_distro() }
+pub fn terminal_info(state: State<'_, AppState>, machine_id: String) -> CmdResult<TerminalInfo> {
+    let machine = state.store.machine(&machine_id).ok_or("That machine is no longer known.")?;
+    Ok(TerminalInfo {
+        ssh_config: state.ssh.config_path(),
+        wsl_distro: crate::tools::wsl_distro(),
+        alias: machine.alias(),
+        context_name: machine::context_name(&machine),
+    })
 }
 
 /// The WSL distributions installed on this computer, for Settings. Empty
