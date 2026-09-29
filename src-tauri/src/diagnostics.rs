@@ -48,6 +48,38 @@ pub fn report(facts: &Facts, app_log: &Path, host_log: &Path, private: &[Replace
     redact(&text, private)
 }
 
+/// The names the app itself holds, each with a numbered placeholder: the
+/// machines (name, address, user), the stacks (name and folder, since a
+/// project name can be a client's), the computers that paired with this one,
+/// and the account they log in as. This computer's own names are the
+/// caller's to add.
+pub fn names_the_app_holds(
+    machines: &[crate::machine::Machine],
+    stacks: &[crate::stack::Stack],
+    paired: &[crate::host::paired::PairedComputer],
+    sharing_user: Option<&str>,
+) -> Vec<Replacement> {
+    let mut names = Vec::new();
+    for (index, machine) in machines.iter().enumerate() {
+        let n = index + 1;
+        names.push((machine.name.clone(), format!("machine-{n}")));
+        names.push((machine.host.clone(), format!("host-{n}")));
+        names.push((machine.user.clone(), format!("user-{n}")));
+    }
+    for (index, stack) in stacks.iter().enumerate() {
+        let n = index + 1;
+        names.push((stack.project_dir.clone(), format!("<stack-{n}-folder>")));
+        names.push((stack.name.clone(), format!("stack-{n}")));
+    }
+    for (index, computer) in paired.iter().enumerate() {
+        names.push((computer.name.clone(), format!("paired-{}", index + 1)));
+    }
+    if let Some(user) = sharing_user {
+        names.push((user.to_string(), "<sharing-user>".into()));
+    }
+    names
+}
+
 /// The last `lines` lines of a log, reading only its end: logs grow for as
 /// long as the app runs.
 fn tail(path: &Path, lines: usize) -> String {
@@ -196,6 +228,32 @@ mod tests {
             "ssh <ip>:2222 failed; forward 127.0.0.1:8080 and 0.0.0.0:8080->80/tcp ok; peer <ipv6>; mail <email>; at 12:40:05"
         );
         assert_eq!(redact("::1 and 10.0.0.300", &[]), "::1 and 10.0.0.300", "not an address: 300 is out of range");
+    }
+
+    #[test]
+    fn stacks_paired_computers_and_the_sharing_account_are_hidden_too() {
+        let stack = crate::stack::Stack {
+            id: "s1".into(),
+            name: "acme-billing".into(),
+            machine_id: "m1".into(),
+            project_dir: "/Volumes/work/acme-billing".into(),
+            compose_rel: "compose.yaml".into(),
+            excludes: vec![],
+            forward_ports: true,
+            live_sync: false,
+            port_overrides: Default::default(),
+        };
+        let paired = crate::host::paired::PairedComputer {
+            name: "Robin's laptop".into(),
+            address: "192.0.2.20".into(),
+            key_type: "ssh-ed25519".into(),
+            paired_at_ms: 1,
+            mark: String::new(),
+            fingerprint: String::new(),
+        };
+        let names = names_the_app_holds(&[], &[stack], &[paired], Some("wsluser"));
+        let line = "sync /Volumes/work/acme-billing for acme-billing; paired with Robin's laptop; key for wsluser";
+        assert_eq!(redact(line, &names), "sync <stack-1-folder> for stack-1; paired with paired-1; key for <sharing-user>");
     }
 
     #[test]
