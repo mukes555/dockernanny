@@ -67,7 +67,7 @@ impl Engine {
 
 pub fn start(app: AppHandle, platform: Arc<dyn Platform>, pairing_port: u16) -> Engine {
     let (to_engine, requests) = channel::<ToEngine>();
-    let snapshot = Arc::new(Mutex::new(HostSnapshot { os: platform.os_name().to_string(), ..Default::default() }));
+    let snapshot = Arc::new(Mutex::new(HostSnapshot::default()));
     let log = Arc::new(Mutex::new(Vec::new()));
     let stop_listener = Arc::new(AtomicBool::new(false));
     let keepalive = Arc::new(Mutex::new(KeepAlive::new()));
@@ -414,7 +414,6 @@ impl Loop {
             }
         };
         let fresh = HostSnapshot {
-            os: self.platform.os_name().to_string(),
             probed: self.probed,
             rows: self.picture.rows.clone(),
             user: self.picture.user.clone(),

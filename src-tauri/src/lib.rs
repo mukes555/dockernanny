@@ -116,6 +116,7 @@ pub fn run() {
             commands::computer::computer_info,
             commands::computer::computer_readiness,
             commands::computer::generate_key,
+            commands::computer::key_exists,
             commands::computer::install_wsl_tools,
             commands::computer::diagnostics,
             commands::computer::reveal_app_file,

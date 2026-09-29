@@ -1,13 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { useEffect, useMemo, useState } from "react";
 
 import { api, errorMessage } from "../lib/ipc";
 import type { ServiceState } from "../lib/types";
 import { useStore } from "../state/store";
-import { XIcon } from "../ui/icons";
+import { Drawer } from "../ui/Drawer";
 import { LogRow } from "../ui/LogRow";
-import { Button, Select } from "../ui/primitives";
-import { useEscape } from "../ui/useEscape";
+import { Button, ErrorLine, Select } from "../ui/primitives";
+import { useFollowTail } from "../ui/useFollowTail";
 
 // Selectors must return stable references; a fresh `[]` per render loops React.
 const NO_SERVICES: ServiceState[] = [];
@@ -23,18 +22,26 @@ export function LogDrawer() {
   const [service, setService] = useState("");
   const [paused, setPaused] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
-  const scroller = useRef<HTMLDivElement>(null);
-  const pinned = useRef(true);
-  useEscape(Boolean(stackId), () => openLogs(null));
 
-  // The stream lives exactly as long as the drawer.
-  useEffect(() => {
-    if (!stackId) return;
+  // Another stack starts afresh: all services, following, no old error.
+  // Adjusted while rendering, React's way for state that follows a prop.
+  const [shownFor, setShownFor] = useState(stackId);
+  if (shownFor !== stackId) {
+    setShownFor(stackId);
     setService("");
     setPaused(false);
     setStartError(null);
-    void api.startLogs(stackId).catch((err) => setStartError(errorMessage(err)));
-    return () => void api.stopLogs(stackId).catch(console.warn);
+  }
+
+  // The stream lives exactly as long as the drawer shows this stack.
+  useEffect(() => {
+    if (!stackId) return;
+    let current = true;
+    api.startLogs(stackId).catch((err) => current && setStartError(errorMessage(err)));
+    return () => {
+      current = false;
+      void api.stopLogs(stackId).catch(console.warn);
+    };
   }, [stackId]);
 
   const shown = useMemo(() => {
@@ -48,62 +55,42 @@ export function LogDrawer() {
     };
     return lines.filter((line) => fromService(line.container));
   }, [lines, service, stack, services]);
-
-  // Follow the tail unless the reader scrolled up to look at something.
-  useEffect(() => {
-    const el = scroller.current;
-    if (el && pinned.current && !paused) el.scrollTop = el.scrollHeight;
-  }, [shown.length, paused]);
-
-  const onScroll = () => {
-    const el = scroller.current;
-    if (!el) return;
-    pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-  };
+  const { scroller, onScroll } = useFollowTail(shown.length, paused);
 
   return (
-    <AnimatePresence>
-      {stackId && stack ? (
-        <motion.aside
-          className="fixed top-0 bottom-0 right-0 z-20 flex w-[560px] max-w-[80vw] flex-col border-l border-line bg-surface shadow-2xl"
-          initial={{ x: 40, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          exit={{ x: 40, opacity: 0 }}
-          transition={{ type: "spring", stiffness: 380, damping: 34 }}
-        >
-          <header className="flex items-center gap-2 border-b border-line px-4 py-3">
-            <div className="min-w-0 flex-1">
-              <div className="text-[11px] uppercase tracking-[0.14em] text-ink-3">Logs</div>
-              <div className="truncate text-[14px] font-semibold text-ink">{stack.name}</div>
-            </div>
-            <Select value={service} onChange={(e) => setService(e.target.value)} className="w-36 shrink-0" aria-label="Service">
-              <option value="">all services</option>
-              {services.map((s) => (
-                <option key={s.service} value={s.service}>
-                  {s.service}
-                </option>
-              ))}
-            </Select>
-            <Button size="sm" onClick={() => setPaused((p) => !p)}>
-              {paused ? "Follow" : "Pause"}
-            </Button>
-            <Button size="sm" tone="ghost" onClick={clearLogs}>
-              Clear
-            </Button>
-            <Button size="sm" tone="ghost" onClick={() => openLogs(null)} aria-label="Close logs">
-              <XIcon />
-            </Button>
-          </header>
-          <div ref={scroller} onScroll={onScroll} className="mono selectable min-h-0 flex-1 overflow-auto px-4 py-3 text-[12px] leading-[1.55]">
-            {startError ? <div className="selectable text-critical">The logs could not start: {startError}</div> : null}
-            {shown.length === 0 && !startError ? <div className="text-ink-3">waiting for output…</div> : null}
-            {shown.map((line) => (
-              <LogRow key={line.seq} entry={line} label={line.container ? shortName(line.container, stack.name) : undefined} />
+    <Drawer
+      open={Boolean(stackId && stack)}
+      onClose={() => openLogs(null)}
+      eyebrow="Logs"
+      title={stack?.name}
+      closeLabel="Close logs"
+      controls={
+        <>
+          <Select value={service} onChange={(e) => setService(e.target.value)} className="w-36 shrink-0" aria-label="Service">
+            <option value="">all services</option>
+            {services.map((s) => (
+              <option key={s.service} value={s.service}>
+                {s.service}
+              </option>
             ))}
-          </div>
-        </motion.aside>
-      ) : null}
-    </AnimatePresence>
+          </Select>
+          <Button size="sm" onClick={() => setPaused((p) => !p)}>
+            {paused ? "Follow" : "Pause"}
+          </Button>
+          <Button size="sm" tone="ghost" onClick={clearLogs}>
+            Clear
+          </Button>
+        </>
+      }
+    >
+      <div ref={scroller} onScroll={onScroll} className="mono selectable min-h-0 flex-1 overflow-auto px-4 py-3 text-[12px] leading-[1.55]">
+        <ErrorLine error={startError ? `The logs could not start: ${startError}` : null} className="mt-0" />
+        {shown.length === 0 && !startError ? <div className="text-ink-3">waiting for output…</div> : null}
+        {shown.map((line) => (
+          <LogRow key={line.seq} entry={line} label={line.container && stack ? shortName(line.container, stack.name) : undefined} />
+        ))}
+      </div>
+    </Drawer>
   );
 }
 

@@ -52,7 +52,7 @@ const MOCK_OS: HostOs = ((): HostOs => {
 const mockUpdateStatus = (): UpdateStatus => {
   const offered = new URLSearchParams(window.location.search).get("update") === "1";
   const available = offered ? { version: "0.3.3", notes: "What is new in 0.3.3:\n- A made-up fix, to show the notes.\n- Another one." } : null;
-  return { available, checked_ms: Date.now(), result: available ? "0.3.3 is available" : "up to date", checking: false };
+  return { available, checked_ms: Date.now(), outcome: available ? "found" : "up_to_date", error: null, checking: false };
 };
 
 // `?restart=1`: Docker is installed and only a restart of the computer is left.
@@ -436,7 +436,6 @@ let hostTimer: number | null = null;
 const hostSnapshot = (): HostSnapshot => {
   const remaining = Math.max(0, Math.round((hostArmedUntil - Date.now()) / 1000));
   return {
-    os: "fake Windows",
     probed: true,
     rows: [
       { name: "Windows", state: "ok", detail: "build 22631" },
@@ -486,7 +485,16 @@ export const mockApi: Api = {
   listMachines: async () => machines,
   machineStats: async () => stats,
   appHome: async () => "/home/alex/.dockernanny",
-  terminalInfo: async () => ({ ssh_config: "/home/alex/.dockernanny/ssh_config", wsl_distro: MOCK_OS === "windows" ? "Ubuntu" : null }),
+  terminalInfo: async (machineId) => {
+    const machine = machines.find((m) => m.id === machineId);
+    const slug = (machine?.name ?? "stack").toLowerCase().replace(/[^a-z0-9_]+/g, "-");
+    return {
+      ssh_config: "/home/alex/.dockernanny/ssh_config",
+      wsl_distro: MOCK_OS === "windows" ? "Ubuntu" : null,
+      alias: `dn-${machineId}`,
+      context_name: `dn-${slug}`,
+    };
+  },
   wslDistros: async () => (MOCK_OS === "windows" ? ["Ubuntu", "Ubuntu-24.04", "Debian"] : []),
   computerName: async () => "desk",
   computerInfo: async () => ({
@@ -546,6 +554,7 @@ export const mockApi: Api = {
     keyMade = true;
     return `${KEY_PATH}.pub`;
   },
+  keyExists: async (path) => keyMade && path === KEY_PATH,
   diagnostics: async () =>
     "dockerNanny 0.3.0 on macos aarch64\nroles: use other machines on, share this computer off\nmachines: 2 (1 online), stacks: 1\nssh: OpenSSH_9.8p1\nrsync: rsync  version 3.2.7\ndocker: 27.3.1\n\n--- end of app.log ---\nINFO copy <this-computer> -> machine-1: done\n",
   revealAppFile: async () => {},

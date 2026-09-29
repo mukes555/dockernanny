@@ -14,10 +14,11 @@ export default tseslint.config(
     rules: {
       "react-hooks/exhaustive-deps": "error",
       "max-lines": ["error", { max: 1000, skipBlankLines: true, skipComments: true }],
-      // Warnings until the code they flag today is reworked; then errors.
-      "no-nested-ternary": "warn",
-      "react-hooks/set-state-in-effect": "warn",
-      "react-hooks/purity": "warn",
+      // A choice among three reads better as named values or a small function.
+      "no-nested-ternary": "error",
+      // State that follows a prop is adjusted while rendering; effects only talk to the outside.
+      "react-hooks/set-state-in-effect": "error",
+      "react-hooks/purity": "error",
     },
   },
 );

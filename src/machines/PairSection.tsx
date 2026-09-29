@@ -1,46 +1,40 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { api, errorMessage } from "../lib/ipc";
+import { api } from "../lib/ipc";
 import type { PairedMachine } from "../lib/types";
 import { useStore } from "../state/store";
-import { Button, Field, TextInput } from "../ui/primitives";
+import { Button, ErrorLine, Field, TextInput } from "../ui/primitives";
+import { useAction } from "../ui/useAction";
 
 /** The machine shows a pairing code (dockerNanny with sharing on): type what its screen shows, done. */
 export function PairSection({ keyPath, onPaired }: { keyPath: string; onPaired: (paired: PairedMachine) => void }) {
   const [address, setAddress] = useState("");
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // null until known; pairing sends this key's public half, so without one there is nothing to pair with.
+  const [hasKey, setHasKey] = useState<boolean | null>(null);
+  const pairing = useAction("inline");
+  const making = useAction("inline");
   const setMachines = useStore((state) => state.setMachines);
 
-  // A first-time user often has no key; the fix is one click, so it sits next to the error.
-  const noKey = error?.startsWith("No key file") ?? false;
+  useEffect(() => {
+    if (!keyPath) return;
+    api.keyExists(keyPath).then(setHasKey).catch(console.warn);
+  }, [keyPath]);
+
   const createKey = async () => {
-    setWorking(true);
-    try {
-      await api.generateKey();
-      setError(null);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setWorking(false);
-    }
+    const made = await making.run(api.generateKey);
+    if (made) setHasKey(true);
   };
 
-  const pair = async () => {
-    setWorking(true);
-    setError(null);
-    try {
+  const pair = () =>
+    pairing.run(async () => {
       const paired = await api.pairMachine(address, code, keyPath, name);
       setMachines(await api.listMachines());
       onPaired(paired);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setWorking(false);
-    }
-  };
+    });
+
+  const ready = address.trim() !== "" && code.length === 6 && hasKey !== false;
 
   return (
     <div className="rounded-xl border border-accent/40 bg-accent-soft/40 p-4">
@@ -65,17 +59,17 @@ export function PairSection({ keyPath, onPaired }: { keyPath: string; onPaired: 
           <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="workshop" />
         </Field>
       </div>
-      {error ? <div className="selectable mt-2 text-[12px] text-critical">{error}</div> : null}
-      {noKey ? (
-        <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-line bg-surface px-3 py-2 text-[12px] text-ink-2">
-          <span>This computer has no SSH key yet. Make one here, then pair again.</span>
-          <Button size="sm" onClick={() => void createKey()} disabled={working}>
+      {hasKey === false ? (
+        <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-line bg-surface px-3 py-2 text-[12px] text-ink-2">
+          <span>This computer has no SSH key yet, and pairing sends its public half. Make one here first.</span>
+          <Button size="sm" onClick={() => void createKey()} busy={making.busy}>
             Create a key
           </Button>
         </div>
       ) : null}
+      <ErrorLine error={making.error ?? pairing.error} />
       <div className="mt-3 flex justify-end">
-        <Button tone="primary" onClick={() => void pair()} busy={working} disabled={!address.trim() || code.length !== 6}>
+        <Button tone="primary" onClick={() => void pair()} busy={pairing.busy} disabled={!ready}>
           Pair
         </Button>
       </div>

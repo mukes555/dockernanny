@@ -1,68 +1,60 @@
 import { useEffect, useState } from "react";
 
-import { api, errorMessage } from "../lib/ipc";
+import { api } from "../lib/ipc";
 import { dropTarget, visibleMachines } from "../lib/machines";
 import type { Preview, Stack } from "../lib/types";
 import { useStore } from "../state/store";
 import { Dialog, DialogActions } from "../ui/Dialog";
-import { Button, Chip, Field, Select, TextInput, Toggle } from "../ui/primitives";
+import { Button, Chip, Field, LIST_HEAD, Select, TextInput, Toggle } from "../ui/primitives";
+import { useAction } from "../ui/useAction";
 import { BindMounts, excludeFor } from "./BindMounts";
+import { LocalPortField, usePortOverrides } from "./PortOverrides";
 
-/** Confirms a dropped compose file: where it runs, what it publishes, what to skip. */
+/** Confirms a dropped compose file: where it runs, what it publishes, what
+ * to skip. The form mounts with each drop, so it starts fresh every time, on
+ * the machine the drop overlay named; a machine list refreshed while it is
+ * open does not throw away what was typed. */
 export function DropSheet() {
   const preview = useStore((state) => state.preview);
   const setPreview = useStore((state) => state.setPreview);
+  return (
+    <Dialog open={preview !== null} onClose={() => setPreview(null)} eyebrow="New stack" title={preview?.compose_rel ?? ""} width={640} closeOnBackdrop={false}>
+      {preview ? <DropForm key={preview.project_dir + preview.compose_rel} preview={preview} onClose={() => setPreview(null)} /> : null}
+    </Dialog>
+  );
+}
+
+function DropForm({ preview, onClose }: { preview: Preview; onClose: () => void }) {
   const allMachines = useStore((state) => state.machines);
   const computerInfo = useStore((state) => state.computerInfo);
   const stats = useStore((state) => state.stats);
+  const selectedMachineId = useStore((state) => state.selectedMachineId);
+  const setStacks = useStore((state) => state.setStacks);
+  const selectMachine = useStore((state) => state.selectMachine);
+  const setAddMachineOpen = useStore((state) => state.setAddMachineOpen);
   // Records that point back at this computer are hidden everywhere else too.
   const machines = visibleMachines(allMachines, computerInfo);
-  const setStacks = useStore((state) => state.setStacks);
-  const clearOutput = useStore((state) => state.clearOutput);
 
-  const [name, setName] = useState("");
-  const [machineId, setMachineId] = useState("");
+  const [name, setName] = useState(preview.name);
+  const [machineId, setMachineId] = useState(() => dropTarget(machines, stats, selectedMachineId)?.id ?? "");
   const [excludes, setExcludes] = useState("");
   // Mounted folders left to the machine; those it alone has start here.
-  const [skipped, setSkipped] = useState<string[]>([]);
+  const [skipped, setSkipped] = useState<string[]>(() => preview.binds.filter((bind) => !bind.exists_here).map((bind) => bind.path));
   const [forward, setForward] = useState(true);
   const [live, setLive] = useState(false);
-  const [overrides, setOverrides] = useState<Record<number, number>>({});
-  const [busy, setBusy] = useState<number[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const ports = usePortOverrides(allPorts(preview));
+  const creating = useAction("inline");
 
-  // Fresh form for every drop, with the ports checked against this computer,
-  // on the machine the drop overlay named. Only a new drop resets the form:
-  // a machine list refreshed while it is open must not throw away what was typed.
   useEffect(() => {
-    if (!preview) return;
-    setName(preview.name);
-    const state = useStore.getState();
-    const target = dropTarget(visibleMachines(state.machines, state.computerInfo), state.stats, state.selectedMachineId);
-    setMachineId(target?.id ?? "");
-    setOverrides({});
-    setSkipped(preview.binds.filter((bind) => !bind.exists_here).map((bind) => bind.path));
-    setError(null);
-    void api.defaultExcludes().then((list) => setExcludes(list.join(", ")));
-    void api.busyPorts(allPorts(preview)).then(setBusy);
-  }, [preview]);
+    api
+      .defaultExcludes()
+      .then((list) => setExcludes(list.join(", ")))
+      .catch(console.warn);
+  }, []);
 
-  if (!preview) return null;
   const machine = machines.find((m) => m.id === machineId);
-  const localFor = (published: number) => overrides[published] ?? published;
-
-  const setLocal = (published: number, value: number) => {
-    const next = { ...overrides };
-    if (value === published || !value) delete next[published];
-    else next[published] = value;
-    setOverrides(next);
-    void api.busyPorts(allPorts(preview).map((p) => (p === published ? value : localFor(p)))).then(setBusy);
-  };
 
   const run = async () => {
-    setSubmitting(true);
-    setError(null);
     const stack: Stack = {
       id: Math.random().toString(16).slice(2, 10),
       name,
@@ -78,23 +70,17 @@ export function DropSheet() {
       ],
       forward_ports: forward,
       live_sync: live,
-      port_overrides: Object.fromEntries(Object.entries(overrides).map(([k, v]) => [String(k), v])),
+      port_overrides: ports.forRequest,
     };
-    try {
-      clearOutput(stack.id);
-      setStacks(await api.createStack(stack));
-      setPreview(null);
-      // The new card is where the sync and the build show; go to it, wherever the drop happened.
-      useStore.getState().selectMachine(machineId);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setSubmitting(false);
-    }
+    const created = await creating.run(async () => setStacks(await api.createStack(stack)));
+    if (!created) return;
+    onClose();
+    // The new card is where the sync and the build show; go to it, wherever the drop happened.
+    selectMachine(machineId);
   };
 
   return (
-    <Dialog open onClose={() => setPreview(null)} eyebrow="New stack" title={preview.compose_rel} width={640} closeOnBackdrop={false}>
+    <>
       <p className="mono mt-1 truncate text-[11px] text-ink-3" title={preview.project_dir}>
         {preview.project_dir}
       </p>
@@ -104,8 +90,8 @@ export function DropSheet() {
           <Button
             size="sm"
             onClick={() => {
-              setPreview(null);
-              useStore.getState().setAddMachineOpen(true);
+              onClose();
+              setAddMachineOpen(true);
             }}
           >
             Add machine
@@ -130,12 +116,12 @@ export function DropSheet() {
 
       <div className="mt-5 overflow-x-auto rounded-xl border border-line">
         <table className="w-full text-[12px]">
-          <thead className="whitespace-nowrap bg-surface-2 text-[10px] uppercase tracking-[0.12em] text-ink-3">
+          <thead className="whitespace-nowrap">
             <tr>
-              <th className="px-3 py-2 text-left font-medium">Service</th>
-              <th className="px-3 py-2 text-left font-medium">Image</th>
-              <th className="px-3 py-2 text-left font-medium">On the machine</th>
-              <th className="px-3 py-2 text-left font-medium">On this computer</th>
+              <th className={LIST_HEAD}>Service</th>
+              <th className={LIST_HEAD}>Image</th>
+              <th className={LIST_HEAD}>On the machine</th>
+              <th className={LIST_HEAD}>On this computer</th>
             </tr>
           </thead>
           <tbody>
@@ -146,36 +132,31 @@ export function DropSheet() {
                 <td className="px-3 py-2 text-ink-2">
                   {service.ports.length === 0 ? <span className="text-ink-3">no ports</span> : null}
                   {service.ports.map((port) => (
-                    <div key={port.published} className="tabular leading-7">
+                    <div key={`${port.published}-${port.protocol}`} className="tabular leading-7">
                       :{port.published} <span className="text-ink-3">to {port.target}</span>
+                      {port.protocol === "udp" ? <span className="text-ink-3"> udp</span> : null}
                     </div>
                   ))}
                 </td>
                 <td className="px-3 py-2">
-                  {service.ports.map((port) => {
-                    const local = localFor(port.published);
-                    const taken = busy.includes(local);
-                    return (
-                      <div key={port.published} className="flex items-center gap-2 leading-7">
-                        <span className="text-ink-3">localhost:</span>
-                        <input
-                          aria-label={`Port on this computer for ${service.name} ${port.published}`}
-                          className="tabular w-16 rounded-md border border-line bg-surface-2 px-1.5 py-0.5 text-[12px] text-ink outline-none focus:border-accent"
-                          value={local}
-                          onChange={(e) => setLocal(port.published, Number(e.target.value.replace(/\D/g, "")))}
-                        />
-                        {taken ? (
-                          <button
-                            type="button"
-                            className="whitespace-nowrap text-[11px] text-warning underline-offset-2 hover:underline"
-                            onClick={() => setLocal(port.published, port.published + 1000)}
-                          >
-                            in use here, try {port.published + 1000}
-                          </button>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                  {service.ports.map((port) => (
+                    <div key={`${port.published}-${port.protocol}`} className="flex items-center gap-2 leading-7">
+                      {port.protocol === "udp" ? (
+                        <span className="text-ink-3">not bridged (UDP)</span>
+                      ) : (
+                        <>
+                          <span className="text-ink-3">localhost:</span>
+                          <LocalPortField
+                            port={port.published}
+                            local={ports.localFor(port.published)}
+                            taken={ports.isTaken(port.published)}
+                            label={`Port on this computer for ${service.name} ${port.published}`}
+                            onChange={(value) => ports.setLocal(port.published, value)}
+                          />
+                        </>
+                      )}
+                    </div>
+                  ))}
                 </td>
               </tr>
             ))}
@@ -216,18 +197,20 @@ export function DropSheet() {
         <Toggle checked={live} onChange={setLive} label="Re-sync when files change" />
       </div>
 
-      <DialogActions error={error}>
-        <Button tone="ghost" onClick={() => setPreview(null)}>
+      <DialogActions error={creating.error}>
+        <Button tone="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button tone="primary" onClick={() => void run()} busy={submitting} disabled={!machine || !name.trim()}>
+        <Button tone="primary" onClick={() => void run()} busy={creating.busy} disabled={!machine || !name.trim()}>
           Run on {machine?.name ?? "…"}
         </Button>
       </DialogActions>
-    </Dialog>
+    </>
   );
 }
 
+/** The TCP ports the stack publishes, each once: what the bridge carries to localhost. */
 function allPorts(preview: Preview): number[] {
-  return preview.services.flatMap((service) => service.ports.map((port) => port.published));
+  const tcp = preview.services.flatMap((service) => service.ports.filter((port) => port.protocol !== "udp").map((port) => port.published));
+  return [...new Set(tcp)];
 }

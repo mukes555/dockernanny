@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
-
+import { plural, stopwatch } from "../lib/format";
 import type { CopyProgress } from "../lib/types";
 import { useStore } from "../state/store";
 import { CheckIcon, ChevronRightIcon, SpinnerIcon, XIcon } from "../ui/icons";
 import { Page } from "../ui/Page";
 import { Button, Chip, EmptyPanel } from "../ui/primitives";
+import { useNow } from "../ui/useNow";
 
 /** What is happening in the background, kept so it can be reopened after the
  * progress panel is closed: every copy this run has seen, running first. A
@@ -13,16 +13,17 @@ export function ActivityPage() {
   const copies = useStore((state) => state.copies);
   const openProgress = useStore((state) => state.openProgress);
   const clearFinished = useStore((state) => state.clearFinishedCopies);
-  const now = useNow(1000);
 
   const list = Object.values(copies).sort((a, b) => Number(!!a.finished_ms) - Number(!!b.finished_ms) || b.started_ms - a.started_ms);
   const running = list.filter((copy) => !copy.finished_ms).length;
   const anyFinished = list.some((copy) => copy.finished_ms);
+  // The stopwatches only move while something runs.
+  const now = useNow(1000, running > 0);
 
   return (
     <Page
       title="Activity"
-      summary={running > 0 ? `${running} ${running === 1 ? "copy" : "copies"} running` : "Copies started since dockerNanny opened"}
+      summary={running > 0 ? `${plural(running, "copy", "copies")} running` : "Copies started since dockerNanny opened"}
       actions={
         anyFinished ? (
           <Button tone="ghost" onClick={clearFinished}>
@@ -51,7 +52,7 @@ export function ActivityPage() {
                 </div>
                 <div className="shrink-0 text-right">
                   <StateChip copy={copy} />
-                  <div className="tabular mt-0.5 text-[11px] text-ink-3">{elapsed((copy.finished_ms ?? now) - copy.started_ms)}</div>
+                  <div className="tabular mt-0.5 text-[11px] text-ink-3">{stopwatch((copy.finished_ms ?? now) - copy.started_ms)}</div>
                 </div>
                 <ChevronRightIcon className="shrink-0 text-ink-3" />
               </button>
@@ -75,19 +76,4 @@ function StateChip({ copy }: { copy: CopyProgress }) {
     return <Chip tone="accent">{step ? step.name.split(" ")[0] : "working"}</Chip>;
   }
   return copy.failed ? <Chip tone="critical">failed</Chip> : <Chip tone="good">done</Chip>;
-}
-
-function elapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
-}
-
-function useNow(everyMs: number): number {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), everyMs);
-    return () => window.clearInterval(timer);
-  }, [everyMs]);
-  return now;
 }

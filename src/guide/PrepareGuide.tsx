@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 
-import { Page, Tabs } from "../ui/Page";
-import { CodeBlock } from "../ui/primitives";
+import { Page } from "../ui/Page";
+import { Card, CodeBlock } from "../ui/primitives";
 import { SetupScriptCard } from "./SetupScriptCard";
 
 type Os = "windows" | "macos" | "linux";
@@ -50,7 +50,7 @@ export function PrepareGuide() {
       title="Prepare a machine"
       summary="What another computer needs before it can run stacks for this one"
       width="max-w-3xl"
-      tabs={<Tabs value={os} onChange={setOs} tabs={TABS.map((tab) => ({ id: tab.os, label: tab.label }))} />}
+      tabs={{ value: os, onChange: setOs, items: TABS.map((tab) => ({ id: tab.os, label: tab.label })) }}
     >
       <p className="text-[13px] leading-relaxed text-ink-2">
         A machine needs four things: sshd reachable on your network, Docker Engine with the compose plugin, rsync, and this computer's public key. Container
@@ -218,16 +218,21 @@ sudo systemctl enable --now ssh`}
   );
 }
 
+/** One numbered step, as a card like every other; where to type it sits on the right. */
 function Step({ n, title, where, children }: { n: number; title: string; where: string; children: ReactNode }) {
   return (
-    <section className="mt-5 rounded-xl border border-line bg-surface p-5">
-      <div className="flex items-baseline gap-3">
-        <span className="tabular text-[11px] font-semibold text-accent">{String(n).padStart(2, "0")}</span>
-        <h2 className="text-[14px] font-semibold text-ink">{title}</h2>
-        <span className="ml-auto text-[11px] text-ink-3">{where}</span>
-      </div>
-      <div className="mt-3 space-y-2">{children}</div>
-    </section>
+    <Card
+      className="mt-5"
+      title={
+        <>
+          <span className="tabular mr-3 text-[11px] font-semibold text-accent">{String(n).padStart(2, "0")}</span>
+          {title}
+        </>
+      }
+      actions={<span className="text-[11px] text-ink-3">{where}</span>}
+    >
+      <div className="space-y-2">{children}</div>
+    </Card>
   );
 }
 

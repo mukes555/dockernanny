@@ -86,23 +86,6 @@ export function RefreshIcon({ size = 14, className }: IconProps) {
   );
 }
 
-export function CopyIcon({ size = 14, className }: IconProps) {
-  return (
-    <svg {...base(size)} className={className} aria-hidden>
-      <rect x="9" y="9" width="11" height="11" rx="2" />
-      <path d="M5 15V6a2 2 0 0 1 2-2h9" />
-    </svg>
-  );
-}
-
-export function TrashIcon({ size = 14, className }: IconProps) {
-  return (
-    <svg {...base(size)} className={className} aria-hidden>
-      <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6" />
-    </svg>
-  );
-}
-
 export function TerminalIcon({ size = 14, className }: IconProps) {
   return (
     <svg {...base(size)} className={className} aria-hidden>

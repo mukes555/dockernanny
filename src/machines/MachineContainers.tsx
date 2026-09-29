@@ -3,9 +3,12 @@ import { useCallback, useEffect, useState } from "react";
 import { api, errorMessage } from "../lib/ipc";
 import type { Container, ContainerAction, Machine } from "../lib/types";
 import { useStore } from "../state/store";
+import type { DotState } from "../ui/Badges";
+import { StatusDot } from "../ui/Badges";
 import { RefreshIcon, SpinnerIcon } from "../ui/icons";
 import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
-import { Button, Card, Chip, cx, Toggle } from "../ui/primitives";
+import { Button, Card, Chip, cx, ErrorLine, Toggle } from "../ui/primitives";
+import { useAction } from "../ui/useAction";
 
 const RUNNING_LIKE = ["running", "restarting"];
 
@@ -16,47 +19,44 @@ const RUNNING_LIKE = ["running", "restarting"];
 export function MachineContainers({ machine }: { machine: Machine }) {
   const online = useStore((state) => state.stats[machine.id]?.online ?? false);
   const openContainerLogs = useStore((state) => state.openContainerLogs);
-  const pushNotice = useStore((state) => state.pushNotice);
-  const [containers, setContainers] = useState<Container[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState<Container[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [onlyRunning, setOnlyRunning] = useState(false);
+  // A menu item has no room for a line, so a failed start or stop is a notice.
+  const action = useAction("notice");
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setContainers(await api.listContainers(machine.id));
-      setError(null);
+      setLoaded(await api.listContainers(machine.id));
+      setLoadError(null);
     } catch (err) {
-      setError(errorMessage(err));
+      setLoadError(errorMessage(err));
     }
   }, [machine.id]);
 
   // Load when the machine is reachable, and keep it fresh; an offline machine
   // is not polled, so a machine that went to sleep is not hammered.
   useEffect(() => {
-    if (!online) {
-      setContainers(null);
-      return;
-    }
-    void refresh();
+    if (!online) return;
+    const first = window.setTimeout(() => void refresh(), 0);
     const timer = window.setInterval(() => void refresh(), 8000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(timer);
+    };
   }, [online, refresh]);
 
-  const act = async (container: Container, action: ContainerAction) => {
+  const act = async (container: Container, verb: ContainerAction) => {
     setBusyId(container.id);
-    try {
-      await api.containerAction(machine.id, container.id, action);
+    await action.run(async () => {
+      await api.containerAction(machine.id, container.id, verb);
       await refresh();
-    } catch (err) {
-      pushNotice(`Could not ${action} ${container.name}: ${errorMessage(err)}`);
-    } finally {
-      setBusyId(null);
-    }
+    }, `Could not ${verb} ${container.name}`);
   };
 
-  const shown = (containers ?? []).filter((c) => !onlyRunning || RUNNING_LIKE.includes(c.state)).sort(byRunningThenName);
-  const runningCount = (containers ?? []).filter((c) => RUNNING_LIKE.includes(c.state)).length;
+  // What was read while online is not shown once the machine stops answering.
+  const containers = online ? loaded : null;
 
   return (
     <Card
@@ -71,37 +71,68 @@ export function MachineContainers({ machine }: { machine: Machine }) {
         </>
       }
     >
-      {!online ? (
-        <p className="text-[13px] text-ink-2">The machine is offline. Its containers show here once it answers again.</p>
-      ) : error ? (
-        <div className="text-[13px] text-critical">{error}</div>
-      ) : containers === null ? (
-        <div className="flex items-center gap-2 text-[13px] text-ink-2">
-          <SpinnerIcon /> reading the machine's Docker
-        </div>
-      ) : containers.length === 0 ? (
-        <p className="text-[13px] text-ink-2">The machine's Docker has no containers.</p>
-      ) : (
-        <>
-          <div className="mb-2 text-[11px] text-ink-3">
-            {runningCount} of {containers.length} running
-          </div>
-          <div className="overflow-hidden rounded-xl border border-line">
-            {shown.map((container, index) => (
-              <ContainerRow
-                key={container.id}
-                container={container}
-                busy={busyId === container.id}
-                first={index === 0}
-                onAct={(action) => void act(container, action)}
-                onLogs={() => openContainerLogs({ machineId: machine.id, id: container.id, name: container.name })}
-              />
-            ))}
-            {shown.length === 0 ? <div className="px-3 py-3 text-[12px] text-ink-3">Nothing is running. Turn off "Only running" to see the rest.</div> : null}
-          </div>
-        </>
-      )}
+      <ContainerList
+        online={online}
+        loadError={loadError}
+        containers={containers}
+        onlyRunning={onlyRunning}
+        busyId={action.busy ? busyId : null}
+        onAct={(container, verb) => void act(container, verb)}
+        onLogs={(container) => openContainerLogs({ machineId: machine.id, id: container.id, name: container.name })}
+      />
     </Card>
+  );
+}
+
+function ContainerList({
+  online,
+  loadError,
+  containers,
+  onlyRunning,
+  busyId,
+  onAct,
+  onLogs,
+}: {
+  online: boolean;
+  loadError: string | null;
+  containers: Container[] | null;
+  onlyRunning: boolean;
+  busyId: string | null;
+  onAct: (container: Container, verb: ContainerAction) => void;
+  onLogs: (container: Container) => void;
+}) {
+  if (!online) return <p className="text-[13px] text-ink-2">The machine is offline. Its containers show here once it answers again.</p>;
+  if (loadError) return <ErrorLine error={loadError} className="mt-0 text-[13px]" />;
+  if (containers === null) {
+    return (
+      <div className="flex items-center gap-2 text-[13px] text-ink-2">
+        <SpinnerIcon /> reading the machine's Docker
+      </div>
+    );
+  }
+  if (containers.length === 0) return <p className="text-[13px] text-ink-2">The machine's Docker has no containers.</p>;
+
+  const shown = containers.filter((c) => !onlyRunning || RUNNING_LIKE.includes(c.state)).sort(byRunningThenName);
+  const runningCount = containers.filter((c) => RUNNING_LIKE.includes(c.state)).length;
+  return (
+    <>
+      <div className="mb-2 text-[11px] text-ink-3">
+        {runningCount} of {containers.length} running
+      </div>
+      <div className="overflow-hidden rounded-xl border border-line">
+        {shown.map((container, index) => (
+          <ContainerRow
+            key={container.id}
+            container={container}
+            busy={busyId === container.id}
+            first={index === 0}
+            onAct={(verb) => onAct(container, verb)}
+            onLogs={() => onLogs(container)}
+          />
+        ))}
+        {shown.length === 0 ? <div className="px-3 py-3 text-[12px] text-ink-3">Nothing is running. Turn off "Only running" to see the rest.</div> : null}
+      </div>
+    </>
   );
 }
 
@@ -115,13 +146,14 @@ function ContainerRow({
   container: Container;
   busy: boolean;
   first: boolean;
-  onAct: (action: ContainerAction) => void;
+  onAct: (verb: ContainerAction) => void;
   onLogs: () => void;
 }) {
   const running = RUNNING_LIKE.includes(container.state);
+  const dot = dotFor(container);
   return (
     <div className={cx("flex items-center gap-3 px-3 py-2.5 text-[12px]", !first && "border-t border-line")}>
-      <span className={cx("h-2 w-2 shrink-0 rounded-full", dotFor(container))} title={container.status} />
+      <StatusDot state={dot.state} pulse={dot.pulse} label={container.status} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate font-medium text-ink">{container.name}</span>
@@ -161,21 +193,21 @@ function ContainerRow({
   );
 }
 
-const STATE_DOT: Record<string, string> = {
-  running: "bg-good",
-  restarting: "bg-warning pulse",
-  paused: "bg-warning",
-  created: "bg-hairline",
-  exited: "bg-critical",
-  dead: "bg-critical",
+const STATE_DOT: Record<string, { state: DotState; pulse: boolean }> = {
+  running: { state: "good", pulse: false },
+  restarting: { state: "attention", pulse: true },
+  paused: { state: "attention", pulse: false },
+  created: { state: "idle", pulse: false },
+  exited: { state: "failed", pulse: false },
+  dead: { state: "failed", pulse: false },
 };
 
 /** Red only for a failure: a container that finished with code 0 (a build
  * helper, a one-off task) just stopped. */
-function dotFor(container: Container): string {
+function dotFor(container: Container): { state: DotState; pulse: boolean } {
   const exitedCleanly = container.state === "exited" && /Exited \(0\)/.test(container.status);
-  if (exitedCleanly) return "bg-hairline";
-  return STATE_DOT[container.state] ?? "bg-hairline";
+  if (exitedCleanly) return { state: "idle", pulse: false };
+  return STATE_DOT[container.state] ?? { state: "idle", pulse: false };
 }
 
 function byRunningThenName(a: Container, b: Container): number {

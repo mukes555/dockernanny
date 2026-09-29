@@ -288,10 +288,13 @@ export interface ScriptRequest {
   make_private: boolean;
 }
 
-/** What the terminal dialog shows: the config as ssh reads it, and the WSL distribution on Windows. */
+/** What the terminal dialog shows for one machine: the config as ssh reads
+ * it, the WSL distribution on Windows, the alias and the Docker context name. */
 export interface TerminalInfo {
   ssh_config: string;
   wsl_distro: string | null;
+  alias: string;
+  context_name: string;
 }
 
 export interface ServeInfo {
@@ -388,8 +391,10 @@ export interface UpdateStatus {
   available: AvailableUpdate | null;
   /** When the last check ended, in milliseconds since 1970. */
   checked_ms: number | null;
-  /** "up to date", "0.3.3 is available" or why the check failed. */
-  result: string | null;
+  /** What the last check found; null before the first one ends. */
+  outcome: "up_to_date" | "found" | "failed" | null;
+  /** Why the last check failed, when it did. */
+  error: string | null;
   checking: boolean;
 }
 
@@ -454,8 +459,8 @@ export interface HostPairing {
   note: string | null;
 }
 
+/** The sharing role's view of this computer; which OS it is, is `HostOs` in the store. */
 export interface HostSnapshot {
-  os: string;
   probed: boolean;
   rows: HostRow[];
   user: string | null;

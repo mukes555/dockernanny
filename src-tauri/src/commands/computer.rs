@@ -52,6 +52,13 @@ pub async fn computer_readiness(state: State<'_, AppState>) -> CmdResult<Vec<Doc
     Ok(rows)
 }
 
+/// Whether a private key file is there, so the page can offer to make one
+/// before a pairing fails for want of it.
+#[tauri::command]
+pub fn key_exists(path: String) -> bool {
+    crate::guide::key_exists(&path)
+}
+
 /// Makes the key `default_key_path` points at, only when it does not exist.
 #[tauri::command]
 pub async fn generate_key(state: State<'_, AppState>) -> CmdResult<String> {

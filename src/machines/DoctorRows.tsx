@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
+
 import type { DoctorRow } from "../lib/types";
 import { CheckIcon, SpinnerIcon, XIcon } from "../ui/icons";
-import { CodeBlock } from "../ui/primitives";
+import { CodeBlock, Inset } from "../ui/primitives";
 
 /** The five things a machine needs, in the order the doctor checks them. */
-export const CHECKS: Array<{ key: string; label: string }> = [
+const CHECKS: Array<{ key: string; label: string }> = [
   { key: "ssh", label: "SSH" },
   { key: "docker", label: "Docker" },
   { key: "compose", label: "Compose" },
@@ -57,22 +59,13 @@ function CheckRow({
   skipped: boolean;
   fixIsCommand: boolean;
 }) {
-  const icon = row ? (
-    row.ok ? (
-      <CheckIcon className="text-good" />
-    ) : (
-      <XIcon className="text-critical" />
-    )
-  ) : pending ? (
-    <SpinnerIcon className="text-ink-3" />
-  ) : (
-    <span className="inline-block h-3.5 w-3.5" />
-  );
-  const detail = row ? row.detail : skipped ? "skipped" : pending ? "checking" : "";
+  const detail = row ? row.detail : checkWord(skipped, pending);
   return (
-    <div className="rounded-lg border border-line bg-surface-2/60 px-3 py-2">
+    <Inset>
       <div className="flex items-center gap-2.5 text-[12px]">
-        <span className="flex w-4 justify-center">{icon}</span>
+        <span className="flex w-4 justify-center">
+          <CheckMark row={row} pending={pending} />
+        </span>
         <span className="w-24 shrink-0 font-medium text-ink">{label}</span>
         <span className="min-w-0 flex-1 truncate text-ink-2" title={detail}>
           {detail}
@@ -81,6 +74,31 @@ function CheckRow({
       {row?.fix ? (
         <div className="mt-2 ml-6">{fixIsCommand ? <CodeBlock code={row.fix} /> : <p className="text-[12px] leading-relaxed text-ink-2">{row.fix}</p>}</div>
       ) : null}
-    </div>
+    </Inset>
   );
+}
+
+/** A tick or a cross once the check answered, a spinner while it runs; the
+ * outcome is also written out for screen readers, which skip the icons. */
+function CheckMark({ row, pending }: { row?: DoctorRow; pending: boolean }) {
+  if (row?.ok) return <Marked icon={<CheckIcon className="text-good" />} said="passed" />;
+  if (row) return <Marked icon={<XIcon className="text-critical" />} said="failed" />;
+  if (pending) return <SpinnerIcon className="text-ink-3" />;
+  return <span className="inline-block h-3.5 w-3.5" />;
+}
+
+function Marked({ icon, said }: { icon: ReactNode; said: string }) {
+  return (
+    <>
+      {icon}
+      <span className="sr-only">{said}</span>
+    </>
+  );
+}
+
+/** What a check that has not answered says. */
+function checkWord(skipped: boolean, pending: boolean): string {
+  if (skipped) return "skipped";
+  if (pending) return "checking";
+  return "";
 }

@@ -34,9 +34,19 @@ pub struct UpdateStatus {
     pub available: Option<AvailableUpdate>,
     /// When the last check ended, in milliseconds since 1970.
     pub checked_ms: Option<u64>,
-    /// "up to date", "0.3.3 is available" or why the check failed.
-    pub result: Option<String>,
+    /// What the last check found; None before the first one ends.
+    pub outcome: Option<CheckOutcome>,
+    /// Why the last check failed, when it did.
+    pub error: Option<String>,
     pub checking: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckOutcome {
+    UpToDate,
+    Found,
+    Failed,
 }
 
 #[derive(Default)]
@@ -70,14 +80,15 @@ impl Updates {
                 *self.last_answer.lock().expect("last answer lock") = Some(SystemTime::now());
                 status.available =
                     found.as_ref().map(|u| AvailableUpdate { version: u.version.clone(), notes: u.body.clone().unwrap_or_default() });
-                status.result = Some(match &found {
-                    Some(update) => format!("{} is available", update.version),
-                    None => "up to date".into(),
-                });
+                status.outcome = Some(if found.is_some() { CheckOutcome::Found } else { CheckOutcome::UpToDate });
+                status.error = None;
                 *self.found.lock().expect("found update lock") = found;
             }
             // An update found earlier stays on offer; only the answer changes.
-            Err(error) => status.result = Some(format!("the check failed: {error}")),
+            Err(error) => {
+                status.outcome = Some(CheckOutcome::Failed);
+                status.error = Some(error);
+            }
         }
         status.clone()
     }
@@ -126,17 +137,17 @@ pub async fn check_now(app: &AppHandle) -> UpdateStatus {
     if !updates.begin() {
         return updates.status();
     }
-    let previous = updates.status().result;
+    let previous_error = updates.status().error;
     let answer = match updater(app) {
         Ok(updater) => updater.check().await.map_err(|err| err.to_string()),
         Err(err) => Err(err.to_string()),
     };
     let status = updates.finish(answer);
-    let result = status.result.clone().unwrap_or_default();
-    if status.available.is_some() || result == "up to date" {
-        tracing::info!("update check: {result}");
-    } else if previous.as_deref() != Some(result.as_str()) {
-        tracing::warn!("update check: {result}");
+    match (&status.error, &status.available) {
+        (Some(error), _) if previous_error.as_ref() != Some(error) => tracing::warn!("update check failed: {error}"),
+        (Some(_), _) => {}
+        (None, Some(found)) => tracing::info!("update check: {} is available", found.version),
+        (None, None) => tracing::info!("update check: up to date"),
     }
     let _ = app.emit(STATUS_EVENT, &status);
     crate::tray::show_update(app, status.available.as_ref().map(|a| a.version.as_str()));
@@ -253,13 +264,13 @@ mod tests {
         assert!(updates.begin());
         assert!(!updates.begin(), "one check at a time");
         let status = updates.finish(Err("offline".into()));
-        assert_eq!(status.result.as_deref(), Some("the check failed: offline"));
+        assert_eq!((status.outcome, status.error.as_deref()), (Some(CheckOutcome::Failed), Some("offline")));
         assert!(!status.checking);
         assert!(updates.last_answer.lock().unwrap().is_none(), "a failure is not an answer, so the next look tries again");
 
         assert!(updates.begin());
         let status = updates.finish(Ok(None));
-        assert_eq!(status.result.as_deref(), Some("up to date"));
+        assert_eq!((status.outcome, status.error), (Some(CheckOutcome::UpToDate), None), "a good answer clears the old failure");
         assert!(status.available.is_none());
         assert!(updates.last_answer.lock().unwrap().is_some());
     }
