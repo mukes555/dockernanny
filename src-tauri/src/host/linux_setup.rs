@@ -95,9 +95,13 @@ impl RootPlan {
     pub fn script(&self) -> String {
         let mut lines = vec!["set -e".to_string(), "export DEBIAN_FRONTEND=noninteractive".into()];
         if !self.packages.is_empty() {
+            // Only apt and dnf are known; anywhere else the script stops and
+            // names the packages, instead of going on as if they were there.
             let list = self.packages.join(" ");
             lines.push(format!(
-                "if command -v apt-get >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq {list}; elif command -v dnf >/dev/null 2>&1; then dnf install -y -q {list}; fi"
+                "if command -v apt-get >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq {list}; \
+                 elif command -v dnf >/dev/null 2>&1; then dnf install -y -q {list}; \
+                 else echo \"Set up knows apt and dnf only. Install these with your package manager, then click Set up again: {list}\" >&2; exit 1; fi"
             ));
         }
         lines.extend(self.commands.iter().cloned());
@@ -157,6 +161,17 @@ mod tests {
         assert!(script.contains("usermod -aG docker 'o'\\''neil'"));
         assert!(script.ends_with("echo dockernanny-linux-ok\n"));
         assert_eq!(plan.summary(), "Done: installed rsync, turned the SSH server on, installed Docker Engine. Restart this computer once so your login can use Docker.");
+    }
+
+    /// The package line run by a real `sh` with neither apt-get nor dnf on its PATH.
+    #[cfg(unix)]
+    #[test]
+    fn another_package_manager_stops_the_script_and_names_the_packages() {
+        let plan = RootPlan::for_missing(true, false, &DockerAccess::Ready("29.8.1".into()), "alex");
+        let out = std::process::Command::new("/bin/sh").arg("-c").arg(plan.script()).env("PATH", "/nonexistent").output().unwrap();
+        assert!(!out.status.success());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("Install these with your package manager, then click Set up again: rsync"));
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("dockernanny-linux-ok"), "no claim of success");
     }
 
     #[test]

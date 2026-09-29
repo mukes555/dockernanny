@@ -6,7 +6,8 @@
 #
 # Needs: Docker running here; Remote Login (macOS) or sshd (Linux) on port
 # 22; your public key in ~/.ssh/authorized_keys. KEY=<private key> picks
-# another key. Uses port 5499 and 8087/8088 while it runs.
+# another key. Uses port 5499 and 8087/8088 while it runs, and two free
+# ports the system picks for the bridge check.
 #
 # Everything it creates is named smoke-* and removed at the end: the app
 # folder in ~/.dockernanny-smoke, the stacks' containers and volumes, and the
@@ -44,6 +45,9 @@ echo "$out" | grep -q '^ok  SSH' || fail "ssh to this computer did not answer"
 say "giving up on a remote command ends it on the machine"
 out="$(example cancel "$user" 127.0.0.1 22 "$key")" || fail "a cancelled or timed-out command was left running"
 echo "$out" | grep -c 'left running = 0' | grep -q '^2$' || fail "expected two 'left running = 0' lines"
+
+say "port bridge: up, a port added and one dropped in place, then ended"
+out="$(example bridge "$user" 127.0.0.1 22 "$key" 2>&1)" || { echo "$out"; fail "the port bridge broke a promise"; }
 
 say "stack: sync, up, ps, down"
 out="$(example stack "$user" 127.0.0.1 22 "$key" "$repo_dir/examples/sample-stack")"

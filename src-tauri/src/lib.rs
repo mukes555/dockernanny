@@ -68,6 +68,7 @@ pub fn run() {
     // GUI apps on macOS start with a bare PATH; without this, Homebrew's
     // docker, ssh and rsync are invisible when launched from Finder.
     let _ = fix_path_env::fix();
+    tools::add_docker_to_path();
     let state = boot().expect("dockerNanny could not prepare its home folder");
     let start_hidden = std::env::args().any(|a| a == "--minimized");
 
@@ -83,7 +84,8 @@ pub fn run() {
         .manage(updates::Updates::default())
         .setup(move |app| {
             let state = app.state::<AppState>();
-            forget_stale_forwarders(&state);
+            // Bridges a crashed instance left would still hold the ports.
+            forward::exit_all(&state.ssh);
             machine::spawn_stats_loop(app.handle().clone());
             stack::spawn_status_loop(app.handle().clone());
             let live_stacks: Vec<_> = state.store.stacks().into_iter().filter(|s| s.live_sync).collect();
@@ -179,7 +181,7 @@ pub fn run() {
 pub fn shut_down(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     state.host.stop();
-    forget_stale_forwarders(&state);
+    forward::exit_all(&state.ssh);
     tools::end_all_children();
     for machine in state.store.machines() {
         state.ssh.exit_master(&machine.alias(), None);
@@ -209,19 +211,6 @@ pub fn apply_settings(app: &tauri::AppHandle) {
     if let Err(err) = result {
         tracing::warn!("start at login could not be changed: {err}");
     }
-}
-
-/// Forwarders from a crashed instance would still hold the ports; at start
-/// and at exit every stack's forwarder socket is told to exit.
-pub fn forget_stale_forwarders(state: &AppState) {
-    let aliases: HashMap<String, String> = state
-        .store
-        .stacks()
-        .iter()
-        .filter_map(|stack| state.store.machine(&stack.machine_id).map(|m| (stack.id.clone(), m.alias())))
-        .collect();
-    let ids: Vec<String> = aliases.keys().cloned().collect();
-    forward::exit_all(&state.ssh, ids.into_iter(), &aliases);
 }
 
 fn boot() -> anyhow::Result<AppState> {

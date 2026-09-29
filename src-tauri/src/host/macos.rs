@@ -5,18 +5,18 @@
 use std::process::Child;
 
 use super::platform::{
-    host_key_from_pub, parse_ifconfig, row, run, Installed, Outcome, Output, Picture, Platform, Say, SetupOptions, CHECK_LIMIT, SETUP_LIMIT,
+    host_key_from_pub, listening_here, row, run, Installed, Outcome, Output, Picture, Platform, Say, SetupOptions, CHECK_LIMIT, SETUP_LIMIT,
 };
 
 const SSH_PORT: u16 = 22;
-/// Docker Desktop and OrbStack put their CLI here; a GUI app's PATH does not include it.
-const PATH: &str = "/usr/local/bin:/opt/homebrew/bin:/opt/orbstack/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 pub struct MacOs;
 
 impl MacOs {
+    /// With the app's PATH, which finds Docker wherever its installer put it
+    /// (`tools::add_docker_to_path`).
     fn sh(&self, script: &str) -> Output {
-        run("/bin/sh", &["-c", script], None, &[("PATH", PATH)], CHECK_LIMIT)
+        run("/bin/sh", &["-c", script], None, &[], CHECK_LIMIT)
     }
 
     fn user(&self) -> String {
@@ -24,7 +24,7 @@ impl MacOs {
     }
 
     fn sshd_listening(&self) -> bool {
-        self.sh("nc -z 127.0.0.1 22 >/dev/null 2>&1 && echo yes").text() == "yes"
+        listening_here(SSH_PORT)
     }
 
     fn docker_version(&self) -> Option<String> {
@@ -86,7 +86,7 @@ impl Platform for MacOs {
             say("    macOS asks for your password to turn Remote Login on");
             // The password prompt waits for the user, so the long limit.
             let turn_on = "osascript -e 'do shell script \"systemsetup -setremotelogin on\" with administrator privileges' 2>&1";
-            let out = run("/bin/sh", &["-c", turn_on], None, &[("PATH", PATH)], SETUP_LIMIT);
+            let out = run("/bin/sh", &["-c", turn_on], None, &[], SETUP_LIMIT);
             std::thread::sleep(std::time::Duration::from_secs(2));
             if self.sshd_listening() {
                 Outcome::Changed("Remote Login is on".into())
@@ -111,7 +111,7 @@ impl Platform for MacOs {
 
     fn install_key(&self, key: &str) -> Result<Installed, String> {
         let user = super::platform::checked_user(self.user())?;
-        let out = run("/bin/sh", &[], Some(&super::platform::authorized_keys_script(&user, key)), &[("PATH", PATH)], CHECK_LIMIT);
+        let out = run("/bin/sh", &[], Some(&super::platform::authorized_keys_script(&user, key)), &[], CHECK_LIMIT);
         if !out.ok || !out.stdout.contains("dockernanny-key-ok") {
             return Err(format!("could not write authorized_keys: {}", out.stderr.trim()));
         }
@@ -125,10 +125,6 @@ impl Platform for MacOs {
 
     fn established_peers(&self, port: u16) -> Vec<String> {
         super::paired::parse_established(&self.sh("netstat -an -p tcp").stdout, port)
-    }
-
-    fn lan_ipv4(&self) -> Vec<String> {
-        parse_ifconfig(&self.sh("ifconfig").stdout)
     }
 
     fn hostname(&self) -> String {

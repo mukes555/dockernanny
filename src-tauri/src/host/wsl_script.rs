@@ -100,6 +100,12 @@ fn is_dotted_number(word: &str) -> bool {
     parts.len() >= 2 && parts.iter().all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// `ss` inside the distribution, asked for the TCP sockets listening on
+/// `port` alone: a line for each, nothing when there is none.
+pub fn listening_query(port: u16) -> String {
+    format!("ss -Hltn 'sport = :{port}' 2>/dev/null")
+}
+
 /// Mirrored networking and the rest need WSL 2.0 or newer.
 pub fn is_wsl_two(version: &str) -> bool {
     version.split('.').next().and_then(|major| major.parse::<u32>().ok()).is_some_and(|major| major >= 2)

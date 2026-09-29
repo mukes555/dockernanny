@@ -1,20 +1,24 @@
-//! Keeps `localhost:<port>` on this computer pointing at a stack's published ports
-//! on its machine: one `ssh -N` per stack holding every `-L`, restarted with
-//! backoff when it dies and replaced when the port set changes. The process
-//! is its own control master, so a forwarder left behind by a crash can be
-//! told to exit at the next start.
+//! Keeps `localhost:<port>` on this computer pointing at a stack's published
+//! ports on its machine: one `ssh -N` per stack holding every `-L`, restarted
+//! with backoff when it dies. The process is its own control master, and
+//! ssh's control commands do the rest: `-O check` says when it is up,
+//! `-O forward` and `-O cancel` change its ports in place (connections
+//! through the other ports stay open), and `-O exit` ends one left behind.
 
-use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use anyhow::Context;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Child;
+use tokio::process::{Child, ChildStderr};
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 use crate::compose::ServiceState;
 use crate::ssh::Ssh;
@@ -22,8 +26,15 @@ use crate::stack::Stack;
 use crate::{tools, AppState};
 
 pub const FORWARD_EVENT: &str = "forward:state";
-const LISTEN_TIMEOUT: Duration = Duration::from_secs(12);
+/// ConnectTimeout is 5 s; a login that has not finished well after that will not.
+const READY_TIMEOUT: Duration = Duration::from_secs(12);
+const CHECK_EVERY: Duration = Duration::from_millis(250);
+/// One control request; the master answers at once or not at all.
+const CONTROL_LIMIT: Duration = Duration::from_secs(10);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+/// Each ssh gets a socket of its own, so a request meant for an old one
+/// (its final `-O exit`) can never reach its successor.
+static NEXT_SOCKET: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ForwardPort {
@@ -48,12 +59,10 @@ pub struct ForwardEvent {
     pub state: ForwardState,
 }
 
-/// A running forwarder: what it forwards, how to stop it, and its task, so a
-/// replacement can wait until it has fully stopped.
+/// A stack's bridge as the app holds it: the ports it should carry, which
+/// its task follows without a restart. Dropping it ends the bridge.
 pub struct Forwarder {
-    pub ports: Vec<ForwardPort>,
-    cancel: watch::Sender<bool>,
-    task: tauri::async_runtime::JoinHandle<()>,
+    wanted: watch::Sender<Vec<ForwardPort>>,
 }
 
 /// Ports that something on this computer already listens on. Both address families
@@ -65,7 +74,16 @@ pub fn busy_ports(ports: &[u16]) -> Vec<u16> {
 fn can_bind(port: u16) -> bool {
     let v4 = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let v6 = SocketAddr::from((Ipv6Addr::LOCALHOST, port));
-    TcpListener::bind(v4).is_ok() && TcpListener::bind(v6).is_ok()
+    free(TcpListener::bind(v4)) && free(TcpListener::bind(v6))
+}
+
+/// Only "in use" and "not allowed" say the port is taken. Any other failure,
+/// such as a computer without IPv6, says nothing about the port.
+fn free(bind: std::io::Result<TcpListener>) -> bool {
+    match bind {
+        Ok(_) => true,
+        Err(err) => !matches!(err.kind(), ErrorKind::AddrInUse | ErrorKind::PermissionDenied),
+    }
 }
 
 /// The forwards a stack should have right now: every TCP port of a running
@@ -96,213 +114,301 @@ pub fn desired_ports(stack: &Stack, services: &[ServiceState], kept: &[ForwardPo
     ports
 }
 
-/// Brings the forwarder in line with what the stack currently publishes.
+/// Brings the bridge in line with what the stack currently publishes. A
+/// bridge that runs changes its ports itself; one is started only for a
+/// stack that has none yet.
 pub fn reconcile(app: &AppHandle, stack: &Stack, services: &[ServiceState]) {
     let state = app.state::<AppState>();
     let mut forwarders = state.forwarders.lock().expect("forwarders lock");
-    let current = forwarders.get(&stack.id).map(|f| f.ports.clone()).unwrap_or_default();
+    let current = forwarders.get(&stack.id).map(|f| f.wanted.borrow().clone()).unwrap_or_default();
     let desired = desired_ports(stack, services, &current);
     if current == desired {
         return;
     }
-    let previous = forwarders.remove(&stack.id).map(|old| {
-        let _ = old.cancel.send(true);
-        old.task
-    });
-    if desired.is_empty() {
-        publish(app, &stack.id, ForwardState::default());
+    if let Some(forwarder) = forwarders.get(&stack.id) {
+        forwarder.wanted.send_replace(desired);
         return;
     }
     let Some(machine) = state.store.machine(&stack.machine_id) else { return };
-    let (cancel, cancelled) = watch::channel(false);
-    let task = tauri::async_runtime::spawn(run(app.clone(), stack.id.clone(), machine.alias(), desired.clone(), cancelled, previous));
-    forwarders.insert(stack.id.clone(), Forwarder { ports: desired, cancel, task });
+    let report = {
+        let app = app.clone();
+        let stack_id = stack.id.clone();
+        move |forward: ForwardState| publish(&app, &stack_id, forward)
+    };
+    let wanted = spawn_bridge(state.ssh.clone(), machine.alias(), stack.id.clone(), desired, report);
+    forwarders.insert(stack.id.clone(), Forwarder { wanted });
 }
 
+/// Ends a stack's bridge: its task sees the sender go and stops its ssh.
 pub fn stop(app: &AppHandle, stack_id: &str) {
     let state = app.state::<AppState>();
-    let removed = state.forwarders.lock().expect("forwarders lock").remove(stack_id);
-    if let Some(forwarder) = removed {
-        let _ = forwarder.cancel.send(true);
-    }
+    state.forwarders.lock().expect("forwarders lock").remove(stack_id);
     state.forward_states.lock().expect("forward states lock").remove(stack_id);
 }
 
-/// Tells every forwarder that may still be running from an earlier instance
-/// to exit. Harmless when there is none. Each is its own process (a wsl.exe
-/// start on Windows), and the window waits for them at start, so they run
-/// side by side rather than one after another.
-pub fn exit_all(ssh: &Ssh, stack_ids: impl Iterator<Item = String>, aliases: &HashMap<String, String>) {
-    let stack_ids: Vec<String> = stack_ids.collect();
-    std::thread::scope(|scope| {
-        for stack_id in &stack_ids {
-            scope.spawn(move || {
-                let socket = ssh.forward_socket(stack_id);
-                if let Some(alias) = aliases.get(stack_id) {
-                    ssh.exit_master(alias, Some(&socket));
-                }
-                tools::remove_file(&socket);
-            });
-        }
-    });
+/// Tells every bridge whose socket is still in the folder to exit, whoever
+/// left it there: this instance at quit, a crashed one, a stack removed
+/// since. One shell loop, so Windows starts one wsl.exe, not one per stack.
+pub fn exit_all(ssh: &Ssh) {
+    let script = r#"for s in "$1"/*; do [ -S "$s" ] && ssh -F "$2" -S "$s" -O exit bridge; rm -f "$s"; done"#;
+    let _ = tools::unix_std("sh")
+        .args(["-c", script, "sh"])
+        .arg(ssh.forward_dir())
+        .arg(ssh.config_path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
-async fn run(
-    app: AppHandle,
-    stack_id: String,
+/// Starts a bridge that carries `ports` to the machine behind `alias` and
+/// tells `report` how it stands. Other ports go in through the returned
+/// sender; dropping the sender ends the bridge. `name` names its sockets.
+pub fn spawn_bridge(
+    ssh: Ssh,
     alias: String,
+    name: String,
     ports: Vec<ForwardPort>,
-    mut cancelled: watch::Receiver<bool>,
-    previous: Option<tauri::async_runtime::JoinHandle<()>>,
-) {
-    // Both use the same control socket: the old forwarder's final "exit"
-    // must not reach this one, so it finishes stopping first.
-    if let Some(previous) = previous {
-        let _ = previous.await;
-    }
-    let ssh = app.state::<AppState>().ssh.clone();
-    let socket = ssh.forward_socket(&stack_id);
+    report: impl Fn(ForwardState) + Send + Sync + 'static,
+) -> watch::Sender<Vec<ForwardPort>> {
+    let (wanted, watching) = watch::channel(ports);
+    tauri::async_runtime::spawn(run(ssh, alias, name, watching, report));
+    wanted
+}
+
+/// How one ssh process ended.
+enum Ended {
+    /// The bridge was ended; nothing follows.
+    Closed,
+    /// The ports changed in a way it could not follow; the next one starts at once.
+    Changed,
+    /// It died or never came up; the next one waits a little.
+    Died,
+}
+
+async fn run(ssh: Ssh, alias: String, name: String, mut wanted: watch::Receiver<Vec<ForwardPort>>, report: impl Fn(ForwardState)) {
     let mut attempts: u32 = 0;
     loop {
-        attempts += 1;
-        // A start that fails (WSL not up yet, ssh missing for a moment) is
-        // retried like a bridge that died; only a cancel ends the loop.
-        let (mut child, _tracked) = match spawn_ssh(&ssh, &alias, &socket, &ports) {
-            Ok(spawned) => spawned,
-            Err(err) => {
-                publish(
-                    &app,
-                    &stack_id,
-                    ForwardState { up: false, ports: ports.clone(), error: Some(format!("{err:#}")), attempts, since_ms: None },
-                );
-                if wait_before_retry(attempts, &mut cancelled).await == Wait::Cancelled {
-                    publish(&app, &stack_id, ForwardState::default());
-                    return;
-                }
-                continue;
-            }
-        };
-        let last_error = capture_last_line(child.stderr.take());
-
-        let listening = tokio::select! {
-            listening = wait_until_listening(&mut child, &ports) => listening,
-            _ = cancelled.changed() => { stop_child(&mut child, &ssh, &alias, &socket).await; return; }
-        };
-        if listening {
-            attempts = 0;
-            publish(
-                &app,
-                &stack_id,
-                ForwardState { up: true, ports: ports.clone(), error: None, attempts: 0, since_ms: Some(crate::stack::now_ms()) },
-            );
-        }
-
-        tokio::select! {
-            _ = child.wait() => {
-                let error = last_error.lock().expect("stderr lock").clone();
-                let error = if error.is_empty() { "ssh exited".to_string() } else { error };
-                publish(&app, &stack_id, ForwardState { up: false, ports: ports.clone(), error: Some(error), attempts, since_ms: None });
-            }
-            _ = cancelled.changed() => {
-                stop_child(&mut child, &ssh, &alias, &socket).await;
-                publish(&app, &stack_id, ForwardState::default());
+        let ports = wanted.borrow_and_update().clone();
+        if ports.is_empty() {
+            // Nothing to carry (the stack stopped, the bridge was turned off) until ports come back.
+            report(ForwardState::default());
+            if wanted.changed().await.is_err() {
                 return;
             }
+            continue;
         }
-
-        if wait_before_retry(attempts, &mut cancelled).await == Wait::Cancelled {
-            publish(&app, &stack_id, ForwardState::default());
+        attempts += 1;
+        let socket = format!("{}/{name}-{}", ssh.forward_dir(), NEXT_SOCKET.fetch_add(1, Ordering::Relaxed));
+        let tunnel = Tunnel { ssh: &ssh, alias: &alias, socket };
+        let ended = carry(&tunnel, ports, &mut wanted, &mut attempts, &report).await;
+        let closed = match ended {
+            Ended::Closed => true,
+            Ended::Changed => false,
+            Ended::Died => wait_before_retry(attempts, &mut wanted).await == Wait::Closed,
+        };
+        if closed {
+            report(ForwardState::default());
             return;
         }
     }
 }
 
+/// One ssh carrying the ports until it dies, the bridge is ended, or the
+/// ports change in a way it cannot follow in place.
+async fn carry(
+    tunnel: &Tunnel<'_>,
+    mut ports: Vec<ForwardPort>,
+    wanted: &mut watch::Receiver<Vec<ForwardPort>>,
+    attempts: &mut u32,
+    report: &impl Fn(ForwardState),
+) -> Ended {
+    // A start that fails (WSL not up yet, ssh missing for a moment) is
+    // retried like a bridge that died; only the end of the bridge stops that.
+    let (mut child, _tracked) = match tunnel.spawn(&ports) {
+        Ok(spawned) => spawned,
+        Err(err) => {
+            report(down(&ports, format!("{err:#}"), *attempts));
+            return Ended::Died;
+        }
+    };
+    let said = last_line_of(child.stderr.take());
+
+    let ready = tokio::select! {
+        ready = tunnel.wait_until_ready(&mut child) => ready,
+        changed = wanted.changed() => {
+            tunnel.stop(&mut child).await;
+            return if changed.is_ok() { Ended::Changed } else { Ended::Closed };
+        }
+    };
+    if !ready {
+        tunnel.stop(&mut child).await;
+        let why = what_ssh_said(said, &format!("the bridge did not come up within {} s", READY_TIMEOUT.as_secs())).await;
+        report(down(&ports, why, *attempts));
+        return Ended::Died;
+    }
+    *attempts = 0;
+    let since_ms = Some(crate::stack::now_ms());
+    report(ForwardState { up: true, ports: ports.clone(), error: None, attempts: 0, since_ms });
+
+    loop {
+        tokio::select! {
+            _ = child.wait() => {
+                let why = what_ssh_said(said, "ssh exited").await;
+                report(down(&ports, why, *attempts));
+                return Ended::Died;
+            }
+            changed = wanted.changed() => {
+                if changed.is_err() {
+                    tunnel.stop(&mut child).await;
+                    return Ended::Closed;
+                }
+                let next = wanted.borrow_and_update().clone();
+                let followed = !next.is_empty() && tunnel.adjust(&ports, &next).await.is_ok();
+                if !followed {
+                    tunnel.stop(&mut child).await;
+                    return Ended::Changed;
+                }
+                ports = next;
+                report(ForwardState { up: true, ports: ports.clone(), error: None, attempts: 0, since_ms });
+            }
+        }
+    }
+}
+
+fn down(ports: &[ForwardPort], error: String, attempts: u32) -> ForwardState {
+    ForwardState { up: false, ports: ports.to_vec(), error: Some(error), attempts, since_ms: None }
+}
+
 #[derive(PartialEq, Eq)]
 enum Wait {
     Over,
-    Cancelled,
+    Closed,
 }
 
 /// Exponential backoff so a machine that went to sleep is not hammered.
-async fn wait_before_retry(attempts: u32, cancelled: &mut watch::Receiver<bool>) -> Wait {
+/// New ports end the wait at once.
+async fn wait_before_retry(attempts: u32, wanted: &mut watch::Receiver<Vec<ForwardPort>>) -> Wait {
     let delay = Duration::from_secs(2u64.saturating_pow(attempts.min(5))).min(MAX_BACKOFF);
     tokio::select! {
         _ = tokio::time::sleep(delay) => Wait::Over,
-        _ = cancelled.changed() => Wait::Cancelled,
+        changed = wanted.changed() => if changed.is_ok() { Wait::Over } else { Wait::Closed },
     }
 }
 
-fn spawn_ssh(ssh: &Ssh, alias: &str, socket: &str, ports: &[ForwardPort]) -> anyhow::Result<(Child, tools::Tracked)> {
-    let mut cmd = tools::unix("ssh");
-    cmd.arg("-F").arg(ssh.config_path());
-    // -N: no remote command. -M/-S: be a control master on our own socket so a
-    // stale copy can be asked to exit. ExitOnForwardFailure turns a taken
-    // port into a clean exit instead of a half-working session. ControlPersist
-    // must be off here: with it, ssh forks a second background master that
-    // would keep the forwards alive after this child is killed.
-    cmd.args(["-N", "-M", "-S"]).arg(socket).args(["-o", "ExitOnForwardFailure=yes", "-o", "ControlPersist=no"]);
-    for port in ports {
-        // `localhost` binds both 127.0.0.1 and ::1, which browsers and Node need.
-        cmd.arg("-L").arg(format!("localhost:{}:127.0.0.1:{}", port.local, port.remote));
-    }
-    cmd.arg(alias).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
-    let child = cmd.spawn()?;
-    let tracked = tools::track(&child);
-    Ok((child, tracked))
+/// One ssh process of a bridge and the control requests sent to it.
+struct Tunnel<'a> {
+    ssh: &'a Ssh,
+    alias: &'a str,
+    /// Its own control socket, as ssh sees the path.
+    socket: String,
 }
 
-/// True once the first local port accepts a connection, which only happens
-/// after ssh has authenticated and set up its listeners.
-async fn wait_until_listening(child: &mut Child, ports: &[ForwardPort]) -> bool {
-    let Some(first) = ports.first() else { return false };
-    let deadline = tokio::time::Instant::now() + LISTEN_TIMEOUT;
-    while tokio::time::Instant::now() < deadline {
-        if child.try_wait().ok().flatten().is_some() {
-            return false;
+impl Tunnel<'_> {
+    fn spawn(&self, ports: &[ForwardPort]) -> anyhow::Result<(Child, tools::Tracked)> {
+        let mut cmd = tools::unix("ssh");
+        cmd.arg("-F").arg(self.ssh.config_path());
+        // -N: no remote command. -M/-S: be a control master on our own socket,
+        // which the control requests below use. ExitOnForwardFailure turns a
+        // taken port into a clean exit instead of a half-working session.
+        // ControlPersist must be off here: with it, ssh forks a second
+        // background master that would keep the forwards alive after this
+        // child is killed.
+        cmd.args(["-N", "-M", "-S"]).arg(&self.socket).args(["-o", "ExitOnForwardFailure=yes", "-o", "ControlPersist=no"]);
+        for port in ports {
+            cmd.arg("-L").arg(local_forward(port));
         }
-        if tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, first.local)).await.is_ok() {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        cmd.arg(self.alias).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
+        let child = cmd.spawn()?;
+        let tracked = tools::track(&child);
+        Ok((child, tracked))
     }
-    false
+
+    /// True once the master answers `-O check`. ssh opens its control socket
+    /// only after it has logged in and bound every port, so no test
+    /// connection has to go through to the service behind the bridge.
+    async fn wait_until_ready(&self, child: &mut Child) -> bool {
+        let deadline = Instant::now() + READY_TIMEOUT;
+        while Instant::now() < deadline {
+            if child.try_wait().ok().flatten().is_some() {
+                return false;
+            }
+            if self.control("check", None).await.is_ok() {
+                return true;
+            }
+            tokio::time::sleep(CHECK_EVERY).await;
+        }
+        false
+    }
+
+    /// Moves the running ssh from `carried` to `next`. Cancels come first, so
+    /// a local port that now leads to another remote port is free again.
+    async fn adjust(&self, carried: &[ForwardPort], next: &[ForwardPort]) -> anyhow::Result<()> {
+        for port in carried.iter().filter(|port| !next.contains(port)) {
+            self.control("cancel", Some(port)).await?;
+        }
+        for port in next.iter().filter(|port| !carried.contains(port)) {
+            self.control("forward", Some(port)).await?;
+        }
+        Ok(())
+    }
+
+    /// One control request (`check`, `forward`, `cancel`, `exit`) to this
+    /// ssh's master; an error when it refuses or does not answer.
+    async fn control(&self, request: &str, port: Option<&ForwardPort>) -> anyhow::Result<()> {
+        let mut cmd = tools::unix("ssh");
+        cmd.arg("-F").arg(self.ssh.config_path()).arg("-S").arg(&self.socket).args(["-O", request]);
+        if let Some(port) = port {
+            cmd.arg("-L").arg(local_forward(port));
+        }
+        cmd.arg(self.alias).stdin(Stdio::null()).kill_on_drop(true);
+        let out = tokio::time::timeout(CONTROL_LIMIT, cmd.output()).await.context("ssh did not answer")??;
+        let said = String::from_utf8_lossy(&out.stderr);
+        anyhow::ensure!(out.status.success(), "ssh -O {request}: {}", said.trim());
+        Ok(())
+    }
+
+    /// Kills the ssh and asks whatever still answers on its socket to exit.
+    /// On Windows the kill reaches only wsl.exe, and the request is what ends
+    /// the ssh inside WSL; elsewhere it finds nothing, which is harmless.
+    async fn stop(&self, child: &mut Child) {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+        let _ = self.control("exit", None).await;
+        tools::remove_file(&self.socket);
+    }
 }
 
-fn capture_last_line(stderr: Option<tokio::process::ChildStderr>) -> Arc<Mutex<String>> {
-    let last = Arc::new(Mutex::new(String::new()));
-    let Some(stderr) = stderr else { return last };
-    let sink = last.clone();
+/// `localhost` binds both 127.0.0.1 and ::1, which browsers and Node need.
+fn local_forward(port: &ForwardPort) -> String {
+    format!("localhost:{}:127.0.0.1:{}", port.local, port.remote)
+}
+
+/// Reads ssh's stderr to the end and keeps the last line, its reason for exiting.
+fn last_line_of(stderr: Option<ChildStderr>) -> JoinHandle<String> {
     tokio::spawn(async move {
+        let mut last = String::new();
+        let Some(stderr) = stderr else { return last };
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             let trimmed = line.trim();
             if !trimmed.is_empty() {
-                *sink.lock().expect("stderr lock") = trimmed.to_string();
+                last = trimmed.to_string();
             }
         }
-    });
-    last
+        last
+    })
 }
 
-/// Kills the forwarder and, should anything still answer on its socket,
-/// asks that to exit too, so the ports are free for the replacement. On
-/// Windows the kill only reaches wsl.exe, so the exit request is what ends
-/// the ssh inside WSL; it is always sent, and is harmless when nothing answers.
-async fn stop_child(child: &mut Child, ssh: &Ssh, alias: &str, socket: &str) {
-    let _ = child.start_kill();
-    let _ = child.wait().await;
-    let _ = tools::unix("ssh")
-        .arg("-F")
-        .arg(ssh.config_path())
-        .arg("-S")
-        .arg(socket)
-        .args(["-O", "exit", alias])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
-    tools::remove_file(socket);
+/// ssh's last line once the process has ended, or `otherwise`. The pipe
+/// closes with the process, so the wait is short; a second is the most.
+async fn what_ssh_said(reader: JoinHandle<String>, otherwise: &str) -> String {
+    let said = tokio::time::timeout(Duration::from_secs(1), reader).await.ok().and_then(Result::ok).unwrap_or_default();
+    if said.is_empty() {
+        otherwise.to_string()
+    } else {
+        said
+    }
 }
 
 fn publish(app: &AppHandle, stack_id: &str, state: ForwardState) {
@@ -313,6 +419,8 @@ fn publish(app: &AppHandle, stack_id: &str, state: ForwardState) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::compose::Port;
 
@@ -324,6 +432,19 @@ mod tests {
         // Port 0 always binds (the OS picks a free one), so this checks the
         // free branch without racing other tests for a just-released port.
         assert!(busy_ports(&[0]).is_empty());
+    }
+
+    #[test]
+    fn only_in_use_and_not_allowed_mean_taken() {
+        let failed = |kind: ErrorKind| Err(std::io::Error::from(kind));
+        assert!(!free(failed(ErrorKind::AddrInUse)));
+        assert!(!free(failed(ErrorKind::PermissionDenied)));
+        assert!(free(failed(ErrorKind::AddrNotAvailable)), "no IPv6 on this computer says nothing about the port");
+    }
+
+    #[test]
+    fn forwards_bind_localhost_and_reach_the_machine_s_loopback() {
+        assert_eq!(local_forward(&ForwardPort { local: 6432, remote: 5432 }), "localhost:6432:127.0.0.1:5432");
     }
 
     #[test]
