@@ -115,7 +115,7 @@ impl Host {
         if let Some((_, old)) = slot.take() {
             old.quit();
         }
-        let engine = engine::start(app.clone(), make_platform(&config), config.pairing_port);
+        let engine = engine::start(Arc::new(app.clone()), make_platform(&config), config.pairing_port, crate::store::home_dir());
         *slot = Some((config, engine));
     }
 
@@ -172,16 +172,4 @@ fn real_platform(_config: &HostConfig) -> Arc<dyn Platform> {
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn real_platform(_config: &HostConfig) -> Arc<dyn Platform> {
     Arc::new(fake::Fake::default())
-}
-
-/// One append-only file, `~/.dockernanny/host.log`, for what the sharing
-/// role did while nobody was looking; kept to a few megabytes.
-pub fn log_to_file(message: &str) {
-    use std::io::Write;
-    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let path = crate::store::home_dir().join("host.log");
-    crate::store::keep_log_small(&path);
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{seconds} {message}");
-    }
 }
