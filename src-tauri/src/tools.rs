@@ -76,29 +76,45 @@ pub fn native_std(program: &str) -> std::process::Command {
 /// `C:\Users\alex\shop` as `/mnt/c/Users/alex/shop` inside WSL.
 pub fn path(local: &Path) -> String {
     let text = local.display().to_string();
-    if cfg!(windows) {
-        wsl_path(&text)
-    } else {
+    #[cfg(windows)]
+    {
+        wsl_path(&wsl::mount_root(), &text)
+    }
+    #[cfg(not(windows))]
+    {
         text
     }
 }
 
-/// `C:\a\b` becomes `/mnt/c/a/b`; a path without a drive letter only gets
-/// forward slashes. Pure, so it is tested on every OS.
-pub fn wsl_path(windows: &str) -> String {
+/// Where WSL puts Windows drives unless /etc/wsl.conf's [automount] root moves them.
+#[cfg_attr(not(windows), allow(dead_code))]
+const DEFAULT_MOUNT_ROOT: &str = "/mnt/";
+
+/// `C:\a\b` becomes `<root>c/a/b` (`/mnt/c/a/b` by default); a path without
+/// a drive letter only gets forward slashes. Pure, so it is tested on every OS.
+pub fn wsl_path(mount_root: &str, windows: &str) -> String {
     let bytes = windows.as_bytes();
     let has_drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
     let slashed = windows.replace('\\', "/");
     if !has_drive {
         return slashed;
     }
+    let root = mount_root.trim_end_matches('/');
     let drive = (bytes[0] as char).to_ascii_lowercase();
     let rest = slashed[2..].trim_start_matches('/');
     if rest.is_empty() {
-        format!("/mnt/{drive}")
+        format!("{root}/{drive}")
     } else {
-        format!("/mnt/{drive}/{rest}")
+        format!("{root}/{drive}/{rest}")
     }
+}
+
+/// The mount root from where `wslpath -u 'C:\'` says drive C is:
+/// `/mnt/c/` gives `/mnt/`, `/c/` gives `/`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn mount_root_of_drive_c(drive_c: &str) -> Option<String> {
+    let root = drive_c.trim().trim_end_matches('/').strip_suffix('c')?;
+    root.starts_with('/').then(|| root.to_string())
 }
 
 /// Where the tools keep the generated ssh config, the pinned host keys, key
@@ -272,6 +288,8 @@ mod wsl {
     struct Chosen {
         distro: String,
         home: Option<String>,
+        /// Where Windows drives appear, `/mnt/` unless [automount] root says otherwise.
+        mount_root: Option<String>,
         /// When the distribution last failed to say where its home is.
         failed_at: Option<std::time::Instant>,
     }
@@ -290,7 +308,7 @@ mod wsl {
         if previous.as_deref() == Some(distro) {
             return false;
         }
-        *chosen = Some(Chosen { distro: distro.to_string(), home: None, failed_at: None });
+        *chosen = Some(Chosen { distro: distro.to_string(), home: None, mount_root: None, failed_at: None });
         // The first choice is made at start, before the tools are prepared; it is not a change.
         previous.is_some()
     }
@@ -316,17 +334,20 @@ mod wsl {
         if failed_recently {
             return NO_HOME.into();
         }
-        let out = super::unix_std("sh").args(["-c", "printf %s \"$HOME\""]).stdin(Stdio::null()).output();
-        let found = out
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|h| h.starts_with('/'));
+        // One wsl.exe start answers both: the home, and where drive C shows
+        // up (the stock `wslpath`), which gives the mount root for every drive.
+        let script = "printf '%s\\n' \"$HOME\"; wslpath -u 'C:\\' 2>/dev/null";
+        let out = super::unix_std("sh").args(["-c", script]).stdin(Stdio::null()).output();
+        let text = out.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+        let mut lines = text.lines().map(str::trim);
+        let found = lines.next().filter(|h| h.starts_with('/')).map(str::to_string);
+        let mount_root = lines.next().and_then(super::mount_root_of_drive_c);
         let mut chosen = CHOSEN.write().expect("wsl lock");
         let Some(entry) = chosen.as_mut() else { return found.unwrap_or_else(|| NO_HOME.into()) };
         match found {
             Some(home) => {
                 entry.home = Some(home.clone());
+                entry.mount_root = mount_root;
                 entry.failed_at = None;
                 home
             }
@@ -335,6 +356,13 @@ mod wsl {
                 NO_HOME.into()
             }
         }
+    }
+
+    /// Where Windows drives appear inside the distribution, learned with the
+    /// home; `/mnt/` until then or when `wslpath` did not answer.
+    pub fn mount_root() -> String {
+        let _ = home();
+        CHOSEN.read().expect("wsl lock").as_ref().and_then(|c| c.mount_root.clone()).unwrap_or_else(|| super::DEFAULT_MOUNT_ROOT.into())
     }
 
     /// A shell script inside the distribution with its arguments as `$1...`,
@@ -412,11 +440,17 @@ mod tests {
 
     #[test]
     fn windows_paths_become_wsl_paths() {
-        assert_eq!(wsl_path(r"C:\Users\alex\projects\shop"), "/mnt/c/Users/alex/projects/shop");
-        assert_eq!(wsl_path(r"D:\"), "/mnt/d");
-        assert_eq!(wsl_path("e:/data/x"), "/mnt/e/data/x");
-        assert_eq!(wsl_path("/home/alex/shop"), "/home/alex/shop");
-        assert_eq!(wsl_path(r"relative\dir"), "relative/dir");
+        let root = DEFAULT_MOUNT_ROOT;
+        assert_eq!(wsl_path(root, r"C:\Users\alex\projects\shop"), "/mnt/c/Users/alex/projects/shop");
+        assert_eq!(wsl_path(root, r"D:\"), "/mnt/d");
+        assert_eq!(wsl_path(root, "e:/data/x"), "/mnt/e/data/x");
+        assert_eq!(wsl_path(root, "/home/alex/shop"), "/home/alex/shop");
+        assert_eq!(wsl_path(root, r"relative\dir"), "relative/dir");
+        // [automount] root = / in /etc/wsl.conf puts drives at /c, /d.
+        assert_eq!(wsl_path("/", r"C:\Users\alex"), "/c/Users/alex");
+        assert_eq!(mount_root_of_drive_c("/mnt/c/\n").as_deref(), Some("/mnt/"));
+        assert_eq!(mount_root_of_drive_c("/c/").as_deref(), Some("/"));
+        assert_eq!(mount_root_of_drive_c("wslpath: C:\\: Invalid argument"), None);
     }
 
     #[test]

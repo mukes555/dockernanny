@@ -20,6 +20,8 @@ pub mod platform;
 pub mod windows;
 #[cfg(windows)]
 pub mod windows_steps;
+/// Shared by Set up on Windows and the guide's setup script, so on every platform.
+pub mod wsl_script;
 
 use std::sync::{Arc, Mutex};
 

@@ -93,7 +93,9 @@ function StatusSection({ host, onError }: { host: HostSnapshot; onError: (messag
   const isWindows = host.os.includes("Windows");
   const allOk = host.rows.every((row) => row.state !== "missing");
   const defaultMemory = host.total_memory_gb > 0 ? Math.max(2, Math.floor(host.total_memory_gb / 2)) : 8;
-  const memoryGb = memory || settings?.host_memory_gb || defaultMemory;
+  // Only a value the user chose is sent: 0 keeps the memory line already in .wslconfig.
+  const chosenMemory = memory || settings?.host_memory_gb || 0;
+  const memoryGb = chosenMemory || defaultMemory;
   const publicNetwork = host.network?.public && host.network.name && !host.network.name.includes('"') ? host.network.name : null;
 
   // The slider and the Settings field are one value; it is saved when the thumb is let go.
@@ -106,7 +108,7 @@ function StatusSection({ host, onError }: { host: HostSnapshot; onError: (messag
   const setup = () => {
     onError(null);
     api
-      .hostSetup({ memory_gb: memoryGb, make_network_private: makePrivate ? publicNetwork : null, keep_awake: isWindows && keepAwake })
+      .hostSetup({ memory_gb: chosenMemory, make_network_private: makePrivate ? publicNetwork : null, keep_awake: isWindows && keepAwake })
       .catch((err) => onError(errorMessage(err)));
   };
 
