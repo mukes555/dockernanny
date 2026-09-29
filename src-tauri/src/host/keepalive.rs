@@ -24,12 +24,7 @@ impl Default for KeepAlive {
 
 impl KeepAlive {
     pub fn new() -> Self {
-        Self {
-            child: None,
-            next_try: Instant::now(),
-            failures: 0,
-            not_needed: false,
-        }
+        Self { child: None, next_try: Instant::now(), failures: 0, not_needed: false }
     }
 
     pub fn alive(&mut self) -> bool {

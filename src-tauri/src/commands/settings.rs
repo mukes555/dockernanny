@@ -18,11 +18,7 @@ pub struct SettingsView {
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> SettingsView {
     let saved = state.store.settings();
-    SettingsView {
-        first_run: saved.is_none(),
-        settings: saved.unwrap_or_default(),
-        os: std::env::consts::OS,
-    }
+    SettingsView { first_run: saved.is_none(), settings: saved.unwrap_or_default(), os: std::env::consts::OS }
 }
 
 /// Saves, then starts or stops the sharing role and the start-at-login entry

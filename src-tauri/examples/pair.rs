@@ -14,6 +14,9 @@ async fn main() -> anyhow::Result<()> {
     };
     let pubkey = guide::public_key(key).await?;
     let answer = pairing::pair(address, pairing::PORT, code, &pubkey, &pairing::computer_name().await).await?;
-    println!("ok={} user={} port={} hostname={} host_key={} error={}", answer.ok, answer.user, answer.port, answer.hostname, answer.host_key, answer.error);
+    println!(
+        "ok={} user={} port={} hostname={} host_key={} error={}",
+        answer.ok, answer.user, answer.port, answer.hostname, answer.host_key, answer.error
+    );
     Ok(())
 }

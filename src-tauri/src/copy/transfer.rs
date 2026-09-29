@@ -30,7 +30,14 @@ pub fn volume_name_at(project: &str, volume: &NamedVolume) -> String {
 /// `tar cz` out of the source volume into the destination volume, which is
 /// created if missing and emptied first, so the copy replaces rather than
 /// overlays. External volumes are never emptied: they may be shared.
-pub async fn copy_volume(ssh: &Ssh, from: &Site, to: &Site, volume: &NamedVolume, helper_image: &str, report: &Report<'_>) -> anyhow::Result<()> {
+pub async fn copy_volume(
+    ssh: &Ssh,
+    from: &Site,
+    to: &Site,
+    volume: &NamedVolume,
+    helper_image: &str,
+    report: &Report<'_>,
+) -> anyhow::Result<()> {
     let destination = volume_name_at(&to.name, volume);
     anyhow::ensure!(safe_name(&volume.name) && safe_name(&destination), "unsafe volume name");
     let exists = to.endpoint.docker_output(ssh, &["volume", "inspect", &destination]).await?.ok();
@@ -71,7 +78,15 @@ pub async fn copy_image(ssh: &Ssh, from: &Site, to: &Site, image: &str, report: 
 /// `data/import`) cannot be written through `docker cp`, so the path is
 /// copied around it: entry by entry, down to where nothing such is mounted.
 /// A writable volume there (a database's anonymous volume) is written into.
-pub async fn copy_path(ssh: &Ssh, from: &Site, to: &Site, from_container: &str, path: &str, to_container: &str, report: &Report<'_>) -> anyhow::Result<()> {
+pub async fn copy_path(
+    ssh: &Ssh,
+    from: &Site,
+    to: &Site,
+    from_container: &str,
+    path: &str,
+    to_container: &str,
+    report: &Report<'_>,
+) -> anyhow::Result<()> {
     anyhow::ensure!(safe_name(from_container) && safe_name(to_container), "unsafe container name");
     anyhow::ensure!(safe_path(path), "unsafe path");
     let inspect = to.endpoint.docker_output(ssh, &["inspect", "-f", "{{json .Mounts}}", to_container]).await?;
@@ -118,7 +133,15 @@ pub fn around_mounts(path: &str, mounts: &[String]) -> Around {
 
 /// The tar is rooted at the path's last component, so it lands in the
 /// parent directory over there; `-a` keeps owners, which databases insist on.
-async fn stream_path(ssh: &Ssh, from: &Site, to: &Site, from_container: &str, path: &str, to_container: &str, report: &Report<'_>) -> anyhow::Result<u64> {
+async fn stream_path(
+    ssh: &Ssh,
+    from: &Site,
+    to: &Site,
+    from_container: &str,
+    path: &str,
+    to_container: &str,
+    report: &Report<'_>,
+) -> anyhow::Result<u64> {
     anyhow::ensure!(safe_path(path), "unsafe path {path}");
     let parent = parent_of(path);
     let source = format!("{from_container}:{path}");
@@ -187,11 +210,27 @@ pub fn names_below_top(reader: impl std::io::Read) -> std::io::Result<Vec<String
 /// time, counting the bytes for the progress panel. Nothing is buffered
 /// beyond one chunk. Both children are tracked so quitting the app ends
 /// them. Returns the bytes that went through.
-pub async fn pipe(from: &Site, to: &Site, mut reader: tokio::process::Command, mut writer: tokio::process::Command, report: &Report<'_>) -> anyhow::Result<u64> {
-    let mut reader = reader.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null()).spawn().with_context(|| format!("start the stream on {}", from.label))?;
+pub async fn pipe(
+    from: &Site,
+    to: &Site,
+    mut reader: tokio::process::Command,
+    mut writer: tokio::process::Command,
+    report: &Report<'_>,
+) -> anyhow::Result<u64> {
+    let mut reader = reader
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .spawn()
+        .with_context(|| format!("start the stream on {}", from.label))?;
     tools::track(&reader);
     let mut stdout = reader.stdout.take().context("no stdout")?;
-    let mut writer = writer.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().with_context(|| format!("start the stream on {}", to.label))?;
+    let mut writer = writer
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("start the stream on {}", to.label))?;
     tools::track(&writer);
     let mut stdin = writer.stdin.take().context("no stdin")?;
 
@@ -260,7 +299,8 @@ mod tests {
 
     #[test]
     fn a_path_is_copied_around_the_mounts_inside_it() {
-        let mounts = vec!["/opt/keycloak/data/import".to_string(), "/opt/keycloak/themes".to_string(), "/var/lib/postgresql/data".to_string()];
+        let mounts =
+            vec!["/opt/keycloak/data/import".to_string(), "/opt/keycloak/themes".to_string(), "/var/lib/postgresql/data".to_string()];
         assert_eq!(around_mounts("/opt/keycloak/data", &mounts), Around::Descend);
         assert_eq!(around_mounts("/opt/keycloak/data/import", &mounts), Around::Skip);
         assert_eq!(around_mounts("/opt/keycloak/data/h2", &mounts), Around::Whole);
@@ -309,7 +349,11 @@ mod tests {
     use crate::stack::Phase;
     use std::sync::{Arc, Mutex};
 
-    fn report_for_test<'a>(make_sink: &'a (dyn Fn() -> Sink + Send + Sync), status: &'a (dyn Fn(Phase, &str) + Send + Sync), seen: Arc<Mutex<Vec<u64>>>) -> Report<'a> {
+    fn report_for_test<'a>(
+        make_sink: &'a (dyn Fn() -> Sink + Send + Sync),
+        status: &'a (dyn Fn(Phase, &str) + Send + Sync),
+        seen: Arc<Mutex<Vec<u64>>>,
+    ) -> Report<'a> {
         let publish: Publish = Box::new(move |p| {
             if let Some(current) = &p.current {
                 seen.lock().unwrap().push(current.bytes);

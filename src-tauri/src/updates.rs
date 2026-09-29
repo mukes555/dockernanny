@@ -68,7 +68,8 @@ impl Updates {
         match answer {
             Ok(found) => {
                 *self.last_answer.lock().expect("last answer lock") = Some(SystemTime::now());
-                status.available = found.as_ref().map(|u| AvailableUpdate { version: u.version.clone(), notes: u.body.clone().unwrap_or_default() });
+                status.available =
+                    found.as_ref().map(|u| AvailableUpdate { version: u.version.clone(), notes: u.body.clone().unwrap_or_default() });
                 status.result = Some(match &found {
                     Some(update) => format!("{} is available", update.version),
                     None => "up to date".into(),
@@ -235,7 +236,10 @@ mod tests {
         // A private address nothing answers on, then three times this test's server.
         let dead = SocketAddr::from(([10, 255, 255, 1], port));
         let live = SocketAddr::from(([127, 0, 0, 1], port));
-        let client = http_client(reqwest::Client::builder()).resolve_to_addrs("updates.dockernanny.test", &[dead, live, live, live]).build().unwrap();
+        let client = http_client(reqwest::Client::builder())
+            .resolve_to_addrs("updates.dockernanny.test", &[dead, live, live, live])
+            .build()
+            .unwrap();
 
         let started = std::time::Instant::now();
         let body = client.get(format!("http://updates.dockernanny.test:{port}/")).send().await.unwrap().text().await.unwrap();

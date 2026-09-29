@@ -197,10 +197,7 @@ pub struct Outcome {
 }
 
 pub(crate) fn line(text: &str) -> Line {
-    Line {
-        stream: Stream::Stdout,
-        text: text.to_string(),
-    }
+    Line { stream: Stream::Stdout, text: text.to_string() }
 }
 
 /// Why a Docker command failed: the last error line it printed, or its
@@ -223,7 +220,8 @@ pub async fn plan(ssh: &Ssh, sides: &Sides, request: &CopyRequest) -> anyhow::Re
     let source_running = compose::parse_ps(&source_ps.stdout).iter().any(|s| s.state == "running");
     let model = discover::model(ssh, from).await?;
     let preview = compose::parse_model(&model, std::path::Path::new(&from.dir));
-    let mut ports: Vec<u16> = preview.services.iter().flat_map(|s| s.ports.iter().filter(|p| p.protocol == "tcp").map(|p| p.published)).collect();
+    let mut ports: Vec<u16> =
+        preview.services.iter().flat_map(|s| s.ports.iter().filter(|p| p.protocol == "tcp").map(|p| p.published)).collect();
     ports.sort_unstable();
     ports.dedup();
 
@@ -363,7 +361,16 @@ impl Inventory {
 /// Config, then data, then `up` at the destination. Split out so the caller
 /// can start the source again whether this succeeded or not.
 #[allow(clippy::too_many_arguments)]
-async fn carry(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest, inventory: Option<&Inventory>, source_services: &[compose::ServiceState], source_stopped: bool, report: &Report<'_>) -> anyhow::Result<Option<Mirrored>> {
+async fn carry(
+    ssh: &Ssh,
+    home: &Path,
+    sides: &Sides,
+    request: &CopyRequest,
+    inventory: Option<&Inventory>,
+    source_services: &[compose::ServiceState],
+    source_stopped: bool,
+    report: &Report<'_>,
+) -> anyhow::Result<Option<Mirrored>> {
     let (from, to) = (&sides.from, &sides.to);
 
     let mirrored = if request.config {
@@ -410,7 +417,14 @@ async fn carry(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest, inv
 
 /// `docker cp` streams for every ticked path. A source container that still
 /// runs is stopped for its own copy, so the files are consistent.
-async fn copy_container_data(ssh: &Ssh, sides: &Sides, request: &CopyRequest, source_services: &[compose::ServiceState], source_stopped: bool, report: &Report<'_>) -> anyhow::Result<()> {
+async fn copy_container_data(
+    ssh: &Ssh,
+    sides: &Sides,
+    request: &CopyRequest,
+    source_services: &[compose::ServiceState],
+    source_stopped: bool,
+    report: &Report<'_>,
+) -> anyhow::Result<()> {
     let (from, to) = (&sides.from, &sides.to);
     let destination_ps = to.compose_output(ssh, "ps -a --format json").await?;
     let destination_services = compose::parse_ps(&destination_ps.stdout);

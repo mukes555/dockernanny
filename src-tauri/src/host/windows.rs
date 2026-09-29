@@ -7,7 +7,10 @@ use std::process::Child;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use super::platform::{host_key_from_pub, parse_ipconfig, parse_rule, row, run, FirewallRules, Installed, NetworkProfile, Outcome, Output, Picture, Platform, Row, Rule, Say, SetupOptions, State};
+use super::platform::{
+    host_key_from_pub, parse_ipconfig, parse_rule, row, run, FirewallRules, Installed, NetworkProfile, Outcome, Output, Picture, Platform,
+    Row, Rule, Say, SetupOptions, State,
+};
 use super::{windows_steps, MIN_WINDOWS_BUILD};
 
 /// PowerShell and wsl.exe are the dearest things this app starts, and the
@@ -77,12 +80,24 @@ impl Windows {
     }
 
     fn read_steady(&self) -> Steady {
-        let mut steady = Steady { read_at: Instant::now(), total_memory_gb: self.total_memory_gb(), user: None, rows: Vec::new(), rsync: None, distro_ready: false };
+        let mut steady = Steady {
+            read_at: Instant::now(),
+            total_memory_gb: self.total_memory_gb(),
+            user: None,
+            rows: Vec::new(),
+            rsync: None,
+            distro_ready: false,
+        };
         let build = self.windows_build();
-        steady.rows.push(row("Windows", build >= MIN_WINDOWS_BUILD, if build == 0 { "version unknown".into() } else { format!("build {build}") }));
+        steady.rows.push(row(
+            "Windows",
+            build >= MIN_WINDOWS_BUILD,
+            if build == 0 { "version unknown".into() } else { format!("build {build}") },
+        ));
 
         let wsl = self.wsl(&["--version"]);
-        let version = wsl.stdout.lines().find(|l| l.starts_with("WSL version")).and_then(|l| l.split(':').nth(1)).map(|v| v.trim().to_string());
+        let version =
+            wsl.stdout.lines().find(|l| l.starts_with("WSL version")).and_then(|l| l.split(':').nth(1)).map(|v| v.trim().to_string());
         let wsl_ok = version.as_deref().map(|v| !v.starts_with("1.") && !v.starts_with("0.")).unwrap_or(false);
         steady.rows.push(row("WSL 2", wsl_ok, version.unwrap_or_else(|| "not installed (Set up installs it)".into())));
         if !wsl_ok {
@@ -90,7 +105,8 @@ impl Windows {
         }
 
         let has_distro = self.has_distro();
-        let distro_detail = if has_distro { format!("{} installed", self.distro) } else { format!("{} not installed (Set up installs it)", self.distro) };
+        let distro_detail =
+            if has_distro { format!("{} installed", self.distro) } else { format!("{} not installed (Set up installs it)", self.distro) };
         steady.rows.push(row("Linux distribution", has_distro, distro_detail));
         if !has_distro {
             return steady;
@@ -176,10 +192,7 @@ impl Windows {
             let fallback = |name: &str| if self.firewall_rule_exists(name) { Rule::Open(None) } else { Rule::Missing };
             return FirewallRules { ssh: fallback("dockerNanny SSH"), pairing: fallback("dockerNanny Pair") };
         }
-        FirewallRules {
-            ssh: parse_rule(&out.stdout, "dockerNanny SSH"),
-            pairing: parse_rule(&out.stdout, "dockerNanny Pair"),
-        }
+        FirewallRules { ssh: parse_rule(&out.stdout, "dockerNanny SSH"), pairing: parse_rule(&out.stdout, "dockerNanny Pair") }
     }
 
     /// Both rules there and, as far as can be read, on the ports asked for.
@@ -195,13 +208,11 @@ impl Windows {
 
     /// The connected network and its category, as `Name|Public` or `Name|Private`.
     fn network_profile(&self) -> Option<NetworkProfile> {
-        let out = self.powershell("Get-NetConnectionProfile | Select-Object -First 1 | ForEach-Object { \"$($_.Name)|$($_.NetworkCategory)\" }");
+        let out =
+            self.powershell("Get-NetConnectionProfile | Select-Object -First 1 | ForEach-Object { \"$($_.Name)|$($_.NetworkCategory)\" }");
         let text = out.text();
         let (name, category) = text.split_once('|')?;
-        Some(NetworkProfile {
-            name: name.trim().to_string(),
-            public: category.trim().eq_ignore_ascii_case("public"),
-        })
+        Some(NetworkProfile { name: name.trim().to_string(), public: category.trim().eq_ignore_ascii_case("public") })
     }
 }
 
@@ -230,7 +241,11 @@ impl Platform for Windows {
 
         let listening = self.in_distro("ss -ltn 2>/dev/null").stdout.contains(&format!(":{port} "));
         picture.sshd_listening = listening;
-        picture.rows.push(row("SSH server", listening, if listening { format!("listening on {port}") } else { format!("not listening on {port}") }));
+        picture.rows.push(row(
+            "SSH server",
+            listening,
+            if listening { format!("listening on {port}") } else { format!("not listening on {port}") },
+        ));
         picture.rows.extend(steady.rsync.clone());
 
         // Pairing may listen once both rules exist; a port changed since only needs Set up again.
@@ -246,7 +261,11 @@ impl Platform for Windows {
 
         picture.network = network;
         if let Some(network) = &picture.network {
-            let detail = if network.public { format!("{} is marked Public, which blocks the firewall rules", network.name) } else { format!("{} (Private)", network.name) };
+            let detail = if network.public {
+                format!("{} is marked Public, which blocks the firewall rules", network.name)
+            } else {
+                format!("{} (Private)", network.name)
+            };
             picture.rows.push(row("Network", !network.public, detail));
         }
 
@@ -276,12 +295,7 @@ impl Platform for Windows {
         if !out.ok || !out.stdout.contains("dockernanny-key-ok") {
             return Err(format!("could not write authorized_keys: {}", out.stderr.trim()));
         }
-        Ok(Installed {
-            user,
-            port: self.ssh_port,
-            hostname: self.hostname(),
-            host_key: self.host_key(),
-        })
+        Ok(Installed { user, port: self.ssh_port, hostname: self.hostname(), host_key: self.host_key() })
     }
 
     fn spawn_keepalive(&self) -> Result<Option<Child>, String> {
@@ -316,7 +330,14 @@ mod tests {
     use super::*;
 
     fn steady(rows: Vec<Row>, rsync: bool, distro_ready: bool) -> Steady {
-        Steady { read_at: Instant::now(), total_memory_gb: 16, user: Some("alex".into()), rows, rsync: Some(row("rsync", rsync, "")), distro_ready }
+        Steady {
+            read_at: Instant::now(),
+            total_memory_gb: 16,
+            user: Some("alex".into()),
+            rows,
+            rsync: Some(row("rsync", rsync, "")),
+            distro_ready,
+        }
     }
 
     #[test]

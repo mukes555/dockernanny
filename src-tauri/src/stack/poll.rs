@@ -23,14 +23,8 @@ pub fn spawn_status_loop(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             let state = app.state::<AppState>();
-            let online: HashSet<String> = state
-                .stats
-                .lock()
-                .expect("stats lock")
-                .iter()
-                .filter(|(_, stats)| stats.online)
-                .map(|(id, _)| id.clone())
-                .collect();
+            let online: HashSet<String> =
+                state.stats.lock().expect("stats lock").iter().filter(|(_, stats)| stats.online).map(|(id, _)| id.clone()).collect();
             let mut by_machine: HashMap<String, Vec<Stack>> = HashMap::new();
             for stack in state.store.stacks() {
                 if online.contains(&stack.machine_id) {
@@ -79,7 +73,11 @@ fn ps_script(stacks: &[Stack]) -> String {
     let mut script = String::new();
     for stack in stacks {
         let dir = crate::stack::shell_quote(&stack.remote_dir());
-        script.push_str(&format!("echo '=== {}'; [ -d {dir} ] || echo {NO_FOLDER}; ( {} 2>/dev/null ); ", stack.id, stack.compose_cmd("ps --all --format json")));
+        script.push_str(&format!(
+            "echo '=== {}'; [ -d {dir} ] || echo {NO_FOLDER}; ( {} 2>/dev/null ); ",
+            stack.id,
+            stack.compose_cmd("ps --all --format json")
+        ));
     }
     script.push_str("true");
     script
@@ -138,6 +136,11 @@ mod tests {
             port_overrides: HashMap::new(),
         };
         let script = ps_script(std::slice::from_ref(&stack));
-        assert!(script.starts_with("echo '=== s1'; [ -d '.dockernanny/shop' ] || echo dockernanny-no-folder; ( cd '.dockernanny/shop' && docker compose"), "{script}");
+        assert!(
+            script.starts_with(
+                "echo '=== s1'; [ -d '.dockernanny/shop' ] || echo dockernanny-no-folder; ( cd '.dockernanny/shop' && docker compose"
+            ),
+            "{script}"
+        );
     }
 }

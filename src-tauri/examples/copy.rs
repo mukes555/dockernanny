@@ -17,8 +17,8 @@ use std::io::Write;
 use dockernanny_lib::copy::endpoint::Site;
 use dockernanny_lib::copy::progress::{megabytes, CopyProgress, Publish, StepState, Tracker};
 use dockernanny_lib::copy::{self, CopyRequest, DataSelection, EndpointRef, Report, Sides, Sink};
-use dockernanny_lib::machine::Machine;
 use dockernanny_lib::job::Line;
+use dockernanny_lib::machine::Machine;
 use dockernanny_lib::ssh::Ssh;
 use dockernanny_lib::stack::Phase;
 use dockernanny_lib::{store, sync};
@@ -92,7 +92,8 @@ async fn main() -> anyhow::Result<()> {
     let (from, project) = match from_arg.split_once(':') {
         Some(("local", name)) => {
             let projects = copy::local::local_projects(&ssh).await?;
-            let project = projects.into_iter().find(|p| p.name == name).ok_or_else(|| anyhow::anyhow!("no local compose project named {name}"))?;
+            let project =
+                projects.into_iter().find(|p| p.name == name).ok_or_else(|| anyhow::anyhow!("no local compose project named {name}"))?;
             (Site::local(&project.name, &project.project_dir, &project.compose_rel), Some(project))
         }
         Some(("machine", name)) => (Site::machine(name, "docker-compose.yml", &alias, "the machine"), None),
@@ -121,12 +122,7 @@ async fn main() -> anyhow::Result<()> {
         excludes: sync::default_excludes(),
         forward_ports: false,
     };
-    let sides = Sides {
-        from: from.clone(),
-        to: to.clone(),
-        excludes: sync::default_excludes(),
-        helper_image: "alpine:3".into(),
-    };
+    let sides = Sides { from: from.clone(), to: to.clone(), excludes: sync::default_excludes(), helper_image: "alpine:3".into() };
 
     println!("== plan");
     let plan = copy::plan(&ssh, &sides, &request).await?;
@@ -146,7 +142,13 @@ async fn main() -> anyhow::Result<()> {
             request.data_selection.push(DataSelection { service: container.service.clone(), path: volume.destination.clone() });
         }
         for changed in &container.changed_paths {
-            println!("  {}: changed {} ({} entries){}", container.service, changed.path, changed.entries, if changed.suggested { ", looks like data" } else { "" });
+            println!(
+                "  {}: changed {} ({} entries){}",
+                container.service,
+                changed.path,
+                changed.entries,
+                if changed.suggested { ", looks like data" } else { "" }
+            );
             if changed.suggested {
                 request.data_selection.push(DataSelection { service: container.service.clone(), path: changed.path.clone() });
             }

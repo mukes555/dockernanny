@@ -138,7 +138,12 @@ pub async fn images_to_carry(ssh: &Ssh, from: &Site, to: &Site, model: &Value) -
         if there {
             continue;
         }
-        let digests = from.endpoint.docker_output(ssh, &["image", "inspect", "-f", "{{len .RepoDigests}}", image]).await.map(|o| o.stdout.trim().to_string()).unwrap_or_default();
+        let digests = from
+            .endpoint
+            .docker_output(ssh, &["image", "inspect", "-f", "{{len .RepoDigests}}", image])
+            .await
+            .map(|o| o.stdout.trim().to_string())
+            .unwrap_or_default();
         if digests == "0" {
             images.push(image.clone());
         }
@@ -175,7 +180,8 @@ pub async fn images_to_download(ssh: &Ssh, to: &Site, model: &Value, carried: &[
         if carried.contains(&wanted.image) {
             continue;
         }
-        let there = to.endpoint.docker_output(ssh, &["image", "inspect", "-f", "{{.Id}}", &wanted.image]).await.map(|o| o.ok()).unwrap_or(false);
+        let there =
+            to.endpoint.docker_output(ssh, &["image", "inspect", "-f", "{{.Id}}", &wanted.image]).await.map(|o| o.ok()).unwrap_or(false);
         if !there {
             downloads.push(wanted);
         }
@@ -219,11 +225,7 @@ pub fn parse_mounts(json: &str) -> (Vec<AnonymousVolume>, Vec<String>) {
         let name = text("Name");
         let is_anonymous = text("Type") == "volume" && name.len() == 64 && name.chars().all(|c| c.is_ascii_hexdigit());
         if is_anonymous {
-            anonymous.push(AnonymousVolume {
-                name,
-                destination,
-                size: String::new(),
-            });
+            anonymous.push(AnonymousVolume { name, destination, size: String::new() });
         }
     }
     (anonymous, destinations)
@@ -295,7 +297,9 @@ fn truncate(path: &str, depth: usize) -> String {
 
 fn looks_like_data(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    let database_dir = ["/var/lib/postgresql", "/var/lib/mysql", "/var/lib/mongo", "/var/lib/redis", "/var/lib/clickhouse"].iter().any(|d| lower.starts_with(d));
+    let database_dir = ["/var/lib/postgresql", "/var/lib/mysql", "/var/lib/mongo", "/var/lib/redis", "/var/lib/clickhouse"]
+        .iter()
+        .any(|d| lower.starts_with(d));
     database_dir || lower.contains("data") || lower.contains("/db") || lower.contains("storage")
 }
 

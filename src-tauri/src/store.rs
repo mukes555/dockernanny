@@ -48,12 +48,7 @@ impl Store {
         let machines = read_json(&home.join(MACHINES_FILE));
         let stacks = read_json(&home.join(STACKS_FILE));
         let settings = read_json(&home.join(SETTINGS_FILE));
-        Ok(Self {
-            home: home.to_path_buf(),
-            machines: Mutex::new(machines),
-            stacks: Mutex::new(stacks),
-            settings: Mutex::new(settings),
-        })
+        Ok(Self { home: home.to_path_buf(), machines: Mutex::new(machines), stacks: Mutex::new(stacks), settings: Mutex::new(settings) })
     }
 
     pub fn stacks(&self) -> Vec<Stack> {
@@ -102,10 +97,7 @@ impl Store {
 /// A missing or corrupt file comes back as the default: the app must never
 /// refuse to start over one bad json file.
 fn read_json<T: DeserializeOwned + Default>(path: &Path) -> T {
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+    fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
 }
 
 /// Written to a sibling temp file and renamed into place, so a crash mid-write

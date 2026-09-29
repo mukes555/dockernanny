@@ -67,13 +67,7 @@ impl Default for Code {
 
 impl Code {
     pub fn new() -> Self {
-        Self {
-            digits: new_digits(),
-            wrong: 0,
-            total_wrong: 0,
-            armed_until: None,
-            locked: false,
-        }
+        Self { digits: new_digits(), wrong: 0, total_wrong: 0, armed_until: None, locked: false }
     }
 
     /// Opens the pairing window with a fresh code and a clean slate.
@@ -133,7 +127,13 @@ fn same_code(given: &str, expected: &str) -> bool {
 /// Listens on a thread until `stop` is set; the code decides whether a
 /// request is honoured. `install` puts a validated key in place and says
 /// which user and port to use; errors go back as text.
-pub fn serve(port: u16, code: Arc<Mutex<Code>>, install: impl Fn(&str) -> Result<Installed, String> + Send + Sync + 'static, events: Sender<Event>, stop: Arc<AtomicBool>) -> std::io::Result<u16> {
+pub fn serve(
+    port: u16,
+    code: Arc<Mutex<Code>>,
+    install: impl Fn(&str) -> Result<Installed, String> + Send + Sync + 'static,
+    events: Sender<Event>,
+    stop: Arc<AtomicBool>,
+) -> std::io::Result<u16> {
     let listener = TcpListener::bind(("0.0.0.0", port))?;
     // Port 0 asks the OS for a free one; the caller learns which it got.
     let bound = listener.local_addr()?.port();
@@ -160,12 +160,14 @@ pub fn serve(port: u16, code: Arc<Mutex<Code>>, install: impl Fn(&str) -> Result
     Ok(bound)
 }
 
-fn handle(stream: &TcpStream, code: &Mutex<Code>, install: &(impl Fn(&str) -> Result<Installed, String> + ?Sized), events: &Sender<Event>, from: &str) -> Answer {
-    let refuse = |error: &str| Answer {
-        ok: false,
-        error: error.into(),
-        ..Default::default()
-    };
+fn handle(
+    stream: &TcpStream,
+    code: &Mutex<Code>,
+    install: &(impl Fn(&str) -> Result<Installed, String> + ?Sized),
+    events: &Sender<Event>,
+    from: &str,
+) -> Answer {
+    let refuse = |error: &str| Answer { ok: false, error: error.into(), ..Default::default() };
     let request = match read_request(stream) {
         Ok(request) => request,
         Err(err) => return refuse(&err),

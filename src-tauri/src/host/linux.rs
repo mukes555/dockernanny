@@ -45,11 +45,7 @@ impl Platform for Linux {
     }
 
     fn probe(&self) -> Picture {
-        let kb: u64 = self
-            .sh("awk '/MemTotal/ {print $2}' /proc/meminfo")
-            .text()
-            .parse()
-            .unwrap_or(0);
+        let kb: u64 = self.sh("awk '/MemTotal/ {print $2}' /proc/meminfo").text().parse().unwrap_or(0);
         let mut picture = Picture {
             ssh_port: SSH_PORT,
             total_memory_gb: (kb / (1024 * 1024)) as u32,
@@ -64,7 +60,11 @@ impl Platform for Linux {
 
         let listening = self.sshd_listening();
         picture.sshd_listening = listening;
-        picture.rows.push(row("SSH server", listening, if listening { format!("listening on {SSH_PORT}") } else { format!("not listening on {SSH_PORT}") }));
+        picture.rows.push(row(
+            "SSH server",
+            listening,
+            if listening { format!("listening on {SSH_PORT}") } else { format!("not listening on {SSH_PORT}") },
+        ));
 
         let rsync = self.rsync_present();
         picture.rows.push(row("rsync", rsync, if rsync { "installed" } else { "missing" }));
@@ -108,7 +108,10 @@ impl Platform for Linux {
 
         say("==> Key folder");
         let out = self.sh("install -d -m 700 \"$HOME/.ssh\" && touch \"$HOME/.ssh/authorized_keys\" && chmod 600 \"$HOME/.ssh/authorized_keys\" && echo ok");
-        results.push(("Key folder", if out.ok { Outcome::Done("~/.ssh ready".into()) } else { Outcome::Failed(out.stderr.trim().to_string()) }));
+        results.push((
+            "Key folder",
+            if out.ok { Outcome::Done("~/.ssh ready".into()) } else { Outcome::Failed(out.stderr.trim().to_string()) },
+        ));
         results
     }
 
@@ -122,12 +125,7 @@ impl Platform for Linux {
         if !out.ok || !out.stdout.contains("dockernanny-key-ok") {
             return Err(format!("could not write authorized_keys: {}", out.stderr.trim()));
         }
-        Ok(Installed {
-            user,
-            port: SSH_PORT,
-            hostname: self.hostname(),
-            host_key: self.host_key(),
-        })
+        Ok(Installed { user, port: SSH_PORT, hostname: self.hostname(), host_key: self.host_key() })
     }
 
     fn spawn_keepalive(&self) -> Result<Option<Child>, String> {

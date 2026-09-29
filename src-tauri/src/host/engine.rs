@@ -59,18 +59,10 @@ impl Engine {
 
 pub fn start(app: AppHandle, platform: Arc<dyn Platform>, pairing_port: u16) -> Engine {
     let (to_engine, requests) = channel::<ToEngine>();
-    let snapshot = Arc::new(Mutex::new(HostSnapshot {
-        os: platform.os_name().to_string(),
-        ..Default::default()
-    }));
+    let snapshot = Arc::new(Mutex::new(HostSnapshot { os: platform.os_name().to_string(), ..Default::default() }));
     let log = Arc::new(Mutex::new(Vec::new()));
     let stop_listener = Arc::new(AtomicBool::new(false));
-    let engine = Engine {
-        to_engine,
-        snapshot: snapshot.clone(),
-        log: log.clone(),
-        stop_listener: stop_listener.clone(),
-    };
+    let engine = Engine { to_engine, snapshot: snapshot.clone(), log: log.clone(), stop_listener: stop_listener.clone() };
     std::thread::Builder::new()
         .name("dockernanny-host".into())
         .spawn(move || {
@@ -174,7 +166,11 @@ impl Loop {
         self.probed = true;
         self.last_probe = Some(Instant::now());
         let missing: Vec<&str> = self.picture.rows.iter().filter(|r| r.state == super::platform::State::Missing).map(|r| r.name).collect();
-        super::log_to_file(&format!("probe took {:?}; missing: {}", started.elapsed(), if missing.is_empty() { "nothing".to_string() } else { missing.join(", ") }));
+        super::log_to_file(&format!(
+            "probe took {:?}; missing: {}",
+            started.elapsed(),
+            if missing.is_empty() { "nothing".to_string() } else { missing.join(", ") }
+        ));
     }
 
     /// The port opens only once the platform says the firewall allows it.
@@ -211,10 +207,15 @@ impl Loop {
                         Ok(all) => self.paired = all,
                         Err(err) => super::log_to_file(&format!("paired.json could not be written: {err}")),
                     }
-                    format!("Paired with {} ({from}). It can use this computer now.", if name.is_empty() { "another computer".into() } else { name })
+                    format!(
+                        "Paired with {} ({from}). It can use this computer now.",
+                        if name.is_empty() { "another computer".into() } else { name }
+                    )
                 }
                 Event::WrongCode { from, remaining } => format!("Wrong code from {from} ({remaining} tries left before pairing locks)."),
-                Event::Locked { from } => format!("Pairing locked after too many wrong codes from {from}. Turn it on again when you are ready."),
+                Event::Locked { from } => {
+                    format!("Pairing locked after too many wrong codes from {from}. Turn it on again when you are ready.")
+                }
                 Event::Failed(err) => format!("Pairing failed: {err}"),
             })
             .collect();

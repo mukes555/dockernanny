@@ -67,7 +67,9 @@ impl Platform for MacOs {
         say("==> Docker");
         let docker = match self.docker_version() {
             Some(version) => Outcome::Done(format!("Docker {version}")),
-            None => Outcome::NeedsUser("Install Docker Desktop (docker.com) or OrbStack (orbstack.dev), open it once, then click Set up again.".into()),
+            None => Outcome::NeedsUser(
+                "Install Docker Desktop (docker.com) or OrbStack (orbstack.dev), open it once, then click Set up again.".into(),
+            ),
         };
         let stop = matches!(docker, Outcome::NeedsUser(_));
         results.push(("Docker", docker));
@@ -92,7 +94,10 @@ impl Platform for MacOs {
 
         say("==> Key folder");
         let out = self.sh("install -d -m 700 \"$HOME/.ssh\" && touch \"$HOME/.ssh/authorized_keys\" && chmod 600 \"$HOME/.ssh/authorized_keys\" && echo ok");
-        results.push(("Key folder", if out.ok { Outcome::Done("~/.ssh ready".into()) } else { Outcome::Failed(out.stderr.trim().to_string()) }));
+        results.push((
+            "Key folder",
+            if out.ok { Outcome::Done("~/.ssh ready".into()) } else { Outcome::Failed(out.stderr.trim().to_string()) },
+        ));
         results
     }
 
@@ -106,12 +111,7 @@ impl Platform for MacOs {
         if !out.ok || !out.stdout.contains("dockernanny-key-ok") {
             return Err(format!("could not write authorized_keys: {}", out.stderr.trim()));
         }
-        Ok(Installed {
-            user,
-            port: SSH_PORT,
-            hostname: self.hostname(),
-            host_key: self.host_key(),
-        })
+        Ok(Installed { user, port: SSH_PORT, hostname: self.hostname(), host_key: self.host_key() })
     }
 
     fn spawn_keepalive(&self) -> Result<Option<Child>, String> {

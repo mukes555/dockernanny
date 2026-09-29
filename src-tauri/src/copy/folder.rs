@@ -23,7 +23,14 @@ pub struct Mirrored {
 /// One direction of the copy: `from`'s contents become `to`'s contents.
 /// `--delete` keeps the copy exact but never removes excluded paths, so a
 /// node_modules a container created inside a bind mount survives.
-pub async fn mirror(ssh: &Ssh, home: &Path, from: &Site, to: &Site, excludes: &[String], make_sink: &(dyn Fn() -> Sink + Send + Sync)) -> anyhow::Result<Mirrored> {
+pub async fn mirror(
+    ssh: &Ssh,
+    home: &Path,
+    from: &Site,
+    to: &Site,
+    excludes: &[String],
+    make_sink: &(dyn Fn() -> Sink + Send + Sync),
+) -> anyhow::Result<Mirrored> {
     match (&from.endpoint, &to.endpoint) {
         (Endpoint::Local, Endpoint::Local) => anyhow::bail!("both ends are this computer"),
         (_, Endpoint::Machine { .. }) if from.is_local() => {
@@ -44,7 +51,14 @@ pub async fn mirror(ssh: &Ssh, home: &Path, from: &Site, to: &Site, excludes: &[
     }
 }
 
-async fn relay(ssh: &Ssh, from: &Site, staging: &Site, to: &Site, excludes: &[String], make_sink: &(dyn Fn() -> Sink + Send + Sync)) -> anyhow::Result<Mirrored> {
+async fn relay(
+    ssh: &Ssh,
+    from: &Site,
+    staging: &Site,
+    to: &Site,
+    excludes: &[String],
+    make_sink: &(dyn Fn() -> Sink + Send + Sync),
+) -> anyhow::Result<Mirrored> {
     prepare(ssh, staging).await?;
     // --delete on the pull too, so a staging folder left by a crashed run cannot leak old files.
     run_rsync(&rsync_args(&ssh.rsync_transport(), &rsync_path(from), &rsync_path(staging), excludes), make_sink()).await?;
@@ -105,10 +119,9 @@ async fn run_rsync(args: &[String], mut on_line: Sink) -> anyhow::Result<Mirrore
     match code {
         Some(0) => Ok(Mirrored { files, warning: None }),
         // Partial transfer: usually files owned by root inside a bind mount.
-        Some(23) | Some(24) => Ok(Mirrored {
-            files,
-            warning: Some("some files could not be copied (rsync reported a partial transfer)".into()),
-        }),
+        Some(23) | Some(24) => {
+            Ok(Mirrored { files, warning: Some("some files could not be copied (rsync reported a partial transfer)".into()) })
+        }
         // rsync's own last words, such as the ssh error under it.
         other => anyhow::bail!("rsync: {}", last_error.lock().expect("last error lock").explain(other)),
     }
@@ -117,7 +130,8 @@ async fn run_rsync(args: &[String], mut on_line: Sink) -> anyhow::Result<Mirrore
 /// `--itemize-changes` lines: a sent file starts with `>f`, `<f` or `cf`;
 /// deletions with `*deleting`. Directories and attribute-only lines do not count.
 pub fn is_file_change(line: &str) -> bool {
-    let sent_file = line.len() > 2 && (line.starts_with('>') || line.starts_with('<') || line.starts_with('c')) && line.as_bytes()[1] == b'f';
+    let sent_file =
+        line.len() > 2 && (line.starts_with('>') || line.starts_with('<') || line.starts_with('c')) && line.as_bytes()[1] == b'f';
     sent_file || line.starts_with("*deleting")
 }
 
@@ -132,7 +146,20 @@ mod tests {
         assert_eq!(rsync_path(&local), "/home/alex/projects/shop/");
         assert_eq!(rsync_path(&machine), "dn-1234:.dockernanny/shop/");
         let args = rsync_args("ssh -F /x/cfg", &rsync_path(&machine), &rsync_path(&local), &[".git".into()]);
-        assert_eq!(args, vec!["-rltpz", "--delete", "--itemize-changes", "-e", "ssh -F /x/cfg", "--exclude", ".git", "dn-1234:.dockernanny/shop/", "/home/alex/projects/shop/"]);
+        assert_eq!(
+            args,
+            vec![
+                "-rltpz",
+                "--delete",
+                "--itemize-changes",
+                "-e",
+                "ssh -F /x/cfg",
+                "--exclude",
+                ".git",
+                "dn-1234:.dockernanny/shop/",
+                "/home/alex/projects/shop/"
+            ]
+        );
     }
 
     #[test]

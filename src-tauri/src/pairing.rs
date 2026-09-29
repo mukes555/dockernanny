@@ -77,7 +77,13 @@ pub fn valid_host(host: &str) -> bool {
 fn known_key_type(key_type: &str) -> bool {
     matches!(
         key_type,
-        "ssh-ed25519" | "ssh-rsa" | "ecdsa-sha2-nistp256" | "ecdsa-sha2-nistp384" | "ecdsa-sha2-nistp521" | "sk-ssh-ed25519@openssh.com" | "sk-ecdsa-sha2-nistp256@openssh.com"
+        "ssh-ed25519"
+            | "ssh-rsa"
+            | "ecdsa-sha2-nistp256"
+            | "ecdsa-sha2-nistp384"
+            | "ecdsa-sha2-nistp521"
+            | "sk-ssh-ed25519@openssh.com"
+            | "sk-ecdsa-sha2-nistp256@openssh.com"
     )
 }
 
@@ -166,7 +172,10 @@ mod tests {
 
     #[test]
     fn public_keys_are_reduced_to_type_and_base64() {
-        assert_eq!(valid_public_key("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL alex@studio\n").unwrap(), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL");
+        assert_eq!(
+            valid_public_key("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL alex@studio\n").unwrap(),
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL"
+        );
         assert!(valid_public_key("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ x").is_ok());
         assert!(valid_public_key("").is_err());
         assert!(valid_public_key("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL'; echo pwned").is_err());

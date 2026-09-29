@@ -189,11 +189,7 @@ fn parse_port(port: &Value) -> Result<Port, String> {
     if protocol == "udp" {
         return Err(format!("port {published}/udp is not forwarded (SSH forwards TCP only)"));
     }
-    Ok(Port {
-        target,
-        published,
-        protocol,
-    })
+    Ok(Port { target, published, protocol })
 }
 
 fn bind_mount_warning(volume: &Value, project_dir: &Path) -> Option<String> {
@@ -368,7 +364,8 @@ mod tests {
 
     #[test]
     fn named_volumes_come_with_engine_names() {
-        let model: Value = serde_json::from_str(r#"{"volumes":{"pgdata":{"name":"app_pgdata"},"shared":{"name":"shared","external":true}}}"#).unwrap();
+        let model: Value =
+            serde_json::from_str(r#"{"volumes":{"pgdata":{"name":"app_pgdata"},"shared":{"name":"shared","external":true}}}"#).unwrap();
         let volumes = parse_volumes(&model);
         assert_eq!(volumes.len(), 2);
         assert_eq!(volumes[0], VolumeDef { key: "pgdata".into(), name: "app_pgdata".into(), external: false });

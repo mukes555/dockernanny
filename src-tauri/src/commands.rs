@@ -17,8 +17,8 @@ use tauri::{AppHandle, Emitter, State};
 use serde::{Deserialize, Serialize};
 
 use crate::compose::{self, Preview};
-use crate::guide::{self, ScriptOptions};
 use crate::doctor::{self, DoctorEvent, DoctorRow};
+use crate::guide::{self, ScriptOptions};
 use crate::machine::{self, Machine, MachineStats};
 use crate::stack::{self, Stack, StackStatus};
 use crate::{forward, pairing, sync, AppState};
@@ -54,10 +54,7 @@ pub struct TerminalInfo {
 
 #[tauri::command]
 pub fn terminal_info(state: State<'_, AppState>) -> TerminalInfo {
-    TerminalInfo {
-        ssh_config: state.ssh.config_path(),
-        wsl_distro: crate::tools::wsl_distro(),
-    }
+    TerminalInfo { ssh_config: state.ssh.config_path(), wsl_distro: crate::tools::wsl_distro() }
 }
 
 /// The WSL distributions installed on this computer, for Settings. Empty
@@ -92,10 +89,7 @@ pub async fn doctor(app: AppHandle, state: State<'_, AppState>, machine: Machine
 
     let machine_id = machine.id.clone();
     let rows = doctor::doctor(&state.ssh, &machine, |row| {
-        let event = DoctorEvent {
-            machine_id: machine_id.clone(),
-            row: row.clone(),
-        };
+        let event = DoctorEvent { machine_id: machine_id.clone(), row: row.clone() };
         let _ = app.emit(doctor::DOCTOR_EVENT, event);
     })
     .await;
@@ -161,7 +155,14 @@ pub async fn poll_machine(app: AppHandle, state: State<'_, AppState>, id: String
 /// Pairs with a machine that shows a pairing code and saves it. The doctor
 /// runs from the UI afterwards, like a manual add.
 #[tauri::command]
-pub async fn pair_machine(app: AppHandle, state: State<'_, AppState>, address: String, code: String, key_path: String, name: String) -> CmdResult<Machine> {
+pub async fn pair_machine(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    address: String,
+    code: String,
+    key_path: String,
+    name: String,
+) -> CmdResult<Machine> {
     let address = address.trim().to_string();
     let code: String = code.chars().filter(|c| c.is_ascii_digit()).collect();
     if address.is_empty() || address.contains(char::is_whitespace) {
@@ -418,10 +419,7 @@ pub async fn script_serve(app: AppHandle, state: State<'_, AppState>, request: S
     .await
     .map_err(fail)?;
     *state.script_server.lock().expect("script server lock") = Some(server);
-    Ok(ServeInfo {
-        addresses: guide::lan_addresses().await,
-        port,
-    })
+    Ok(ServeInfo { addresses: guide::lan_addresses().await, port })
 }
 
 #[tauri::command]

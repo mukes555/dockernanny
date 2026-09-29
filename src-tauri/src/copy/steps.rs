@@ -45,7 +45,14 @@ pub mod names {
 }
 
 /// Everything the copy will do, in order, once it has looked at both ends.
-pub(crate) fn planned(sides: &Sides, request: &CopyRequest, inventory: Option<&Inventory>, downloads: &[Download], destination_exists: bool, source_running: bool) -> Vec<String> {
+pub(crate) fn planned(
+    sides: &Sides,
+    request: &CopyRequest,
+    inventory: Option<&Inventory>,
+    downloads: &[Download],
+    destination_exists: bool,
+    source_running: bool,
+) -> Vec<String> {
     let (from, to) = (&sides.from, &sides.to);
     let mut steps = vec![names::look()];
     // Before anything stops, so a missing image ends the copy early.
@@ -122,7 +129,15 @@ mod tests {
     #[test]
     fn the_step_list_follows_the_shape_of_the_copy() {
         let config_only = planned(&sides(), &request(true, false, false, false), None, &[], false, true);
-        assert_eq!(config_only, vec!["looking at both ends", "copying the project folder to studio", "starting shop on studio", "checking the result on studio"]);
+        assert_eq!(
+            config_only,
+            vec![
+                "looking at both ends",
+                "copying the project folder to studio",
+                "starting shop on studio",
+                "checking the result on studio"
+            ]
+        );
 
         let inventory = Inventory {
             volumes: vec![NamedVolume { key: "pgdata".into(), name: "shop-api_pgdata".into(), size: "412MB".into(), external: false }],

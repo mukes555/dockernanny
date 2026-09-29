@@ -28,11 +28,7 @@ pub struct ComputerInfo {
 /// machines answer.
 #[tauri::command]
 pub async fn computer_info() -> ComputerInfo {
-    ComputerInfo {
-        name: pairing::computer_name().await,
-        user: user_name(),
-        probe: machine::probe_this_computer().await,
-    }
+    ComputerInfo { name: pairing::computer_name().await, user: user_name(), probe: machine::probe_this_computer().await }
 }
 
 /// The key from the settings, or the first key the user is likely to already

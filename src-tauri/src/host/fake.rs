@@ -33,10 +33,7 @@ impl Platform for Fake {
             user: Some("alex".into()),
             sshd_listening: state.sshd,
             ready_for_pairing: state.firewall,
-            network: Some(NetworkProfile {
-                name: "Home Wi-Fi".into(),
-                public: !state.network_private,
-            }),
+            network: Some(NetworkProfile { name: "Home Wi-Fi".into(), public: !state.network_private }),
             ..Default::default()
         };
         picture.rows.push(row("Windows", true, "build 22631"));
@@ -47,7 +44,11 @@ impl Platform for Fake {
         picture.rows.push(row("SSH server", state.sshd, if state.sshd { "listening on 2222" } else { "not listening on 2222" }));
         picture.rows.push(row("rsync", true, "installed"));
         picture.rows.push(row("Firewall", state.firewall, if state.firewall { "ports open" } else { "ports closed (Set up opens them)" }));
-        picture.rows.push(row("Network", state.network_private, if state.network_private { "Home Wi-Fi (Private)" } else { "Home Wi-Fi is marked Public, which blocks the firewall rules" }));
+        picture.rows.push(row(
+            "Network",
+            state.network_private,
+            if state.network_private { "Home Wi-Fi (Private)" } else { "Home Wi-Fi is marked Public, which blocks the firewall rules" },
+        ));
         picture
     }
 
@@ -65,7 +66,13 @@ impl Platform for Fake {
         ] {
             say(&format!("==> {name}"));
             std::thread::sleep(std::time::Duration::from_secs(seconds));
-            say(&format!("    done: {}", match &outcome { Outcome::Done(t) | Outcome::Changed(t) => t.clone(), _ => String::new() }));
+            say(&format!(
+                "    done: {}",
+                match &outcome {
+                    Outcome::Done(t) | Outcome::Changed(t) => t.clone(),
+                    _ => String::new(),
+                }
+            ));
             results.push((name, outcome));
         }
         let mut state = self.state.lock().expect("fake lock");
@@ -91,12 +98,7 @@ impl Platform for Fake {
                 writeln!(f, "{key}")
             })
             .map_err(|e| e.to_string())?;
-        Ok(Installed {
-            user: "alex".into(),
-            port: 2222,
-            hostname: "fake-machine".into(),
-            host_key: self.host_key(),
-        })
+        Ok(Installed { user: "alex".into(), port: 2222, hostname: "fake-machine".into(), host_key: self.host_key() })
     }
 
     fn spawn_keepalive(&self) -> Result<Option<Child>, String> {
@@ -105,7 +107,11 @@ impl Platform for Fake {
 
     fn established_peers(&self, _port: u16) -> Vec<String> {
         // Someone is always "connected" once sshd is up, so the list can be seen.
-        if self.state.lock().expect("fake lock").sshd { vec!["192.0.2.20".into()] } else { Vec::new() }
+        if self.state.lock().expect("fake lock").sshd {
+            vec!["192.0.2.20".into()]
+        } else {
+            Vec::new()
+        }
     }
 
     fn lan_ipv4(&self) -> Vec<String> {

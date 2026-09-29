@@ -81,10 +81,7 @@ pub fn desired_ports(stack: &Stack, services: &[ServiceState], kept: &[ForwardPo
     for service in services.iter().filter(|s| s.state == "running") {
         for port in service.ports.iter().filter(|p| p.protocol == "tcp") {
             let local = stack.port_overrides.get(&port.published).copied().unwrap_or(port.published);
-            let forward = ForwardPort {
-                local,
-                remote: port.published,
-            };
+            let forward = ForwardPort { local, remote: port.published };
             if !ports.contains(&forward) {
                 ports.push(forward);
             }
@@ -150,7 +147,14 @@ pub fn exit_all(ssh: &Ssh, stack_ids: impl Iterator<Item = String>, aliases: &Ha
     });
 }
 
-async fn run(app: AppHandle, stack_id: String, alias: String, ports: Vec<ForwardPort>, mut cancelled: watch::Receiver<bool>, previous: Option<tauri::async_runtime::JoinHandle<()>>) {
+async fn run(
+    app: AppHandle,
+    stack_id: String,
+    alias: String,
+    ports: Vec<ForwardPort>,
+    mut cancelled: watch::Receiver<bool>,
+    previous: Option<tauri::async_runtime::JoinHandle<()>>,
+) {
     // Both use the same control socket: the old forwarder's final "exit"
     // must not reach this one, so it finishes stopping first.
     if let Some(previous) = previous {
@@ -166,7 +170,11 @@ async fn run(app: AppHandle, stack_id: String, alias: String, ports: Vec<Forward
         let mut child = match spawn_ssh(&ssh, &alias, &socket, &ports) {
             Ok(child) => child,
             Err(err) => {
-                publish(&app, &stack_id, ForwardState { up: false, ports: ports.clone(), error: Some(format!("{err:#}")), attempts, since_ms: None });
+                publish(
+                    &app,
+                    &stack_id,
+                    ForwardState { up: false, ports: ports.clone(), error: Some(format!("{err:#}")), attempts, since_ms: None },
+                );
                 if wait_before_retry(attempts, &mut cancelled).await == Wait::Cancelled {
                     publish(&app, &stack_id, ForwardState::default());
                     return;
@@ -182,7 +190,11 @@ async fn run(app: AppHandle, stack_id: String, alias: String, ports: Vec<Forward
         };
         if listening {
             attempts = 0;
-            publish(&app, &stack_id, ForwardState { up: true, ports: ports.clone(), error: None, attempts: 0, since_ms: Some(crate::stack::now_ms()) });
+            publish(
+                &app,
+                &stack_id,
+                ForwardState { up: true, ports: ports.clone(), error: None, attempts: 0, since_ms: Some(crate::stack::now_ms()) },
+            );
         }
 
         tokio::select! {
@@ -228,18 +240,12 @@ fn spawn_ssh(ssh: &Ssh, alias: &str, socket: &str, ports: &[ForwardPort]) -> any
     // port into a clean exit instead of a half-working session. ControlPersist
     // must be off here: with it, ssh forks a second background master that
     // would keep the forwards alive after this child is killed.
-    cmd.args(["-N", "-M", "-S"])
-        .arg(socket)
-        .args(["-o", "ExitOnForwardFailure=yes", "-o", "ControlPersist=no"]);
+    cmd.args(["-N", "-M", "-S"]).arg(socket).args(["-o", "ExitOnForwardFailure=yes", "-o", "ControlPersist=no"]);
     for port in ports {
         // `localhost` binds both 127.0.0.1 and ::1, which browsers and Node need.
         cmd.arg("-L").arg(format!("localhost:{}:127.0.0.1:{}", port.local, port.remote));
     }
-    cmd.arg(alias)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+    cmd.arg(alias).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
     let child = cmd.spawn()?;
     tools::track(&child);
     Ok(child)
@@ -302,13 +308,7 @@ async fn stop_child(child: &mut Child, ssh: &Ssh, alias: &str, socket: &str) {
 fn publish(app: &AppHandle, stack_id: &str, state: ForwardState) {
     let app_state = app.state::<AppState>();
     app_state.forward_states.lock().expect("forward states lock").insert(stack_id.to_string(), state.clone());
-    let _ = app.emit(
-        FORWARD_EVENT,
-        ForwardEvent {
-            stack_id: stack_id.to_string(),
-            state,
-        },
-    );
+    let _ = app.emit(FORWARD_EVENT, ForwardEvent { stack_id: stack_id.to_string(), state });
 }
 
 #[cfg(test)]
