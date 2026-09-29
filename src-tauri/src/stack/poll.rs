@@ -9,14 +9,14 @@ use tauri::{AppHandle, Manager};
 use tokio::task::JoinSet;
 
 use super::{derive_phase, set_status, Stack};
-use crate::compose;
+use crate::compose::{self, ServiceState};
 use crate::ssh::Ssh;
 use crate::{forward, AppState};
 
 const POLL_EVERY: Duration = Duration::from_secs(3);
 /// While nobody can see the window; the bridges keep themselves up meanwhile.
 const POLL_EVERY_HIDDEN: Duration = Duration::from_secs(15);
-const POLL_TIMEOUT: Duration = Duration::from_secs(15);
+pub const POLL_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn spawn_status_loop(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -48,17 +48,12 @@ pub fn spawn_status_loop(app: AppHandle) {
                 let sections = split_by_marker(&out.stdout);
                 for stack in stacks {
                     let section = sections.get(&stack.id).map(String::as_str).unwrap_or("");
-                    let services = compose::parse_ps(section);
                     let missing = folder_is_missing(section);
-                    forward::reconcile(&app, &stack, &services);
-                    set_status(&app, &stack.id, |status| {
-                        status.services = services;
-                        status.known = true;
-                        status.folder_missing = missing;
-                        if !status.phase.busy() {
-                            status.phase = derive_phase(&status.services);
-                        }
-                    });
+                    // Docker down or a broken compose file: `ps` failed, which is not "stopped".
+                    if !missing && !ps_answered(section) {
+                        continue;
+                    }
+                    apply_ps(&app, &stack.id, compose::parse_ps(section), missing);
                 }
             }
             crate::tray::until_next_poll(&app, POLL_EVERY, POLL_EVERY_HIDDEN).await;
@@ -66,16 +61,36 @@ pub fn spawn_status_loop(app: AppHandle) {
     });
 }
 
+/// What one `compose ps` said about a stack, applied the same way by the
+/// poll and after an operation. A stack removed meanwhile is not brought
+/// back, and while an operation holds the stack its phase is left to it.
+pub fn apply_ps(app: &AppHandle, stack_id: &str, services: Vec<ServiceState>, folder_missing: bool) {
+    let state = app.state::<AppState>();
+    let Some(stack) = state.store.stack(stack_id) else { return };
+    forward::reconcile(app, &stack, &services);
+    let held = state.operations.holds(stack_id);
+    set_status(app, stack_id, |status| {
+        status.services = services;
+        status.known = true;
+        status.folder_missing = folder_missing;
+        if !held {
+            status.phase = derive_phase(&status.services);
+        }
+    });
+}
+
 /// A stack whose folder is gone from the machine says so, instead of
 /// looking merely stopped.
 const NO_FOLDER: &str = "dockernanny-no-folder";
+/// After each `ps`, its exit code, so a failed one is not read as no containers.
+const PS_EXIT: &str = "dockernanny-ps-exit";
 
 fn ps_script(stacks: &[Stack]) -> String {
     let mut script = String::new();
     for stack in stacks {
         let dir = crate::stack::shell_quote(&stack.remote_dir());
         script.push_str(&format!(
-            "echo '=== {}'; [ -d {dir} ] || echo {NO_FOLDER}; ( {} 2>/dev/null ); ",
+            "echo '=== {}'; [ -d {dir} ] || echo {NO_FOLDER}; ( {} 2>/dev/null ); echo \"{PS_EXIT} $?\"; ",
             stack.id,
             stack.compose_cmd("ps --all --format json")
         ));
@@ -86,6 +101,10 @@ fn ps_script(stacks: &[Stack]) -> String {
 
 fn folder_is_missing(section: &str) -> bool {
     section.lines().any(|line| line.trim() == NO_FOLDER)
+}
+
+fn ps_answered(section: &str) -> bool {
+    section.lines().any(|line| line.trim() == format!("{PS_EXIT} 0"))
 }
 
 fn split_by_marker(text: &str) -> HashMap<String, String> {
@@ -114,10 +133,11 @@ mod tests {
 
     #[test]
     fn markers_split_per_stack() {
-        let text = "=== aaa\n{\"Service\":\"web\"}\n=== bbb\n=== ccc\ndockernanny-no-folder\n";
+        let text = "=== aaa\n{\"Service\":\"web\"}\ndockernanny-ps-exit 0\n=== bbb\ndockernanny-ps-exit 1\n=== ccc\ndockernanny-no-folder\ndockernanny-ps-exit 1\n";
         let sections = split_by_marker(text);
-        assert_eq!(sections["aaa"].trim(), "{\"Service\":\"web\"}");
-        assert_eq!(sections["bbb"].trim(), "");
+        assert_eq!(compose::parse_ps(&sections["aaa"]).len(), 1, "the exit line is not a service");
+        assert!(ps_answered(&sections["aaa"]));
+        assert!(!ps_answered(&sections["bbb"]), "a failed ps keeps the last picture");
         assert!(!folder_is_missing(&sections["aaa"]));
         assert!(folder_is_missing(&sections["ccc"]), "a stack whose folder is gone says so");
         assert!(compose::parse_ps(&sections["ccc"]).is_empty(), "the marker is not a service");
@@ -143,5 +163,6 @@ mod tests {
             ),
             "{script}"
         );
+        assert!(script.contains("echo \"dockernanny-ps-exit $?\""));
     }
 }

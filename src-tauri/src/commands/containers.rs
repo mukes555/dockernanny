@@ -74,10 +74,14 @@ pub async fn start_container_logs(app: AppHandle, state: State<'_, AppState>, ma
     let handle = job.handle();
     let key = logs_key(&id);
     state.jobs.lock().expect("jobs lock").insert(key.clone(), handle.clone());
+    // A stream that ends by itself takes its entry with it, but never a newer stream's.
     tauri::async_runtime::spawn(async move {
         let _ = job.wait().await;
-        if !handle.is_cancelled() {
-            app.state::<AppState>().jobs.lock().expect("jobs lock").remove(&key);
+        let state = app.state::<AppState>();
+        let mut jobs = state.jobs.lock().expect("jobs lock");
+        let still_mine = jobs.get(&key).is_some_and(|current| current.same(&handle));
+        if still_mine {
+            jobs.remove(&key);
         }
     });
     Ok(())

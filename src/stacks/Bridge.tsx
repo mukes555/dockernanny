@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api, errorMessage } from "../lib/ipc";
 import type { ForwardState, Stack, StackStatus } from "../lib/types";
-import { useStore } from "../state/store";
+import { isUp, useStore } from "../state/store";
 import { Button, cx } from "../ui/primitives";
 import type { ChipTone } from "../ui/primitives";
 
@@ -29,8 +29,7 @@ export function bridgeOf(stack: Stack, status: StackStatus | undefined, forward:
     const error = forward.error ? `: ${forward.error}` : "";
     return { state: "connecting", text: `bridge connecting${attempt}${error}`, tone: "warning" };
   }
-  const running = status?.phase === "running" || status?.phase === "partial";
-  return { state: "waiting", text: running ? "bridge starting" : "bridge waits for the stack to run", tone: "neutral" };
+  return { state: "waiting", text: isUp(status) ? "bridge starting" : "bridge waits for the stack to run", tone: "neutral" };
 }
 
 /** The line on a stack card: the state, and the switch. */

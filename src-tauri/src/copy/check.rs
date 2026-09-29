@@ -1,8 +1,8 @@
 //! What the destination looks like before the copy (room for the data, a
-//! compose plugin) and after it (every service up, every port answering).
+//! compose plugin) and after it (how ready each service is).
 
 use super::endpoint::{Endpoint, Site};
-use crate::compose;
+use crate::compose::{self, Readiness};
 use crate::ssh::Ssh;
 
 /// Room for the data plus half again: compose builds and image layers land
@@ -105,27 +105,24 @@ pub fn human(bytes: u64) -> String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// How the copied stack stands right after it was started, in Compose's own
+/// terms (`compose::ps`): a health check that has not passed yet is still
+/// starting, not a failure, and a setup job that finished is done.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Summary {
-    pub services_up: usize,
-    pub services_total: usize,
-    pub unhealthy: Vec<String>,
-    pub ports_listening: usize,
-    pub ports_total: usize,
-    pub ports_silent: Vec<u16>,
+    /// Ready, and one-shot jobs that finished.
+    pub ready: usize,
+    pub total: usize,
+    /// One phrase per service that is not simply ready: "clamav still starting".
+    pub notes: Vec<String>,
 }
 
 impl Summary {
-    /// One sentence for the card, with the reminder that matters most after a move.
+    /// One sentence for the copy's panel, with the reminder that matters most after a move.
     pub fn text(&self, destination: &Site) -> String {
-        let mut text = format!("{} of {} services up", self.services_up, self.services_total);
-        if !self.unhealthy.is_empty() {
-            text.push_str(&format!(" ({} not healthy)", self.unhealthy.join(", ")));
-        }
-        text.push_str(&format!(", {} of {} ports listening on {}", self.ports_listening, self.ports_total, destination.label));
-        if !self.ports_silent.is_empty() {
-            let silent: Vec<String> = self.ports_silent.iter().map(|p| p.to_string()).collect();
-            text.push_str(&format!(" (silent: {})", silent.join(", ")));
+        let mut text = format!("{} of {} services ready on {}", self.ready, self.total, destination.label);
+        if !self.notes.is_empty() {
+            text.push_str(&format!(" ({})", self.notes.join("; ")));
         }
         text.push('.');
         if !destination.is_local() {
@@ -135,61 +132,34 @@ impl Summary {
     }
 }
 
-/// `compose ps` plus the listening sockets. Never fails: a check that cannot
-/// run reports zero services.
+/// `compose ps --all` at the destination. Never fails: a check that cannot
+/// run reports zero services. The card keeps following the stack after this.
 pub async fn post_copy(ssh: &Ssh, to: &Site) -> Summary {
-    let ps = to.compose_output(ssh, "ps --format json").await.map(|o| o.stdout).unwrap_or_default();
-    let sockets = match &to.endpoint {
-        Endpoint::Machine { .. } => {
-            to.endpoint.run_script(ssh, "ss -ltn 2>/dev/null || netstat -an 2>/dev/null").await.map(|o| o.stdout).unwrap_or_default()
-        }
-        Endpoint::Local if cfg!(windows) => crate::tools::native("netstat")
-            .arg("-an")
-            .output()
-            .await
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-            .unwrap_or_default(),
-        Endpoint::Local => {
-            to.endpoint.run_script(ssh, "ss -ltn 2>/dev/null || netstat -an 2>/dev/null").await.map(|o| o.stdout).unwrap_or_default()
-        }
-    };
-    summarize(&compose::parse_ps(&ps), &sockets)
+    summarize(&to.services(ssh).await.unwrap_or_default())
 }
 
-fn summarize(services: &[compose::ServiceState], sockets: &str) -> Summary {
-    let services_up = services.iter().filter(|s| s.state == "running").count();
-    let unhealthy: Vec<String> = services
+fn summarize(services: &[compose::ServiceState]) -> Summary {
+    let ready = services.iter().filter(|s| matches!(s.readiness, Readiness::Ready | Readiness::Done)).count();
+    let notes = services
         .iter()
-        .filter(|s| s.state == "running" && !s.health.is_empty() && s.health != "healthy")
-        .map(|s| s.service.clone())
+        .filter_map(|s| {
+            let how = match s.readiness {
+                Readiness::Ready => return None,
+                Readiness::Done => "finished its job",
+                Readiness::Starting => "still starting",
+                Readiness::Unhealthy => "unhealthy",
+                Readiness::Stopped => "not running",
+            };
+            Some(format!("{} {how}", s.service))
+        })
         .collect();
-    let mut ports: Vec<u16> = services.iter().flat_map(|s| s.ports.iter().filter(|p| p.protocol == "tcp").map(|p| p.published)).collect();
-    ports.sort_unstable();
-    ports.dedup();
-    let ports_silent: Vec<u16> = ports.iter().copied().filter(|port| !is_listening(sockets, *port)).collect();
-    Summary {
-        services_up,
-        services_total: services.len(),
-        unhealthy,
-        ports_listening: ports.len() - ports_silent.len(),
-        ports_total: ports.len(),
-        ports_silent,
-    }
-}
-
-/// `ss -ltn` prints `0.0.0.0:5432`, macOS `netstat -an` prints `*.5432`,
-/// Windows says `LISTENING`.
-fn is_listening(sockets: &str, port: u16) -> bool {
-    sockets.lines().any(|line| {
-        let listening = line.contains("LISTEN");
-        listening && line.split_whitespace().any(|field| field.ends_with(&format!(":{port}")) || field.ends_with(&format!(".{port}")))
-    })
+    Summary { ready, total: services.len(), notes }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compose::{Port, ServiceState};
+    use crate::compose::ServiceState;
 
     #[test]
     fn human_sizes_parse_the_way_docker_prints_them() {
@@ -212,39 +182,29 @@ mod tests {
         assert_eq!(human(40_960_000 * 1024), "41.9 GB");
     }
 
-    fn service(name: &str, state: &str, health: &str, port: u16) -> ServiceState {
-        ServiceState {
-            service: name.into(),
-            container: format!("x-{name}-1"),
-            state: state.into(),
-            health: health.into(),
-            exit_code: 0,
-            ports: vec![Port { target: port, published: port, protocol: "tcp".into() }],
-        }
+    fn service(name: &str, readiness: Readiness) -> ServiceState {
+        ServiceState { service: name.into(), readiness, ..ServiceState::default() }
     }
 
+    /// The case that started this: right after `up -d`, clamav's first
+    /// health check has not run, and keycloak-db is a finished setup job.
     #[test]
-    fn summary_counts_services_and_ports_on_every_platform() {
+    fn a_health_check_not_passed_yet_is_starting_not_a_failure() {
         let services = vec![
-            service("db", "running", "healthy", 5432),
-            service("api", "running", "starting", 3000),
-            service("worker", "exited", "", 9000),
+            service("clamav", Readiness::Starting),
+            service("keycloak", Readiness::Ready),
+            service("keycloak-db", Readiness::Done),
+            service("postgres", Readiness::Ready),
         ];
-        let linux = "State  Recv-Q Send-Q Local Address:Port\nLISTEN 0      128    0.0.0.0:5432\nLISTEN 0      128    [::]:3000\n";
-        let summary = summarize(&services, linux);
-        assert_eq!(summary.services_up, 2);
-        assert_eq!(summary.unhealthy, vec!["api".to_string()]);
-        assert_eq!((summary.ports_listening, summary.ports_total), (2, 3));
-        assert_eq!(summary.ports_silent, vec![9000]);
+        let summary = summarize(&services);
+        assert_eq!((summary.ready, summary.total), (3, 4));
         let machine = Site::machine("x", "c.yml", "dn-1", "studio");
-        assert!(summary.text(&machine).starts_with("2 of 3 services up (api not healthy), 2 of 3 ports listening on studio"));
-        assert!(summary.text(&machine).ends_with("Restart local programs that talk to these ports."));
+        assert_eq!(
+            summary.text(&machine),
+            "3 of 4 services ready on studio (clamav still starting; keycloak-db finished its job). Restart local programs that talk to these ports."
+        );
         let local = Site::local("x", "/tmp/x", "c.yml");
-        assert!(summary.text(&local).ends_with("(silent: 9000)."));
-
-        let mac = "tcp46      0      0  *.5432                 *.*                    LISTEN\ntcp4       0      0  127.0.0.1.3000         *.*                    LISTEN\n";
-        assert_eq!(summarize(&services, mac).ports_listening, 2);
-        let windows = "  TCP    0.0.0.0:5432           0.0.0.0:0              LISTENING\n  TCP    [::]:3000              [::]:0                 LISTENING\n";
-        assert_eq!(summarize(&services, windows).ports_listening, 2);
+        let failing = summarize(&[service("db", Readiness::Unhealthy), service("worker", Readiness::Stopped)]);
+        assert_eq!(failing.text(&local), "0 of 2 services ready on this computer (db unhealthy; worker not running).");
     }
 }

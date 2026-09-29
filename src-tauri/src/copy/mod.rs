@@ -217,8 +217,7 @@ pub async fn plan(ssh: &Ssh, sides: &Sides, request: &CopyRequest) -> anyhow::Re
         warnings.push(format!("{} has no copy of the project yet, so the config must travel too.", to.label));
     }
 
-    let source_ps = from.compose_output(ssh, "ps -a --format json").await?;
-    let source_running = compose::parse_ps(&source_ps.stdout).iter().any(|s| s.state == "running");
+    let source_running = from.services(ssh).await?.iter().any(|s| s.state == "running");
     let model = discover::model(ssh, from).await?;
     let preview = compose::parse_model(&model, std::path::Path::new(&from.dir));
     let mut ports: Vec<u16> =
@@ -304,8 +303,8 @@ async fn run_steps(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest,
     let carried = inventory.as_ref().map(|i| i.images.as_slice()).unwrap_or(&[]);
     let downloads = pull::planned(ssh, sides, request, &model, carried).await;
 
-    let source_ps = from.compose_output(ssh, "ps -a --format json").await?;
-    let source_services = compose::parse_ps(&source_ps.stdout);
+    // Checked: a failed ps must not read as "not running" and skip the stop a consistent copy needs.
+    let source_services = from.services(ssh).await?;
     let source_running = source_services.iter().any(|s| s.state == "running");
     let steps = steps::planned(sides, request, inventory.as_ref(), &downloads, destination_exists, source_running);
     report.progress.lock().expect("progress lock").set_steps(steps);
@@ -448,8 +447,7 @@ async fn copy_container_data(
     report: &Report<'_>,
 ) -> anyhow::Result<()> {
     let (from, to) = (&sides.from, &sides.to);
-    let destination_ps = to.compose_output(ssh, "ps -a --format json").await?;
-    let destination_services = compose::parse_ps(&destination_ps.stdout);
+    let destination_services = to.services(ssh).await?;
 
     for selection in &request.data_selection {
         let step = names::path(&selection.path, &selection.service);

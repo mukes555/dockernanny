@@ -5,7 +5,7 @@ import { visibleMachines } from "../lib/machines";
 import type { ForwardState, HostSnapshot, Stack } from "../lib/types";
 import { AddMachineDialog } from "../machines/AddMachineDialog";
 import { MachineRow } from "../machines/MachineRow";
-import { onlineCount, useStore } from "../state/store";
+import { isUp, onlineCount, useStore } from "../state/store";
 import { OsGlyph } from "../ui/Badges";
 import { ActivityIcon, BookIcon, GearIcon, LifebuoyIcon, LogoMark, PlugIcon, PlusIcon, SpinnerIcon, StacksIcon } from "../ui/icons";
 import { cx } from "../ui/primitives";
@@ -33,7 +33,7 @@ export function Sidebar() {
   const setAddMachineOpen = useStore((state) => state.setAddMachineOpen);
 
   const usesMachines = settings?.use_machines ?? true;
-  const running = stacks.filter((stack) => ["running", "partial"].includes(statuses[stack.id]?.phase ?? "")).length;
+  const running = stacks.filter((stack) => isUp(statuses[stack.id])).length;
   const ports = portsOnLocalhost(stacks, forwards);
   const copyList = Object.values(copies);
   const copiesRunning = copyList.filter((copy) => !copy.finished_ms).length;

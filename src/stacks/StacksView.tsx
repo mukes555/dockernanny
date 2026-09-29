@@ -1,7 +1,7 @@
 import { visibleMachines } from "../lib/machines";
 import type { Machine, Stack } from "../lib/types";
 import { MachinePage } from "../machines/MachinePage";
-import { useStore } from "../state/store";
+import { isUp, useStore } from "../state/store";
 import { ChevronRightIcon } from "../ui/icons";
 import { Page } from "../ui/Page";
 import { Button, cx, EmptyPanel } from "../ui/primitives";
@@ -62,7 +62,7 @@ export function StacksView() {
       Copy a stack…
     </Button>
   );
-  const running = stacks.filter((stack) => ["running", "partial"].includes(statuses[stack.id]?.phase ?? "")).length;
+  const running = stacks.filter((stack) => isUp(statuses[stack.id])).length;
   const groups = machines.map((machine) => ({ machine, stacks: stacks.filter((s) => s.machine_id === machine.id) })).filter((group) => group.stacks.length > 0);
   const orphans = stacks.filter((s) => !allMachines.some((m) => m.id === s.machine_id));
   const summary =

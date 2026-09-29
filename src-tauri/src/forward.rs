@@ -341,11 +341,9 @@ mod tests {
         };
         let service = |state: &str, ports: Vec<(u16, &str)>| ServiceState {
             service: "x".into(),
-            container: String::new(),
             state: state.into(),
-            health: String::new(),
-            exit_code: 0,
             ports: ports.into_iter().map(|(p, proto)| Port { target: p, published: p, protocol: proto.into() }).collect(),
+            ..ServiceState::default()
         };
         let services = vec![service("running", vec![(3000, "tcp"), (5432, "tcp"), (9099, "udp")]), service("exited", vec![(4000, "tcp")])];
         let bridged = vec![ForwardPort { local: 3000, remote: 3000 }, ForwardPort { local: 6432, remote: 5432 }];
@@ -369,11 +367,9 @@ mod tests {
         };
         let service = |name: &str, state: &str, ports: Vec<u16>| ServiceState {
             service: name.into(),
-            container: String::new(),
             state: state.into(),
-            health: String::new(),
-            exit_code: 0,
             ports: ports.into_iter().map(|p| Port { target: p, published: p, protocol: "tcp".into() }).collect(),
+            ..ServiceState::default()
         };
         let bridged = vec![ForwardPort { local: 3000, remote: 3000 }, ForwardPort { local: 5432, remote: 5432 }];
         // The database restarts: it publishes nothing for a moment, and its port stays bridged.

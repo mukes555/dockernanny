@@ -363,7 +363,14 @@ export function onlineCount(machines: Machine[], stats: Record<string, MachineSt
   return machines.filter((machine) => stats[machine.id]?.online).length;
 }
 
+/** An operation is running on the stack (sync, up, down, a copy). */
 export function isBusy(status: StackStatus | undefined): boolean {
   const phase = status?.phase ?? "idle";
   return phase === "syncing" || phase === "migrating" || phase === "starting" || phase === "stopping";
+}
+
+/** Containers are up, ready or not yet: what Stop, Open, the bridge and the counts follow. */
+export function isUp(status: StackStatus | undefined): boolean {
+  const phase = status?.phase ?? "idle";
+  return phase === "running" || phase === "waiting" || phase === "partial";
 }

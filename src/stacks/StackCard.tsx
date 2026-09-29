@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../lib/ipc";
 import type { Phase, ServiceState, Stack } from "../lib/types";
 import { localPort } from "../lib/types";
-import { isBusy, useStore } from "../state/store";
+import { isBusy, isUp, useStore } from "../state/store";
 import { ExternalIcon, LogsIcon, PlayIcon, SpinnerIcon, StopIcon } from "../ui/icons";
 import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import { Button, Chip, cx } from "../ui/primitives";
@@ -19,11 +19,11 @@ const PHASE_LABEL: Record<Phase, { text: string; tone: ChipTone }> = {
   syncing: { text: "syncing", tone: "accent" },
   migrating: { text: "moving", tone: "accent" },
   starting: { text: "starting", tone: "accent" },
+  waiting: { text: "getting ready", tone: "accent" },
   running: { text: "running", tone: "good" },
   partial: { text: "partly running", tone: "warning" },
   stopped: { text: "stopped", tone: "neutral" },
   stopping: { text: "stopping", tone: "accent" },
-  error: { text: "error", tone: "critical" },
 };
 
 export function StackCard({ stack }: { stack: Stack }) {
@@ -48,8 +48,11 @@ export function StackCard({ stack }: { stack: Stack }) {
   const phase = status?.phase ?? "idle";
   const busy = isBusy(status);
   const lines = output ?? [];
-  const running = phase === "running" || phase === "partial";
-  const canStop = busy || running;
+  const running = isUp(status);
+  // A copy cannot be interrupted halfway, so the backend refuses Stop while one runs.
+  const copyRunning = copy !== undefined && !copy.finished_ms;
+  const canStop = (busy || running) && !copyRunning;
+  const spinning = busy || phase === "waiting";
   const ports = openablePorts(stack, status?.services ?? [], forward?.up ?? false);
   const hasContainers = (status?.services.length ?? 0) > 0;
   // Only a poll that came back without an answer means offline; no poll yet means not known.
@@ -84,7 +87,7 @@ export function StackCard({ stack }: { stack: Stack }) {
           <div className="flex items-center gap-2">
             <h2 className="truncate text-[15px] font-semibold text-ink">{stack.name}</h2>
             <Chip tone={chip.tone}>
-              {busy && !machineOffline ? <SpinnerIcon size={10} /> : null}
+              {spinning && !machineOffline ? <SpinnerIcon size={10} /> : null}
               {chip.text}
             </Chip>
           </div>
@@ -165,7 +168,7 @@ export function StackCard({ stack }: { stack: Stack }) {
         ))}
       </div>
 
-      {lines.length > 0 && (busy || phase === "error" || expanded) ? (
+      {lines.length > 0 && (busy || status?.error || expanded) ? (
         <div className="mt-3">
           <pre className="mono selectable max-h-64 overflow-auto rounded-lg bg-plane/60 px-3 py-2 text-[11px] leading-[1.5] text-ink-2">
             {(expanded ? lines.slice(-200) : lines.slice(-8)).map((line, index) => (
@@ -205,7 +208,8 @@ export function StackCard({ stack }: { stack: Stack }) {
           <BridgeControl stack={stack} />
         </div>
       ) : null}
-      {status?.message ? <div className={cx("mt-2 text-[12px]", phase === "error" ? "text-critical" : "text-warning")}>{status.message}</div> : null}
+      {status?.error ? <div className="mt-2 text-[12px] text-critical">{status.error}</div> : null}
+      {status?.sync_warning ? <div className="mt-2 text-[12px] text-warning">{status.sync_warning}</div> : null}
       {status?.folder_missing ? (
         <div className="mt-2 text-[12px] text-warning">The project folder is gone from the machine. Start copies it there again.</div>
       ) : null}
@@ -250,16 +254,36 @@ function openablePorts(stack: Stack, services: ServiceState[], forwardUp: boolea
   return [...new Set(ports)];
 }
 
+/** A service's dot and words, from Compose's own readiness (compose/ps.rs),
+ * so the card and `docker compose up --wait` agree on what "ready" means. */
+function serviceLook(service: ServiceState): { dot: string; detail: string; hint: string } {
+  switch (service.readiness) {
+    case "ready":
+      return { dot: "bg-good", detail: service.health || service.state, hint: "Running, and ready" };
+    case "starting":
+      return { dot: "bg-accent", detail: service.state === "restarting" ? "restarting" : "starting", hint: "Running; its health check has not passed yet" };
+    case "done":
+      return { dot: "bg-hairline", detail: "job finished", hint: "A one-shot job other services waited for; it finished without an error" };
+    case "unhealthy":
+      return { dot: "bg-critical", detail: "unhealthy", hint: "Running, but its health check fails; its logs say why" };
+    case "stopped": {
+      const failed = service.state === "dead" || (service.state === "exited" && service.exit_code !== 0);
+      const detail = service.state === "exited" ? `exited (${service.exit_code})` : service.state;
+      return { dot: failed ? "bg-critical" : "bg-hairline", detail, hint: failed ? "Stopped with an error; its logs say why" : "Not running" };
+    }
+  }
+}
+
 function ServiceRow({ stack, service, forwardUp }: { stack: Stack; service: ServiceState; forwardUp: boolean }) {
   const running = service.state === "running";
-  const failed = service.state === "exited" && service.exit_code !== 0;
-  const dot = running ? "bg-good" : failed ? "bg-critical" : service.state === "exited" ? "bg-hairline" : "bg-warning";
-  const detail = service.health ? `${service.state}, ${service.health}` : service.state === "exited" ? `exited (${service.exit_code})` : service.state;
+  const look = serviceLook(service);
   return (
     <div className="flex items-center gap-2.5 rounded-lg px-2 py-1 text-[12px] hover:bg-surface-2/60">
-      <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", dot)} />
+      <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", look.dot)} />
       <span className="w-28 truncate font-medium text-ink">{service.service}</span>
-      <span className="w-24 truncate text-ink-3">{detail}</span>
+      <span className="w-24 truncate text-ink-3" title={look.hint}>
+        {look.detail}
+      </span>
       <div className="flex flex-1 flex-wrap justify-end gap-1.5">
         {service.ports.map((port) => {
           const local = localPort(stack, port.published);

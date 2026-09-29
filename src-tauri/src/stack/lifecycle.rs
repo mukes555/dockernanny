@@ -1,6 +1,8 @@
-//! The operations on a stack: sync, up, down, restart, live sync, logs,
-//! remove. Long operations stream their output as events and leave the
-//! status to say how they ended.
+//! The operations on a stack: sync, up, down, stop, restart, live sync, logs,
+//! remove. Each compose operation holds a `Ticket`, so one runs at a time and
+//! a newer one ends it; long ones stream their output as events. An
+//! operation that fails returns its error, which the command writes on the
+//! card (`commands::spawn_operation`).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -8,93 +10,90 @@ use std::sync::{Arc, Mutex};
 use anyhow::Context;
 use tauri::{AppHandle, Manager};
 
-use super::{derive_phase, lines_to_window, now_ms, output_sink, set_status, shell_quote, Phase, Stack, LOG_EVENT};
+use super::poll::{self, POLL_TIMEOUT};
+use super::{down_args, lines_to_window, now_ms, output_sink, set_status, shell_quote, up_args, Phase, Stack, Ticket, LOG_EVENT};
 use crate::compose;
 use crate::job::LastError;
 use crate::{forward, sync, AppState};
 
-/// Sync the folder, then `up -d`, which builds only images that are missing,
-/// as `docker compose up` does; `rebuild` adds `--build`, so every built
-/// image is made again from the synced folder. A previous up or down still
-/// running is cancelled first.
+/// Sync the folder, then `up -d` (`up_args`). A newer operation started
+/// while the folder synced (Stop clicked meanwhile) wins: up is not run.
 pub async fn up(app: AppHandle, stack: Stack, rebuild: bool) -> anyhow::Result<()> {
-    let state = app.state::<AppState>();
-    let machine = state.store.machine(&stack.machine_id).context("the machine no longer exists")?;
-    let alias = machine.alias();
-    cancel_job(&app, &stack.id);
+    let ticket = Ticket::begin(&app, &stack.id)?;
+    let result = sync_and_up(&app, &ticket, &stack, rebuild).await;
+    finish(&app, ticket, &stack).await;
+    result
+}
 
-    set_status(&app, &stack.id, |status| {
+async fn sync_and_up(app: &AppHandle, ticket: &Ticket, stack: &Stack, rebuild: bool) -> anyhow::Result<()> {
+    let state = app.state::<AppState>();
+    let alias = machine_alias(app, stack)?;
+    ticket.set_status(|status| {
         status.phase = Phase::Syncing;
-        status.message = None;
+        status.error = None;
     });
-    let synced = sync::run(&state.ssh, &alias, &stack, output_sink(&app, &stack.id)).await;
-    let synced = match synced {
-        Ok(result) => result,
-        Err(err) => {
-            set_status(&app, &stack.id, |status| {
-                status.phase = Phase::Error;
-                status.message = Some(format!("sync failed: {err:#}"));
-            });
-            return Err(err);
-        }
-    };
-    set_status(&app, &stack.id, |status| {
+    let synced = sync::run(&state.ssh, &alias, stack, output_sink(app, &stack.id)).await.context("sync failed")?;
+    ticket.set_status(|status| {
         status.phase = Phase::Starting;
         status.synced_at_ms = Some(now_ms());
         status.synced_files = synced.files;
-        status.message = synced.warning;
+        status.sync_warning = synced.warning;
     });
-
-    let args = if rebuild { "up -d --build --remove-orphans" } else { "up -d --remove-orphans" };
-    run_compose(&app, &stack, &alias, &stack.compose_cmd(args), "compose up").await
+    if !ticket.is_current() {
+        return Ok(());
+    }
+    run_compose(app, ticket, stack, &alias, &stack.compose_cmd(up_args(rebuild)), "compose up").await
 }
 
+/// Remove containers (`down_args`), keeping the data unless `remove_volumes`.
 pub async fn down(app: AppHandle, stack: Stack, remove_volumes: bool) -> anyhow::Result<()> {
-    let state = app.state::<AppState>();
-    let machine = state.store.machine(&stack.machine_id).context("the machine no longer exists")?;
-    cancel_job(&app, &stack.id);
-    set_status(&app, &stack.id, |status| {
-        status.phase = Phase::Stopping;
-        status.message = None;
-    });
-    let args = if remove_volumes { "down --remove-orphans --volumes" } else { "down --remove-orphans" };
-    run_compose(&app, &stack, &machine.alias(), &stack.compose_cmd(args), "compose down").await
+    compose_operation(app, stack, Phase::Stopping, down_args(remove_volumes), "compose down").await
 }
 
 /// `compose stop`: the containers stay, so Start brings them back quickly.
-/// Removing them is `down`.
 pub async fn stop(app: AppHandle, stack: Stack) -> anyhow::Result<()> {
-    let state = app.state::<AppState>();
-    let machine = state.store.machine(&stack.machine_id).context("the machine no longer exists")?;
-    cancel_job(&app, &stack.id);
-    set_status(&app, &stack.id, |status| {
-        status.phase = Phase::Stopping;
-        status.message = None;
-    });
-    run_compose(&app, &stack, &machine.alias(), &stack.compose_cmd("stop"), "compose stop").await
+    compose_operation(app, stack, Phase::Stopping, "stop", "compose stop").await
 }
 
 pub async fn restart(app: AppHandle, stack: Stack) -> anyhow::Result<()> {
-    let state = app.state::<AppState>();
-    let machine = state.store.machine(&stack.machine_id).context("the machine no longer exists")?;
-    cancel_job(&app, &stack.id);
-    set_status(&app, &stack.id, |status| status.phase = Phase::Starting);
-    run_compose(&app, &stack, &machine.alias(), &stack.compose_cmd("restart"), "compose restart").await
+    compose_operation(app, stack, Phase::Starting, "restart", "compose restart").await
+}
+
+/// One compose command as an operation: the phase while it runs, the
+/// command, then the card as `ps` sees it.
+async fn compose_operation(app: AppHandle, stack: Stack, phase: Phase, args: &str, label: &str) -> anyhow::Result<()> {
+    let ticket = Ticket::begin(&app, &stack.id)?;
+    let result = async {
+        let alias = machine_alias(&app, &stack)?;
+        ticket.set_status(|status| {
+            status.phase = phase;
+            status.error = None;
+        });
+        run_compose(&app, &ticket, &stack, &alias, &stack.compose_cmd(args), label).await
+    }
+    .await;
+    finish(&app, ticket, &stack).await;
+    result
 }
 
 /// Mirrors the folder again without touching the containers. Compose picks up
-/// bind-mounted files by itself; built images need a Rebuild.
+/// bind-mounted files by itself; built images need a Rebuild. Skipped while an
+/// operation holds the stack: its own sync mirrors the folder, and two rsyncs
+/// into one folder with --delete would remove each other's temporary files.
 pub async fn resync(app: AppHandle, stack: Stack) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
-    let machine = state.store.machine(&stack.machine_id).context("the machine no longer exists")?;
-    let result = sync::run(&state.ssh, &machine.alias(), &stack, |_| {}).await;
+    if state.operations.holds(&stack.id) {
+        return Ok(());
+    }
+    let alias = machine_alias(&app, &stack)?;
+    let result = sync::run(&state.ssh, &alias, &stack, |_| {}).await;
     match result {
         Ok(synced) => set_status(&app, &stack.id, |status| {
             status.synced_at_ms = Some(now_ms());
             status.synced_files = synced.files;
-            status.message = synced.warning;
+            status.sync_warning = synced.warning;
         }),
-        Err(err) => set_status(&app, &stack.id, |status| status.message = Some(format!("sync failed: {err:#}"))),
+        Err(err) => set_status(&app, &stack.id, |status| status.sync_warning = Some(format!("sync failed: {err:#}"))),
     }
     Ok(())
 }
@@ -112,7 +111,7 @@ pub fn start_watcher(app: &AppHandle, stack: &Stack) {
         Ok(watcher) => {
             state.watchers.lock().expect("watchers lock").insert(stack.id.clone(), watcher);
         }
-        Err(err) => set_status(app, &stack.id, |status| status.message = Some(format!("could not watch the folder: {err:#}"))),
+        Err(err) => set_status(app, &stack.id, |status| status.sync_warning = Some(format!("could not watch the folder: {err:#}"))),
     }
 }
 
@@ -125,26 +124,32 @@ pub fn stop_watcher(app: &AppHandle, stack_id: &str) {
 pub fn logs_start(app: &AppHandle, stack: &Stack) -> anyhow::Result<()> {
     logs_stop(app, &stack.id);
     let state = app.state::<AppState>();
-    let machine = state.store.machine(&stack.machine_id).context("the machine no longer exists")?;
+    let alias = machine_alias(app, stack)?;
     let sink = lines_to_window(app, LOG_EVENT, &stack.id);
-    let job = state.ssh.job(&machine.alias(), &stack.compose_cmd("logs -f --tail 200 --no-color"), sink)?;
+    let job = state.ssh.job(&alias, &stack.compose_cmd("logs -f --tail 200 --no-color"), sink)?;
     let handle = job.handle();
     let key = logs_key(&stack.id);
     state.jobs.lock().expect("jobs lock").insert(key.clone(), handle.clone());
-    // Reap the entry when the stream ends by itself; a cancelled one was
-    // already removed by whoever cancelled it.
+    // A stream that ends by itself takes its entry with it, but never a newer stream's.
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let _ = job.wait().await;
-        if !handle.is_cancelled() {
-            app.state::<AppState>().jobs.lock().expect("jobs lock").remove(&key);
+        let state = app.state::<AppState>();
+        let mut jobs = state.jobs.lock().expect("jobs lock");
+        let still_mine = jobs.get(&key).is_some_and(|current| current.same(&handle));
+        if still_mine {
+            jobs.remove(&key);
         }
     });
     Ok(())
 }
 
 pub fn logs_stop(app: &AppHandle, stack_id: &str) {
-    cancel_job(app, &logs_key(stack_id));
+    let state = app.state::<AppState>();
+    let running = state.jobs.lock().expect("jobs lock").remove(&logs_key(stack_id));
+    if let Some(job) = running {
+        job.cancel();
+    }
 }
 
 fn logs_key(stack_id: &str) -> String {
@@ -152,9 +157,11 @@ fn logs_key(stack_id: &str) -> String {
 }
 
 /// Stops the stack, deletes its folder on the machine, forgets it here. Each
-/// remote step is best effort: the machine may be switched off.
+/// remote step is best effort: the machine may be switched off. Refused
+/// while a copy runs, which cannot be stopped half way.
 pub async fn remove(app: AppHandle, stack: Stack, remove_volumes: bool) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
+    anyhow::ensure!(!state.operations.copying(&stack.id), super::COPY_RUNNING);
     logs_stop(&app, &stack.id);
     stop_watcher(&app, &stack.id);
     if let Some(machine) = state.store.machine(&stack.machine_id) {
@@ -171,11 +178,16 @@ pub async fn remove(app: AppHandle, stack: Stack, remove_volumes: bool) -> anyho
     Ok(())
 }
 
-/// Runs one compose command with streamed output, then refreshes the phase
-/// from `ps`. A cancelled job leaves the status to whoever cancelled it. A
-/// failure's message carries the last error line compose printed, so the
-/// card says why without a look at the output.
-async fn run_compose(app: &AppHandle, stack: &Stack, alias: &str, script: &str, label: &str) -> anyhow::Result<()> {
+fn machine_alias(app: &AppHandle, stack: &Stack) -> anyhow::Result<String> {
+    let machine = app.state::<AppState>().store.machine(&stack.machine_id).context("the machine no longer exists")?;
+    Ok(machine.alias())
+}
+
+/// Runs one compose command with streamed output. A newer operation ends it
+/// and takes over the card, so this one then reports nothing. A failure
+/// carries the last error line compose printed, so the card says why
+/// without a look at the output.
+async fn run_compose(app: &AppHandle, ticket: &Ticket, stack: &Stack, alias: &str, script: &str, label: &str) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
     let last_error = Arc::new(Mutex::new(LastError::default()));
     let noted = last_error.clone();
@@ -184,53 +196,44 @@ async fn run_compose(app: &AppHandle, stack: &Stack, alias: &str, script: &str, 
         noted.lock().expect("last error lock").note(&line.text);
         sink(line);
     })?;
-    let handle = job.handle();
-    state.jobs.lock().expect("jobs lock").insert(stack.id.clone(), handle.clone());
+    ticket.attach(job.handle());
     let code = job.wait().await;
-    state.jobs.lock().expect("jobs lock").remove(&stack.id);
-    if handle.is_cancelled() {
+    if !ticket.is_current() {
         return Ok(());
     }
     let code = code?;
     if code != Some(0) {
         let why = last_error.lock().expect("last error lock").explain(code);
-        set_status(app, &stack.id, |status| {
-            status.phase = Phase::Error;
-            status.message = Some(format!("{label} failed: {why}"));
-        });
         anyhow::bail!("{label} failed: {why}");
     }
-    refresh(app, stack, alias).await;
     Ok(())
 }
 
+/// The operation is over. Unless a newer one took the stack meanwhile, the
+/// card shows what `ps` says now; when the machine does not answer, the
+/// phase comes from the services last seen, so it never stays on "starting".
+async fn finish(app: &AppHandle, ticket: Ticket, stack: &Stack) {
+    let superseded = !ticket.is_current();
+    drop(ticket);
+    if superseded {
+        return;
+    }
+    let answered = refresh_now(app, stack).await;
+    if !answered && !app.state::<AppState>().operations.holds(&stack.id) {
+        set_status(app, &stack.id, |status| status.phase = super::derive_phase(&status.services));
+    }
+}
+
 /// The card catches up with `ps` right away instead of at the next poll.
-pub async fn refresh_now(app: &AppHandle, stack: &Stack) {
-    let machine = app.state::<AppState>().store.machine(&stack.machine_id);
-    if let Some(machine) = machine {
-        refresh(app, stack, &machine.alias()).await;
-    }
-}
-
-async fn refresh(app: &AppHandle, stack: &Stack, alias: &str) {
+/// False when the machine did not answer.
+pub async fn refresh_now(app: &AppHandle, stack: &Stack) -> bool {
     let state = app.state::<AppState>();
+    let Some(machine) = state.store.machine(&stack.machine_id) else { return false };
     let script = stack.compose_cmd("ps --all --format json");
-    let services = match state.ssh.run(alias, &script).await {
+    let services = match state.ssh.run_within(&machine.alias(), &script, POLL_TIMEOUT).await {
         Ok(out) if out.ok() => compose::parse_ps(&out.stdout),
-        _ => return,
+        _ => return false,
     };
-    forward::reconcile(app, stack, &services);
-    set_status(app, &stack.id, |status| {
-        status.phase = derive_phase(&services);
-        status.services = services;
-        status.known = true;
-    });
-}
-
-fn cancel_job(app: &AppHandle, stack_id: &str) {
-    let state = app.state::<AppState>();
-    let running = state.jobs.lock().expect("jobs lock").remove(stack_id);
-    if let Some(job) = running {
-        job.cancel();
-    }
+    poll::apply_ps(app, &stack.id, services, false);
+    true
 }

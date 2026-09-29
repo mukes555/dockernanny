@@ -12,7 +12,7 @@ pub mod updates;
 use std::collections::HashMap;
 use std::path::Path;
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use serde::{Deserialize, Serialize};
 
@@ -232,7 +232,7 @@ pub async fn set_docker_context(state: State<'_, AppState>, id: String, enabled:
 #[tauri::command]
 pub async fn sync_stack(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
     let stack = state.store.stack(&id).ok_or("unknown stack")?;
-    spawn_logged(stack::resync(app, stack));
+    spawn_operation(app.clone(), id, stack::resync(app, stack));
     Ok(())
 }
 
@@ -288,49 +288,59 @@ pub async fn create_stack(app: AppHandle, state: State<'_, AppState>, mut stack:
     if !is_file || !stays_inside_folder(&stack.compose_rel) {
         return Err(format!("{} is not a file inside {}.", stack.compose_rel, stack.project_dir));
     }
+    // The id was just minted, so the name is the only thing to check.
     let mut stacks = state.store.stacks();
-    let name_taken = stacks.iter().any(|s| s.machine_id == stack.machine_id && s.name == stack.name && s.id != stack.id);
+    let name_taken = stacks.iter().any(|s| s.machine_id == stack.machine_id && s.name == stack.name);
     if name_taken {
         return Err(format!("A stack named {} already runs on that machine.", stack.name));
     }
-    stacks.retain(|s| s.id != stack.id);
     stacks.push(stack.clone());
     state.store.save_stacks(stacks.clone()).map_err(fail)?;
     if stack.live_sync {
         stack::start_watcher(&app, &stack);
     }
-    spawn_logged(stack::up(app, stack, false));
+    spawn_operation(app.clone(), stack.id.clone(), stack::up(app, stack, false));
     Ok(stacks)
 }
 
 /// Start (`up -d`) or, with `rebuild`, Rebuild (`up -d --build`).
 #[tauri::command]
 pub async fn up_stack(app: AppHandle, state: State<'_, AppState>, id: String, rebuild: bool) -> CmdResult<()> {
-    let stack = state.store.stack(&id).ok_or("unknown stack")?;
-    spawn_logged(stack::up(app, stack, rebuild));
+    let stack = stack_free_to_change(&state, &id)?;
+    spawn_operation(app.clone(), id, stack::up(app, stack, rebuild));
     Ok(())
 }
 
 /// Stop keeps the containers (`compose stop`); `down_stack` removes them.
 #[tauri::command]
 pub async fn stop_stack(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    let stack = state.store.stack(&id).ok_or("unknown stack")?;
-    spawn_logged(stack::stop(app, stack));
+    let stack = stack_free_to_change(&state, &id)?;
+    spawn_operation(app.clone(), id, stack::stop(app, stack));
     Ok(())
 }
 
 #[tauri::command]
 pub async fn down_stack(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    let stack = state.store.stack(&id).ok_or("unknown stack")?;
-    spawn_logged(stack::down(app, stack, false));
+    let stack = stack_free_to_change(&state, &id)?;
+    spawn_operation(app.clone(), id, stack::down(app, stack, false));
     Ok(())
 }
 
 #[tauri::command]
 pub async fn restart_stack(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    let stack = state.store.stack(&id).ok_or("unknown stack")?;
-    spawn_logged(stack::restart(app, stack));
+    let stack = stack_free_to_change(&state, &id)?;
+    spawn_operation(app.clone(), id, stack::restart(app, stack));
     Ok(())
+}
+
+/// The stack, unless a copy of it runs: a copy cannot be stopped half way,
+/// so the button answers at once instead of racing it.
+fn stack_free_to_change(state: &AppState, id: &str) -> CmdResult<Stack> {
+    let stack = state.store.stack(id).ok_or("unknown stack")?;
+    if state.operations.copying(id) {
+        return Err(stack::COPY_RUNNING.into());
+    }
+    Ok(stack)
 }
 
 #[tauri::command]
@@ -427,13 +437,20 @@ pub fn script_stop(state: State<'_, AppState>) {
     state.script_server.lock().expect("script server lock").take();
 }
 
-/// Long operations report through events; the error is only logged here
-/// because the status event already carries it to the UI.
-fn spawn_logged(task: impl std::future::Future<Output = anyhow::Result<()>> + Send + 'static) {
+/// Runs a stack operation in the background; the command returns at once and
+/// progress arrives as events. A failure is written on the card, unless the
+/// stack was removed meanwhile or a newer operation took it over.
+fn spawn_operation(app: AppHandle, stack_id: String, task: impl std::future::Future<Output = anyhow::Result<()>> + Send + 'static) {
     tauri::async_runtime::spawn(async move {
-        if let Err(err) = task.await {
-            tracing::warn!("{err:#}");
+        let Err(err) = task.await else { return };
+        tracing::warn!("{err:#}");
+        let state = app.state::<AppState>();
+        let stack_gone = state.store.stack(&stack_id).is_none();
+        let newer_operation = state.operations.holds(&stack_id);
+        if stack_gone || newer_operation {
+            return;
         }
+        stack::set_status(&app, &stack_id, |status| status.error = Some(format!("{err:#}")));
     });
 }
 
