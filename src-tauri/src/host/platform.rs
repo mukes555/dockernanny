@@ -4,6 +4,7 @@
 //! the page are the same on every platform.
 
 use std::io::Read;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -137,7 +138,9 @@ pub trait Platform: Send + Sync {
     fn spawn_keepalive(&self) -> Result<Option<Child>, String>;
     /// The peer addresses with an ssh session open on `port` right now.
     fn established_peers(&self, port: u16) -> Vec<String>;
-    fn lan_ipv4(&self) -> Vec<String>;
+    fn lan_ipv4(&self) -> Vec<String> {
+        lan_addresses()
+    }
     fn hostname(&self) -> String;
 }
 
@@ -244,24 +247,6 @@ pub fn host_key_from_pub(text: &str) -> String {
     }
 }
 
-/// The address after `inet` in ifconfig, `ip addr` or `ip -o addr` output
-/// (the last puts it mid-line), without loopback and link-local.
-pub fn parse_ifconfig(text: &str) -> Vec<String> {
-    let mut addresses = Vec::new();
-    for line in text.lines() {
-        let Some(address) = line.split_whitespace().skip_while(|t| *t != "inet").nth(1) else { continue };
-        let address = address.split('/').next().unwrap_or(address);
-        let skip = address.starts_with("127.")
-            || address.starts_with("169.254.")
-            || !address.contains('.')
-            || addresses.iter().any(|a| a == address);
-        if !skip {
-            addresses.push(address.to_string());
-        }
-    }
-    addresses
-}
-
 /// One of the app's Windows firewall rules, as far as it can be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rule {
@@ -299,44 +284,36 @@ pub fn parse_rule(text: &str, name: &str) -> Rule {
     Rule::Open(value.trim().parse().ok())
 }
 
-/// `   IPv4 Address. . . . . . . . . . . : 192.0.2.15` lines from Windows'
-/// ipconfig, skipping the virtual adapters that only matter to WSL itself.
-pub fn parse_ipconfig(text: &str) -> Vec<String> {
-    let mut addresses = Vec::new();
-    let mut in_virtual_adapter = false;
-    for line in text.lines() {
-        let is_adapter_header = !line.starts_with(' ') && line.contains("adapter");
-        if is_adapter_header {
-            in_virtual_adapter =
-                line.contains("vEthernet") || line.contains("Hyper-V") || line.contains("VirtualBox") || line.contains("VMware");
-            continue;
-        }
-        if in_virtual_adapter || !line.contains("IPv4") {
-            continue;
-        }
-        let Some(address) = line.rsplit(':').next().map(str::trim) else { continue };
-        let address = address.trim_end_matches("(Preferred)").trim();
-        let usable = address.contains('.') && !address.starts_with("127.") && !address.starts_with("169.254.");
-        if usable && !addresses.iter().any(|a| a == address) {
-            addresses.push(address.to_string());
+/// This computer's IPv4 addresses on its networks, as the OS lists them
+/// (no tool output to parse): no loopback, no link-local, and none on an
+/// adapter that only reaches containers and virtual machines here.
+pub fn lan_addresses() -> Vec<String> {
+    let mut addresses: Vec<String> = Vec::new();
+    for interface in if_addrs::get_if_addrs().unwrap_or_default() {
+        let IpAddr::V4(ip) = interface.ip() else { continue };
+        let local_only = ip.is_loopback() || ip.is_link_local();
+        let address = ip.to_string();
+        let usable = !local_only && !host_only_adapter(&interface.name) && !addresses.contains(&address);
+        if usable {
+            addresses.push(address);
         }
     }
     addresses
 }
 
-/// This computer's IPv4 addresses on its networks, whatever the OS.
-pub fn lan_addresses() -> Vec<String> {
-    let text =
-        |program: &str, args: &[&str]| decode(&crate::tools::native_std(program).args(args).output().map(|o| o.stdout).unwrap_or_default());
-    if cfg!(windows) {
-        return parse_ipconfig(&text("ipconfig", &[]));
-    }
-    // Recent Linux distributions ship `ip` and no longer ifconfig.
-    let from_ifconfig = parse_ifconfig(&text("ifconfig", &[]));
-    if !from_ifconfig.is_empty() {
-        return from_ifconfig;
-    }
-    parse_ifconfig(&text("ip", &["-4", "-o", "addr"]))
+/// Adapters nobody on the network can pair through: Windows' WSL and
+/// hypervisor adapters (by their names in Network Connections) and the
+/// Linux bridges of Docker and libvirt.
+fn host_only_adapter(name: &str) -> bool {
+    let windows = ["vEthernet", "Hyper-V", "VirtualBox", "VMware"].iter().any(|word| name.contains(word));
+    let linux = ["docker", "br-", "veth", "virbr"].iter().any(|prefix| name.starts_with(prefix));
+    windows || linux
+}
+
+/// Whether something on this computer accepts connections on `port`.
+pub fn listening_here(port: u16) -> bool {
+    let loopbacks = [IpAddr::from(Ipv4Addr::LOCALHOST), IpAddr::from(Ipv6Addr::LOCALHOST)];
+    loopbacks.into_iter().any(|ip| TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_secs(1)).is_ok())
 }
 
 #[cfg(test)]
@@ -369,9 +346,24 @@ mod tests {
     }
 
     #[test]
-    fn ipconfig_skips_virtual_adapters() {
-        let text = "Ethernet adapter vEthernet (WSL):\n\n   IPv4 Address. . . . . . . . . . . : 172.20.0.1\n\nWireless LAN adapter Wi-Fi:\n\n   IPv4 Address. . . . . . . . . . . : 192.0.2.15(Preferred)\n   Autoconfiguration IPv4 Address. . : 169.254.1.1\n";
-        assert_eq!(parse_ipconfig(text), vec!["192.0.2.15".to_string()]);
+    fn host_only_adapters_are_left_out() {
+        for name in
+            ["vEthernet (WSL)", "VirtualBox Host-Only Network", "VMware Network Adapter VMnet8", "docker0", "br-3f2a", "veth91c", "virbr0"]
+        {
+            assert!(host_only_adapter(name), "{name}");
+        }
+        for name in ["Wi-Fi", "Ethernet 2", "en0", "eth0", "wlp2s0", "tailscale0", "utun4"] {
+            assert!(!host_only_adapter(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn this_computer_s_addresses_and_ports_are_read_from_the_system() {
+        for address in lan_addresses() {
+            assert!(!address.starts_with("127.") && !address.starts_with("169.254."), "{address}");
+        }
+        let holder = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        assert!(listening_here(holder.local_addr().unwrap().port()));
     }
 
     #[test]
@@ -386,15 +378,5 @@ mod tests {
         assert_eq!(host_key_from_pub("ssh-ed25519 AAAAC3Nz root@machine\n"), "ssh-ed25519 AAAAC3Nz");
         assert_eq!(host_key_from_pub("garbage"), "");
         assert_eq!(host_key_from_pub("sk-ssh-ed25519@openssh.com AAAAGnNr alex@studio"), "sk-ssh-ed25519@openssh.com AAAAGnNr");
-    }
-
-    #[test]
-    fn ifconfig_and_ip_addr_both_parse() {
-        let mac = "lo0:\n\tinet 127.0.0.1 netmask 0xff000000\nen0:\n\tinet 192.0.2.10 netmask 0xffffff00\nen5:\n\tinet 169.254.3.4\n";
-        assert_eq!(parse_ifconfig(mac), vec!["192.0.2.10".to_string()]);
-        let linux = "1: lo\n    inet 127.0.0.1/8 scope host lo\n2: eth0\n    inet 192.0.2.20/24 brd 192.0.2.255 scope global eth0\n    inet6 fe80::1/64 scope link\n";
-        assert_eq!(parse_ifconfig(linux), vec!["192.0.2.20".to_string()]);
-        let one_line = "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever\n2: eth0    inet 192.0.2.30/24 brd 192.0.2.255 scope global eth0\\       valid_lft forever\n";
-        assert_eq!(parse_ifconfig(one_line), vec!["192.0.2.30".to_string()]);
     }
 }

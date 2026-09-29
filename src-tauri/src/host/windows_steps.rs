@@ -323,7 +323,7 @@ fn restart_wsl(win: &Windows, _options: &SetupOptions, found: &mut Found, say: &
         std::thread::sleep(std::time::Duration::from_secs(3));
     }
     for attempt in 0..20 {
-        let sshd_ok = win.in_distro("ss -ltn 2>/dev/null").stdout.contains(&format!(":{} ", win.ssh_port));
+        let sshd_ok = !win.in_distro(&wsl_script::listening_query(win.ssh_port)).stdout.trim().is_empty();
         let docker = win.in_distro("docker version --format '{{.Server.Version}}' 2>/dev/null");
         let docker_ok = docker.ok && !docker.text().is_empty();
         if sshd_ok && docker_ok {

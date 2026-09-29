@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::platform::{
-    host_key_from_pub, parse_ipconfig, parse_rule, row, run, FirewallRules, Installed, NetworkProfile, Outcome, Output, Picture, Platform,
-    Row, Rule, Say, SetupOptions, State, CHECK_LIMIT, SETUP_LIMIT,
+    host_key_from_pub, parse_rule, row, run, FirewallRules, Installed, NetworkProfile, Outcome, Output, Picture, Platform, Row, Rule, Say,
+    SetupOptions, State, CHECK_LIMIT, SETUP_LIMIT,
 };
 use super::{windows_steps, wsl_script, MIN_WINDOWS_BUILD};
 
@@ -248,14 +248,16 @@ impl Platform for Windows {
         let port = self.ssh_port;
 
         // One wsl.exe start for both answers: the Docker version on the first
-        // line, then the listening sockets (-H: without the header line).
-        let answer = self.in_distro("docker version --format '{{.Server.Version}}' 2>/dev/null | head -1; echo; ss -Hltn 2>/dev/null");
+        // line, then an empty one, then the sockets listening on the ssh port.
+        let script =
+            format!("docker version --format '{{{{.Server.Version}}}}' 2>/dev/null | head -1; echo; {}", wsl_script::listening_query(port));
+        let answer = self.in_distro(&script);
         let mut lines = answer.stdout.lines();
         let docker_version = lines.next().unwrap_or_default().trim().to_string();
         let docker_ok = !docker_version.is_empty();
         picture.rows.push(row("Docker Engine", docker_ok, if docker_ok { docker_version } else { "not running or not installed".into() }));
 
-        let listening = lines.any(|line| line.contains(&format!(":{port} ")));
+        let listening = lines.any(|line| !line.trim().is_empty());
         picture.sshd_listening = listening;
         picture.rows.push(row(
             "SSH server",
@@ -335,10 +337,6 @@ impl Platform for Windows {
     fn established_peers(&self, port: u16) -> Vec<String> {
         // sshd lives inside the distro, so its connection table is there too.
         super::paired::parse_established(&self.wsl(&["-d", &self.distro, "--", "ss", "-tn"]).stdout, port)
-    }
-
-    fn lan_ipv4(&self) -> Vec<String> {
-        parse_ipconfig(&run("ipconfig", &[], None, &[], self.limit).stdout)
     }
 
     fn hostname(&self) -> String {

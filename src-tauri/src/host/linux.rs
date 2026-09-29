@@ -8,7 +8,7 @@ use std::process::Child;
 
 use super::linux_setup::{docker_action_for_user, docker_row, RootPlan};
 use super::platform::{
-    host_key_from_pub, parse_ifconfig, row, run, Installed, Outcome, Output, Picture, Platform, Say, SetupOptions, CHECK_LIMIT, SETUP_LIMIT,
+    host_key_from_pub, listening_here, row, run, Installed, Outcome, Output, Picture, Platform, Say, SetupOptions, CHECK_LIMIT, SETUP_LIMIT,
 };
 use crate::docker_access;
 
@@ -26,8 +26,7 @@ impl Linux {
     }
 
     fn sshd_listening(&self) -> bool {
-        let sockets = self.sh("ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null").stdout;
-        sockets.lines().any(|line| line.split_whitespace().any(|field| field.ends_with(&format!(":{SSH_PORT}"))))
+        listening_here(SSH_PORT)
     }
 
     fn rsync_present(&self) -> bool {
@@ -136,10 +135,6 @@ impl Platform for Linux {
 
     fn established_peers(&self, port: u16) -> Vec<String> {
         super::paired::parse_established(&self.sh("ss -tn 2>/dev/null || netstat -tn").stdout, port)
-    }
-
-    fn lan_ipv4(&self) -> Vec<String> {
-        parse_ifconfig(&self.sh("ip -4 -o addr 2>/dev/null || ifconfig").stdout)
     }
 
     fn hostname(&self) -> String {
