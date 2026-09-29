@@ -7,6 +7,10 @@
 //! answer that Set up may act on. Docker installed any other way (snap,
 //! Docker Desktop, rootless, Podman) is reported in Docker's own words and
 //! left as it is.
+//!
+//! Only Linux asks these questions; the module builds everywhere so its
+//! verdicts are tested on every OS.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use crate::host::platform::{self, CHECK_LIMIT};
 

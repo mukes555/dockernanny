@@ -17,8 +17,9 @@ use serde_json::Value;
 
 use super::discover::{self, Download};
 use super::endpoint::Site;
+use super::report::why_it_failed;
 use super::steps::names;
-use super::{transfer, why_it_failed, CopyRequest, Report, Sides};
+use super::{transfer, CopyRequest, Report, Sides};
 use crate::ssh::Ssh;
 use crate::stack::Phase;
 

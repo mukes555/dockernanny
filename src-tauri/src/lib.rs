@@ -1,11 +1,6 @@
-// Public so `examples/` can drive the backend without the window.
-pub mod commands;
+// Public so `examples/` and main.rs can drive the backend without the window.
 pub mod compose;
-pub mod computer;
-pub mod containers;
 pub mod copy;
-pub mod diagnostics;
-pub mod docker_access;
 pub mod doctor;
 pub mod forward;
 pub mod guide;
@@ -13,15 +8,22 @@ pub mod host;
 pub mod job;
 pub mod machine;
 pub mod pairing;
-pub mod probe;
-pub mod settings;
 pub mod ssh;
 pub mod stack;
 pub mod store;
 pub mod sync;
-pub mod tools;
-pub mod tray;
-pub mod updates;
+
+// Only the app uses these, so the compiler can tell when something in them goes unused.
+mod commands;
+mod computer;
+mod containers;
+mod diagnostics;
+mod docker_access;
+mod probe;
+mod settings;
+mod tools;
+mod tray;
+mod updates;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -37,7 +39,7 @@ use ssh::Ssh;
 use stack::StackStatus;
 use store::Store;
 
-pub struct AppState {
+pub(crate) struct AppState {
     pub store: Store,
     pub ssh: Ssh,
     /// The sharing role, running only while it is on in the settings.
@@ -107,11 +109,11 @@ pub fn run() {
             updates::on_window_event(window, event);
         })
         .invoke_handler(tauri::generate_handler![
-            commands::list_machines,
-            commands::machine_stats,
-            commands::app_home,
-            commands::terminal_info,
-            commands::wsl_distros,
+            commands::machines::list_machines,
+            commands::machines::machine_stats,
+            commands::computer::app_home,
+            commands::machines::terminal_info,
+            commands::settings::wsl_distros,
             commands::computer::computer_name,
             commands::computer::computer_info,
             commands::computer::computer_readiness,
@@ -120,44 +122,44 @@ pub fn run() {
             commands::computer::install_wsl_tools,
             commands::computer::diagnostics,
             commands::computer::reveal_app_file,
-            commands::new_machine_id,
+            commands::machines::new_machine_id,
             commands::computer::default_key_path,
-            commands::doctor,
-            commands::add_machine,
-            commands::remove_machine,
-            commands::poll_machine,
-            commands::preview_compose,
-            commands::default_excludes,
-            commands::busy_ports,
-            commands::list_stacks,
-            commands::stack_statuses,
-            commands::create_stack,
-            commands::up_stack,
-            commands::stop_stack,
-            commands::down_stack,
-            commands::restart_stack,
-            commands::remove_stack,
-            commands::forward_states,
-            commands::set_forward_ports,
-            commands::set_docker_context,
+            commands::machines::doctor,
+            commands::machines::add_machine,
+            commands::machines::remove_machine,
+            commands::machines::poll_machine,
+            commands::stacks::preview_compose,
+            commands::stacks::default_excludes,
+            commands::stacks::busy_ports,
+            commands::stacks::list_stacks,
+            commands::stacks::stack_statuses,
+            commands::stacks::create_stack,
+            commands::stacks::up_stack,
+            commands::stacks::stop_stack,
+            commands::stacks::down_stack,
+            commands::stacks::restart_stack,
+            commands::stacks::remove_stack,
+            commands::stacks::forward_states,
+            commands::stacks::set_forward_ports,
+            commands::machines::set_docker_context,
             commands::containers::list_containers,
             commands::containers::container_action,
             commands::containers::start_container_logs,
             commands::containers::stop_container_logs,
-            commands::sync_stack,
-            commands::start_logs,
-            commands::stop_logs,
-            commands::script_preview,
-            commands::script_serve,
-            commands::script_stop,
-            commands::pair_machine,
+            commands::stacks::sync_stack,
+            commands::stacks::start_logs,
+            commands::stacks::stop_logs,
+            commands::guide::script_preview,
+            commands::guide::script_serve,
+            commands::guide::script_stop,
+            commands::machines::pair_machine,
             commands::copy::local_projects,
             commands::copy::copy_plan,
             commands::copy::copy_stack,
             commands::copy::copy_progress,
             commands::settings::get_settings,
             commands::settings::save_settings,
-            commands::settings::reset_forwards,
+            commands::stacks::reset_forwards,
             commands::host::host_snapshot,
             commands::host::host_log,
             commands::host::host_setup,
@@ -180,7 +182,7 @@ pub fn run() {
 
 /// What every way out of the app does first, a restart for an update too:
 /// sharing stops, bridges and child processes end, ssh connections close.
-pub fn shut_down(app: &tauri::AppHandle) {
+pub(crate) fn shut_down(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     state.host.stop();
     forward::exit_all(&state.ssh);
@@ -193,7 +195,7 @@ pub fn shut_down(app: &tauri::AppHandle) {
 /// Starts or stops what the settings ask for: the WSL distribution the
 /// tools use, the sharing role and the start-at-login entry. Called at
 /// launch and after every save.
-pub fn apply_settings(app: &tauri::AppHandle) {
+pub(crate) fn apply_settings(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     let Some(settings) = state.store.settings() else { return };
     let distro_changed = tools::configure(&settings.wsl_distro);

@@ -45,6 +45,7 @@ jobs:
           workspaces: src-tauri -> target
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - run: pnpm test
       - name: Formatting
         if: matrix.os == 'ubuntu-22.04'
         run: |

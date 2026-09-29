@@ -1,10 +1,10 @@
-//! The settings screen: read, save, and the maintenance actions that live there.
+//! The settings screen: read, save, and the WSL distributions to pick from.
 
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::settings::Settings;
-use crate::{forward, AppState};
+use crate::AppState;
 
 #[derive(Debug, Serialize)]
 pub struct SettingsView {
@@ -34,14 +34,14 @@ pub async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings:
     Ok(settings)
 }
 
-/// Drops every forwarder, including ones left by an earlier instance, and
-/// lets the status poll start fresh ones a few seconds later.
+/// The WSL distributions installed on this computer, for the WSL card.
+/// Empty off Windows and when WSL is missing.
 #[tauri::command]
-pub async fn reset_forwards(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    for stack in state.store.stacks() {
-        forward::stop(&app, &stack.id);
+pub async fn wsl_distros() -> Vec<String> {
+    if !cfg!(windows) {
+        return Vec::new();
     }
-    let ssh = state.ssh.clone();
-    tauri::async_runtime::spawn_blocking(move || forward::exit_all(&ssh)).await.map_err(|err| format!("{err}"))?;
-    Ok(())
+    let out = crate::tools::native("wsl.exe").args(["-l", "-q"]).env("WSL_UTF8", "1").output().await;
+    let text = out.map(|o| crate::host::platform::decode(&o.stdout)).unwrap_or_default();
+    text.lines().map(str::trim).filter(|name| crate::settings::safe_distro(name)).map(str::to_string).collect()
 }

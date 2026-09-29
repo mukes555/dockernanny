@@ -11,7 +11,7 @@ use crate::copy::{self, CopyPlan, CopyRequest, EndpointRef, Report, Sides, Sink}
 use crate::stack::{self, Phase, Stack, Ticket};
 use crate::{compose, sync, AppState};
 
-type CmdResult<T> = Result<T, String>;
+use super::CmdResult;
 
 pub const PROGRESS_EVENT: &str = "copy:progress";
 

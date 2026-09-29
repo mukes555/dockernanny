@@ -1,6 +1,6 @@
 [package]
 name = "dockernanny"
-version = "0.7.0"
+version = "0.8.0"
 description = "Run your compose stacks on another machine and keep using localhost"
 authors = ["dockerNanny contributors"]
 edition = "2021"
@@ -8,7 +8,9 @@ edition = "2021"
 [lib]
 # The `_lib` suffix keeps the lib name distinct from the bin name on Windows.
 name = "dockernanny_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Only what main.rs and the examples link. The staticlib and cdylib in
+# Tauri's template are for iOS and Android, and linking them costs every build.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
