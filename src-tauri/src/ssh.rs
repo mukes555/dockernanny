@@ -70,9 +70,9 @@ impl Ssh {
         tools::write_file(&self.home, PINNED_HOSTS_FILE, &text)
     }
 
-    /// The control socket a stack's forwarder listens on, as ssh sees it.
-    pub fn forward_socket(&self, stack_id: &str) -> String {
-        format!("{}/fwd/{stack_id}", tools::home(&self.home))
+    /// The folder of the port bridges' control sockets, as ssh sees it.
+    pub fn forward_dir(&self) -> String {
+        format!("{}/fwd", tools::home(&self.home))
     }
 
     /// Regenerates the whole config from the machine list. The user's own
@@ -150,7 +150,7 @@ impl Ssh {
     }
 
     /// Asks the master on `socket` (the shared one when None) to exit. Used
-    /// when a machine is removed, at exit, and for stale forwarders.
+    /// when a machine is removed and at exit.
     pub fn exit_master(&self, alias: &str, socket: Option<&str>) {
         self.control_master(alias, socket, "exit");
     }

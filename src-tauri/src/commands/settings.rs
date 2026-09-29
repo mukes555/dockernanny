@@ -41,6 +41,7 @@ pub async fn reset_forwards(app: AppHandle, state: State<'_, AppState>) -> Resul
     for stack in state.store.stacks() {
         forward::stop(&app, &stack.id);
     }
-    crate::forget_stale_forwarders(&state);
+    let ssh = state.ssh.clone();
+    tauri::async_runtime::spawn_blocking(move || forward::exit_all(&ssh)).await.map_err(|err| format!("{err}"))?;
     Ok(())
 }
