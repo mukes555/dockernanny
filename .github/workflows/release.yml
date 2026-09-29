@@ -59,7 +59,8 @@ jobs:
           workspaces: src-tauri -> target
       - run: pnpm install --frozen-lockfile
       # Rust keeps source paths inside release binaries; replace the build
-      # machine's home and checkout with fixed names (as scripts/release-local.sh does).
+      # machine's home and checkout with fixed names (scripts/hide-paths.sh,
+      # which scripts/release-local.sh uses too).
       - name: Keep build machine paths out of the binaries
         shell: bash
         run: |
@@ -68,7 +69,9 @@ jobs:
           else
             home="$HOME"; workspace="$GITHUB_WORKSPACE"
           fi
-          echo "RUSTFLAGS=--remap-path-prefix=$home=/home --remap-path-prefix=$workspace=/dockernanny" >> "$GITHUB_ENV"
+          echo "BUILD_HOME=$home" >> "$GITHUB_ENV"
+          echo "BUILD_CHECKOUT=$workspace" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=$(sh scripts/hide-paths.sh flags "$home" "$workspace")" >> "$GITHUB_ENV"
       # The updater artifacts are signed with the key the installed apps
       # trust (its public half is in tauri.conf.json); tauri-action also
       # writes latest.json, which the apps read from the latest release.
@@ -84,6 +87,11 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           args: ${{ matrix.args }}
+      - name: No build machine paths are left in the binaries
+        shell: bash
+        run: |
+          binaries="$(find src-tauri/target -maxdepth 3 -type f -path '*/release/*' \( -name dockernanny -o -name dockernanny.exe \))"
+          sh scripts/hide-paths.sh check "$BUILD_HOME" "$BUILD_CHECKOUT" $binaries
       - name: Keep the bundles as workflow artifacts too
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
