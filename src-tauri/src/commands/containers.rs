@@ -10,7 +10,7 @@ use crate::containers::{self, Action, Container};
 use crate::job::Line;
 use crate::AppState;
 
-type CmdResult<T> = Result<T, String>;
+use super::CmdResult;
 
 pub const LOG_EVENT: &str = "container:log";
 
