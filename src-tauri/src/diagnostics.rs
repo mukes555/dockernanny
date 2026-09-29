@@ -153,7 +153,10 @@ fn mask_token(token: &str) -> String {
 
 fn is_ipv4(text: &str) -> bool {
     let parts: Vec<&str> = text.split('.').collect();
-    parts.len() == 4 && parts.iter().all(|p| !p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_digit()) && p.parse::<u16>().is_ok_and(|n| n <= 255))
+    parts.len() == 4
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_digit()) && p.parse::<u16>().is_ok_and(|n| n <= 255))
 }
 
 /// Hex groups joined by colons, with "::" or at least three colons, so a

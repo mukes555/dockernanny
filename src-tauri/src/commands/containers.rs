@@ -29,7 +29,8 @@ fn alias_of(state: &AppState, machine_id: &str) -> CmdResult<String> {
 #[tauri::command]
 pub async fn list_containers(state: State<'_, AppState>, machine_id: String) -> CmdResult<Vec<Container>> {
     let alias = alias_of(&state, &machine_id)?;
-    let out = state.ssh.run(&alias, containers::LIST_SCRIPT).await.map_err(|err| format!("Could not reach the machine's Docker: {err:#}"))?;
+    let out =
+        state.ssh.run(&alias, containers::LIST_SCRIPT).await.map_err(|err| format!("Could not reach the machine's Docker: {err:#}"))?;
     if !out.ok() {
         // A machine that answers ssh but has no docker, or a docker that is down.
         return Err(if out.stderr.is_empty() { "The machine did not answer docker ps.".into() } else { out.stderr });

@@ -39,9 +39,12 @@ export function CopyProgressDrawer() {
         >
           <header className="flex items-center gap-2 border-b border-line px-4 py-3">
             <div className="min-w-0 flex-1">
-              <div className="text-[11px] uppercase tracking-[0.14em] text-ink-3">{progress.finished_ms ? (progress.failed ? "Copy failed" : "Copied") : "Copying"}</div>
+              <div className="text-[11px] uppercase tracking-[0.14em] text-ink-3">
+                {progress.finished_ms ? (progress.failed ? "Copy failed" : "Copied") : "Copying"}
+              </div>
               <div className="truncate text-[14px] font-semibold text-ink">
-                {progress.name} <span className="font-normal text-ink-3">from</span> {progress.from} <span className="font-normal text-ink-3">to</span> {progress.to}
+                {progress.name} <span className="font-normal text-ink-3">from</span> {progress.from} <span className="font-normal text-ink-3">to</span>{" "}
+                {progress.to}
               </div>
             </div>
             <span className="tabular text-[12px] text-ink-3">{elapsedText((progress.finished_ms ?? now) - progress.started_ms)}</span>
@@ -93,7 +96,13 @@ function StepRow({ step }: { step: CopyStep }) {
     skipped: <span className="block h-0.5 w-2.5 rounded bg-ink-3" />,
   }[step.state];
   return (
-    <li className={cx("flex items-center gap-2.5 rounded-lg px-2 py-1 text-[12px]", step.state === "running" ? "bg-accent-soft/60 text-ink" : step.state === "pending" ? "text-ink-3" : "text-ink-2", step.state === "failed" && "text-critical")}>
+    <li
+      className={cx(
+        "flex items-center gap-2.5 rounded-lg px-2 py-1 text-[12px]",
+        step.state === "running" ? "bg-accent-soft/60 text-ink" : step.state === "pending" ? "text-ink-3" : "text-ink-2",
+        step.state === "failed" && "text-critical",
+      )}
+    >
       <span className="flex w-3.5 shrink-0 items-center justify-center">{mark}</span>
       <span className={cx("truncate", step.state === "skipped" && "line-through")}>{step.name}</span>
     </li>
@@ -115,8 +124,19 @@ function TransferRow({ progress }: { progress: CopyProgress }) {
         </span>
       </div>
       {/* Without a total the bar is indeterminate, which a progressbar says by leaving out the value. */}
-      <div role="progressbar" aria-label={current.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent === null ? undefined : Math.round(percent)} className="mt-2 h-1.5 overflow-hidden rounded-full bg-hairline">
-        {percent !== null ? <div className="h-full rounded-full bg-accent transition-all duration-300" style={{ width: `${percent}%` }} /> : <div className="h-full w-1/3 animate-pulse rounded-full bg-accent/60" />}
+      <div
+        role="progressbar"
+        aria-label={current.label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent === null ? undefined : Math.round(percent)}
+        className="mt-2 h-1.5 overflow-hidden rounded-full bg-hairline"
+      >
+        {percent !== null ? (
+          <div className="h-full rounded-full bg-accent transition-all duration-300" style={{ width: `${percent}%` }} />
+        ) : (
+          <div className="h-full w-1/3 animate-pulse rounded-full bg-accent/60" />
+        )}
       </div>
     </div>
   );

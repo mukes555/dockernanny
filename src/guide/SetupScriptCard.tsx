@@ -84,8 +84,9 @@ export function SetupScriptCard() {
         <span className="text-[11px] text-ink-3">after step 1 is done</span>
       </div>
       <p className="mt-2 text-[12px] leading-relaxed text-ink-2">
-        dockerNanny writes a PowerShell script with this computer's public key inside and hands it to the machine over the network. On the machine, open PowerShell as Administrator and paste
-        one line. The script installs what is missing, skips what is there, and prints the address, user and port to enter here.
+        dockerNanny writes a PowerShell script with this computer's public key inside and hands it to the machine over the network. On the machine, open
+        PowerShell as Administrator and paste one line. The script installs what is missing, skips what is there, and prints the address, user and port to enter
+        here.
       </p>
 
       <div className="mt-4 grid grid-cols-2 gap-3">
@@ -104,11 +105,23 @@ export function SetupScriptCard() {
       </div>
       <div className="mt-3 space-y-1.5 text-[12px] text-ink-2">
         <label className="flex items-start gap-2">
-          <input type="checkbox" checked={keepAwake} onChange={(e) => setKeepAwake(e.target.checked)} disabled={serving !== null} className="mt-0.5 accent-accent" />
+          <input
+            type="checkbox"
+            checked={keepAwake}
+            onChange={(e) => setKeepAwake(e.target.checked)}
+            disabled={serving !== null}
+            className="mt-0.5 accent-accent"
+          />
           <span>Keep the machine awake while plugged in, lid closed included (changes its power settings)</span>
         </label>
         <label className="flex items-start gap-2">
-          <input type="checkbox" checked={makePrivate} onChange={(e) => setMakePrivate(e.target.checked)} disabled={serving !== null} className="mt-0.5 accent-accent" />
+          <input
+            type="checkbox"
+            checked={makePrivate}
+            onChange={(e) => setMakePrivate(e.target.checked)}
+            disabled={serving !== null}
+            className="mt-0.5 accent-accent"
+          />
           <span>Mark its network Private if Windows has it as Public (only on a network you trust)</span>
         </label>
       </div>
@@ -119,7 +132,9 @@ export function SetupScriptCard() {
           {serving.addresses.map((address) => (
             <CodeBlock key={address} code={`irm http://${address}:${serving.port}/setup.ps1 | iex`} />
           ))}
-          {serving.addresses.length > 1 ? <div className="text-[11px] text-ink-3">One line per network this computer is on; use the one the machine shares.</div> : null}
+          {serving.addresses.length > 1 ? (
+            <div className="text-[11px] text-ink-3">One line per network this computer is on; use the one the machine shares.</div>
+          ) : null}
           <div className="flex items-center gap-2 text-[12px]">
             {fetched ? (
               <Chip tone="good">fetched by {fetched.from}</Chip>

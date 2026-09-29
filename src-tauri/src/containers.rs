@@ -85,7 +85,10 @@ pub fn parse(text: &str) -> Vec<Container> {
 }
 
 fn project_label(labels: &str) -> Option<String> {
-    labels.split(',').find_map(|pair| pair.trim().strip_prefix("com.docker.compose.project=").map(|v| v.to_string())).filter(|v| !v.is_empty())
+    labels
+        .split(',')
+        .find_map(|pair| pair.trim().strip_prefix("com.docker.compose.project=").map(|v| v.to_string()))
+        .filter(|v| !v.is_empty())
 }
 
 /// The 64-hex id shortened to the 12 chars docker itself shows.

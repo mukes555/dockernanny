@@ -13,7 +13,11 @@ export function NoticeStack() {
   const notices = useStore((state) => state.notices);
   // Always in the page, even when empty: a live region only announces what is added to it.
   return (
-    <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-4 left-1/2 z-40 flex w-full max-w-md -translate-x-1/2 flex-col gap-2 px-4">
+    <div
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none fixed bottom-4 left-1/2 z-40 flex w-full max-w-md -translate-x-1/2 flex-col gap-2 px-4"
+    >
       <AnimatePresence>
         {notices.map((notice) => (
           <NoticeRow key={notice.id} notice={notice} />

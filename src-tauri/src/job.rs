@@ -123,10 +123,7 @@ impl JobHandle {
 impl Job {
     pub fn spawn(mut cmd: Command, stdin: Option<String>, on_line: impl FnMut(Line) + Send + 'static) -> anyhow::Result<Self> {
         let stdin_mode = if stdin.is_some() { Stdio::piped() } else { Stdio::null() };
-        cmd.stdin(stdin_mode)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+        cmd.stdin(stdin_mode).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         let child = cmd.spawn().context("spawn process")?;
         tools::track(&child);
         let (cancel, cancelled) = watch::channel(false);
@@ -146,9 +143,7 @@ impl Job {
     }
 
     pub fn handle(&self) -> JobHandle {
-        JobHandle {
-            cancel: self.cancel.clone(),
-        }
+        JobHandle { cancel: self.cancel.clone() }
     }
 
     pub async fn wait(self) -> anyhow::Result<Option<i32>> {

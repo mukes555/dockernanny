@@ -40,11 +40,7 @@ pub async fn versions() -> Versions {
     rsync.arg("--version");
     let mut docker = tools::native("docker");
     docker.args(["version", "--format", "{{.Server.Version}}"]);
-    Versions {
-        ssh: version_line(ssh).await,
-        rsync: version_line(rsync).await,
-        docker: version_line(docker).await,
-    }
+    Versions { ssh: version_line(ssh).await, rsync: version_line(rsync).await, docker: version_line(docker).await }
 }
 
 /// One row each for what the controller role needs here. The tools run with
@@ -59,7 +55,13 @@ pub async fn readiness(key_path: &Path) -> Vec<DoctorRow> {
     }
     rows.push(row("ssh", "SSH client", ssh.clone(), ssh.is_some(), install_hint("an OpenSSH client", "openssh-client")));
     rows.push(row("rsync", "rsync", rsync.clone(), rsync.is_some(), install_hint("rsync", "rsync")));
-    rows.push(row("key", "SSH key", Some(key_detail), key_present, "Create one with the button below, or choose an existing key in Settings.".into()));
+    rows.push(row(
+        "key",
+        "SSH key",
+        Some(key_detail),
+        key_present,
+        "Create one with the button below, or choose an existing key in Settings.".into(),
+    ));
     rows.push(docker_here_row(docker).await);
     rows
 }
@@ -111,13 +113,7 @@ async fn wsl_row(distro: &str) -> DoctorRow {
 
 /// A readiness row; the fix is only shown for what is missing.
 fn row(key: &'static str, label: &'static str, detail: Option<String>, ok: bool, fix: String) -> DoctorRow {
-    DoctorRow {
-        key,
-        label,
-        ok,
-        detail: detail.unwrap_or_else(|| "not found".into()),
-        fix: (!ok).then_some(fix),
-    }
+    DoctorRow { key, label, ok, detail: detail.unwrap_or_else(|| "not found".into()), fix: (!ok).then_some(fix) }
 }
 
 /// How to install a tool on this operating system, in one sentence.
@@ -153,7 +149,8 @@ pub async fn install_wsl_tools() -> anyhow::Result<()> {
         const SCRIPT: &str = "command -v apt-get >/dev/null 2>&1 || { echo 'This distribution has no apt-get; install openssh-client and rsync with its package manager.' >&2; exit 3; }\n\
                               export DEBIAN_FRONTEND=noninteractive\n\
                               apt-get update -qq && apt-get install -y -qq openssh-client rsync\n";
-        let out = tools::unix_as_root("sh").args(["-c", SCRIPT]).stdin(std::process::Stdio::null()).output().await.context("start wsl.exe")?;
+        let out =
+            tools::unix_as_root("sh").args(["-c", SCRIPT]).stdin(std::process::Stdio::null()).output().await.context("start wsl.exe")?;
         let stderr = crate::host::platform::decode(&out.stderr);
         let last_lines: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).rev().take(3).collect();
         anyhow::ensure!(out.status.success(), "{}", last_lines.into_iter().rev().collect::<Vec<_>>().join("\n"));
@@ -188,7 +185,11 @@ mod tests {
     #[test]
     fn a_chosen_key_wins_over_the_usual_places() {
         assert_eq!(default_key_path("  /keys/work  "), PathBuf::from("/keys/work"));
-        assert!(default_key_path("").ends_with(".ssh/id_ed25519") || default_key_path("").ends_with(".ssh/id_rsa") || default_key_path("").ends_with(".ssh/id_ecdsa"));
+        assert!(
+            default_key_path("").ends_with(".ssh/id_ed25519")
+                || default_key_path("").ends_with(".ssh/id_rsa")
+                || default_key_path("").ends_with(".ssh/id_ecdsa")
+        );
     }
 
     #[tokio::test]

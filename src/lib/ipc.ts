@@ -156,7 +156,12 @@ const tauriApi = {
     return typeof chosen === "string" ? chosen : null;
   },
   pickComposeFile: async (): Promise<string | null> => {
-    const chosen = await open({ multiple: false, directory: false, title: "Choose a compose file", filters: [{ name: "Compose file", extensions: ["yml", "yaml"] }] });
+    const chosen = await open({
+      multiple: false,
+      directory: false,
+      title: "Choose a compose file",
+      filters: [{ name: "Compose file", extensions: ["yml", "yaml"] }],
+    });
     return typeof chosen === "string" ? chosen : null;
   },
   subscribe(handlers: Handlers): () => void {

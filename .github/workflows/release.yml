@@ -22,22 +22,28 @@ jobs:
           - platform: windows-latest
             args: ''
     runs-on: ${{ matrix.platform }}
+    # Every action is pinned to a commit: this job holds the key that signs
+    # the updates every installed app accepts.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Linux prerequisites
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-      - uses: swatinem/rust-cache@v2
+      # The version comes from src-tauri/rust-toolchain.toml; macOS builds both architectures.
+      - name: Rust toolchain
+        working-directory: src-tauri
+        shell: bash
+        run: |
+          rustup toolchain install
+          if [ "$RUNNER_OS" = "macOS" ]; then rustup target add aarch64-apple-darwin x86_64-apple-darwin; fi
+      - uses: swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: src-tauri -> target
       - run: pnpm install --frozen-lockfile
@@ -55,7 +61,7 @@ jobs:
       # The updater artifacts are signed with the key the installed apps
       # trust (its public half is in tauri.conf.json); tauri-action also
       # writes latest.json, which the apps read from the latest release.
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -68,7 +74,7 @@ jobs:
           includeUpdaterJson: true
           args: ${{ matrix.args }}
       - name: Keep the bundles as workflow artifacts too
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dockernanny-${{ matrix.platform }}${{ matrix.args && '-' || '' }}${{ matrix.args }}
           path: |

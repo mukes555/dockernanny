@@ -101,7 +101,9 @@ impl Site {
     pub async fn exists(&self, ssh: &Ssh) -> bool {
         match &self.endpoint {
             Endpoint::Local => std::path::Path::new(&self.compose_file()).is_file(),
-            Endpoint::Machine { alias } => ssh.run(alias, &format!("test -f {}", shell_quote(&self.compose_file()))).await.map(|out| out.ok()).unwrap_or(false),
+            Endpoint::Machine { alias } => {
+                ssh.run(alias, &format!("test -f {}", shell_quote(&self.compose_file()))).await.map(|out| out.ok()).unwrap_or(false)
+            }
         }
     }
 }
@@ -179,7 +181,10 @@ pub fn shell_join(args: &[&str]) -> anyhow::Result<String> {
     for arg in args {
         let breaks_out = arg.contains(['\'', '"', '\\', '$', '`', '\n']);
         anyhow::ensure!(!breaks_out, "argument {arg:?} cannot be sent to the machine");
-        let needs_quotes = arg.is_empty() || arg.contains(|c: char| c.is_whitespace() || matches!(c, '&' | '|' | ';' | '<' | '>' | '(' | ')' | '*' | '?' | '[' | ']' | '{' | '}' | '~' | '#'));
+        let needs_quotes = arg.is_empty()
+            || arg.contains(|c: char| {
+                c.is_whitespace() || matches!(c, '&' | '|' | ';' | '<' | '>' | '(' | ')' | '*' | '?' | '[' | ']' | '{' | '}' | '~' | '#')
+            });
         parts.push(if needs_quotes { format!("\"{arg}\"") } else { arg.to_string() });
     }
     Ok(parts.join(" "))
@@ -191,7 +196,10 @@ mod tests {
 
     #[test]
     fn shell_join_quotes_what_needs_it_and_refuses_escapes() {
-        assert_eq!(shell_join(&["run", "--rm", "-v", "x:/to", "alpine", "sh", "-c", "find /to -mindepth 1 -delete && tar xz -C /to"]).unwrap(), "run --rm -v x:/to alpine sh -c \"find /to -mindepth 1 -delete && tar xz -C /to\"");
+        assert_eq!(
+            shell_join(&["run", "--rm", "-v", "x:/to", "alpine", "sh", "-c", "find /to -mindepth 1 -delete && tar xz -C /to"]).unwrap(),
+            "run --rm -v x:/to alpine sh -c \"find /to -mindepth 1 -delete && tar xz -C /to\""
+        );
         assert_eq!(shell_join(&["cp", "-a", "-", "shop-db-1:/var/lib"]).unwrap(), "cp -a - shop-db-1:/var/lib");
         assert!(shell_join(&["x'y"]).is_err());
         assert!(shell_join(&["$(id)"]).is_err());

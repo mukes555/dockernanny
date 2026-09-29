@@ -6,8 +6,8 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::time::timeout;
 
-use crate::machine::{first_line, Machine};
 use crate::job::Output;
+use crate::machine::{first_line, Machine};
 use crate::ssh::Ssh;
 
 pub const DOCTOR_EVENT: &str = "machine:doctor";
@@ -58,13 +58,7 @@ async fn check(ssh: &Ssh, machine: &Machine, script: &str) -> Result<Output, Str
 }
 
 fn row(key: &'static str, label: &'static str, ok: bool, detail: impl Into<String>, fix: Option<String>) -> DoctorRow {
-    DoctorRow {
-        key,
-        label,
-        ok,
-        detail: detail.into(),
-        fix,
-    }
+    DoctorRow { key, label, ok, detail: detail.into(), fix }
 }
 
 async fn check_ssh(ssh: &Ssh, machine: &Machine) -> DoctorRow {
@@ -92,7 +86,8 @@ fn explain_ssh_failure(machine: &Machine, out: &Output, config: &str) -> (String
     let key_rejected = err.contains("Permission denied");
     let host_key_changed = err.contains("Host key verification failed") || err.contains("IDENTIFICATION HAS CHANGED");
     let refused = err.contains("Connection refused");
-    let unreachable = err.contains("timed out") || err.contains("No route") || err.contains("Could not resolve") || err.contains("unreachable");
+    let unreachable =
+        err.contains("timed out") || err.contains("No route") || err.contains("Could not resolve") || err.contains("unreachable");
 
     if key_rejected {
         // Only macOS's ssh-add knows the keychain flag; elsewhere it is an unknown option.
@@ -107,13 +102,17 @@ fn explain_ssh_failure(machine: &Machine, out: &Output, config: &str) -> (String
         let known_hosts = config.rsplit_once('/').map(|(dir, _)| format!("{dir}/known_hosts")).unwrap_or_else(|| "known_hosts".into());
         return (
             "The machine's host key changed since it was last seen.".into(),
-            format!("# only if you reinstalled the machine:\n{}", in_terminal(&format!("ssh-keygen -f {known_hosts} -R '{}'", crate::ssh::known_hosts_name(machine)))),
+            format!(
+                "# only if you reinstalled the machine:\n{}",
+                in_terminal(&format!("ssh-keygen -f {known_hosts} -R '{}'", crate::ssh::known_hosts_name(machine)))
+            ),
         );
     }
     if refused {
         return (
             format!("Nothing answers on port {}.", machine.port),
-            "Start sshd on the machine (Remote Login on macOS). A Windows machine runs it inside WSL 2: see Prepare another machine.".into(),
+            "Start sshd on the machine (Remote Login on macOS). A Windows machine runs it inside WSL 2: see Prepare another machine."
+                .into(),
         );
     }
     if unreachable {
@@ -217,7 +216,8 @@ mod tests {
         let (_, fix) = explain_ssh_failure(&machine(), &failed("Host key verification failed."), "/h/ssh_config");
         assert!(fix.contains("ssh-keygen -f /h/known_hosts -R '[192.0.2.15]:2222'"), "{fix}");
 
-        let (detail, _) = explain_ssh_failure(&machine(), &failed("ssh: connect to host 192.0.2.15 port 2222: Connection refused"), "/h/ssh_config");
+        let (detail, _) =
+            explain_ssh_failure(&machine(), &failed("ssh: connect to host 192.0.2.15 port 2222: Connection refused"), "/h/ssh_config");
         assert_eq!(detail, "Nothing answers on port 2222.");
 
         let (_, fix) = explain_ssh_failure(&machine(), &failed("something new"), "/h/ssh_config");

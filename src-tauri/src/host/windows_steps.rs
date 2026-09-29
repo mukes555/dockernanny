@@ -49,7 +49,9 @@ fn windows_version(win: &Windows, _options: &SetupOptions, _say: &mut Say) -> Ou
     if build >= MIN_WINDOWS_BUILD {
         return Outcome::Done(format!("build {build}"));
     }
-    Outcome::Failed(format!("Windows 11 22H2 or newer is needed (this is build {build}); WSL mirrored networking does not exist before that"))
+    Outcome::Failed(format!(
+        "Windows 11 22H2 or newer is needed (this is build {build}); WSL mirrored networking does not exist before that"
+    ))
 }
 
 fn wsl_present(win: &Windows, _options: &SetupOptions, say: &mut Say) -> Outcome {
@@ -78,7 +80,10 @@ fn distro_present(win: &Windows, _options: &SetupOptions, say: &mut Say) -> Outc
     say(&format!("    installing {distro} (a few minutes, no questions asked)"));
     let install = win.wsl(&["--install", "-d", distro, "--no-launch"]);
     if !install.ok {
-        return Outcome::Failed(format!("could not install {distro}: {} (wsl --list --online shows the names WSL can install)", install.stderr.trim()));
+        return Outcome::Failed(format!(
+            "could not install {distro}: {} (wsl --list --online shows the names WSL can install)",
+            install.stderr.trim()
+        ));
     }
     Outcome::Changed(format!("{distro} installed"))
 }
@@ -90,7 +95,8 @@ fn linux_user(win: &Windows, _options: &SetupOptions, say: &mut Say) -> Outcome 
         return Outcome::Done(user);
     }
     say(&format!("    creating Linux user {NEW_USER}"));
-    let script = format!("set -e\nid -u {NEW_USER} >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo {NEW_USER}\n{}", wsl_conf_script(NEW_USER));
+    let script =
+        format!("set -e\nid -u {NEW_USER} >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo {NEW_USER}\n{}", wsl_conf_script(NEW_USER));
     let out = win.in_distro_as_root(&script);
     if !out.ok {
         return Outcome::Failed(format!("useradd failed: {}", out.stderr.trim()));
@@ -204,7 +210,13 @@ fn power_marker() -> std::path::PathBuf {
 /// What the elevated copy does. Output goes to a file the parent shows.
 /// `private_network` is the one network the user agreed to mark Private;
 /// the power settings change only when `keep_awake` was left ticked.
-pub fn elevated_batch(pairing_port: u16, ssh_port: u16, keep_awake: bool, private_network: Option<&str>, log_path: &std::path::Path) -> i32 {
+pub fn elevated_batch(
+    pairing_port: u16,
+    ssh_port: u16,
+    keep_awake: bool,
+    private_network: Option<&str>,
+    log_path: &std::path::Path,
+) -> i32 {
     // Only the firewall and PowerShell helpers are used here; they do not touch the distribution.
     let win = Windows::new(String::new(), ssh_port);
     let mut report = Report::default();
@@ -212,11 +224,27 @@ pub fn elevated_batch(pairing_port: u16, ssh_port: u16, keep_awake: bool, privat
     for (name, port) in [("dockerNanny SSH", ssh_port), ("dockerNanny Pair", pairing_port)] {
         // An existing rule is pointed at the port asked for, so a changed port takes effect.
         let out = if win.firewall_rule_exists(name) {
-            run("netsh", &["advfirewall", "firewall", "set", "rule", &format!("name={name}"), "new", &format!("localport={port}")], None, &[])
+            run(
+                "netsh",
+                &["advfirewall", "firewall", "set", "rule", &format!("name={name}"), "new", &format!("localport={port}")],
+                None,
+                &[],
+            )
         } else {
             run(
                 "netsh",
-                &["advfirewall", "firewall", "add", "rule", &format!("name={name}"), "dir=in", "action=allow", "protocol=TCP", &format!("localport={port}"), "profile=private,domain"],
+                &[
+                    "advfirewall",
+                    "firewall",
+                    "add",
+                    "rule",
+                    &format!("name={name}"),
+                    "dir=in",
+                    "action=allow",
+                    "protocol=TCP",
+                    &format!("localport={port}"),
+                    "profile=private,domain",
+                ],
                 None,
                 &[],
             )
@@ -235,12 +263,20 @@ pub fn elevated_batch(pairing_port: u16, ssh_port: u16, keep_awake: bool, privat
     if let Some(name) = private_network {
         // The name reaches PowerShell through the environment, never inside the script text.
         let script = "Get-NetConnectionProfile | Where-Object { $_.Name -eq $env:DOCKERNANNY_NETWORK -and $_.NetworkCategory -eq 'Public' } | Set-NetConnectionProfile -NetworkCategory Private; 'done'";
-        let out = run("powershell.exe", &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], None, &[("DOCKERNANNY_NETWORK", name)]);
+        let out = run(
+            "powershell.exe",
+            &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+            None,
+            &[("DOCKERNANNY_NETWORK", name)],
+        );
         report.record(&format!("network {name} marked Private"), out);
     }
 
     if keep_awake {
-        report.record("lid closed does nothing (plugged in)", run("powercfg", &["/setacvalueindex", "SCHEME_CURRENT", "SUB_BUTTONS", "LIDACTION", "0"], None, &[]));
+        report.record(
+            "lid closed does nothing (plugged in)",
+            run("powercfg", &["/setacvalueindex", "SCHEME_CURRENT", "SUB_BUTTONS", "LIDACTION", "0"], None, &[]),
+        );
         report.record("apply power scheme", run("powercfg", &["/setactive", "SCHEME_CURRENT"], None, &[]));
         report.record("no sleep while plugged in", run("powercfg", &["/change", "standby-timeout-ac", "0"], None, &[]));
     } else {

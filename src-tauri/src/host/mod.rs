@@ -89,11 +89,7 @@ pub struct HostConfig {
 
 impl HostConfig {
     pub fn from_settings(settings: &crate::settings::Settings) -> Self {
-        Self {
-            pairing_port: settings.pairing_port,
-            wsl_distro: settings.wsl_distro.clone(),
-            wsl_ssh_port: settings.wsl_ssh_port,
-        }
+        Self { pairing_port: settings.pairing_port, wsl_distro: settings.wsl_distro.clone(), wsl_ssh_port: settings.wsl_ssh_port }
     }
 }
 

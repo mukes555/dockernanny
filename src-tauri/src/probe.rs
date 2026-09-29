@@ -96,7 +96,9 @@ pub fn parse(text: &str) -> Probe {
 /// `now_s` is passed in so the macOS boot-time form of uptime is testable.
 pub fn parse_at(text: &str, now_s: u64) -> Probe {
     let sections = split_sections(text, &SECTIONS);
-    let lines = |name: &str| -> Vec<String> { sections.get(name).cloned().unwrap_or_default().into_iter().filter(|l| !l.trim().is_empty()).map(|l| l.trim().to_string()).collect() };
+    let lines = |name: &str| -> Vec<String> {
+        sections.get(name).cloned().unwrap_or_default().into_iter().filter(|l| !l.trim().is_empty()).map(|l| l.trim().to_string()).collect()
+    };
 
     let host = lines("HOST");
     let windows = lines("WINDOWS");
@@ -173,7 +175,8 @@ fn parse_uptime(line: &str, now_s: u64) -> u64 {
     if let Ok(seconds) = line.trim().parse::<f64>() {
         return seconds as u64;
     }
-    let boot: Option<u64> = line.split_once("sec = ").and_then(|(_, rest)| rest.split(|c: char| !c.is_ascii_digit()).next()).and_then(|n| n.parse().ok());
+    let boot: Option<u64> =
+        line.split_once("sec = ").and_then(|(_, rest)| rest.split(|c: char| !c.is_ascii_digit()).next()).and_then(|n| n.parse().ok());
     boot.map(|b| now_s.saturating_sub(b)).unwrap_or(0)
 }
 
@@ -188,8 +191,18 @@ fn parse_memory(lines: &[String]) -> (u64, u64) {
         return (total, used);
     }
     let Some(total_bytes) = lines.first().and_then(|l| l.parse::<u64>().ok()) else { return (0, 0) };
-    let page_size: u64 = lines.iter().find_map(|l| l.split_once("page size of ").and_then(|(_, r)| r.split_whitespace().next()).and_then(|n| n.parse().ok())).unwrap_or(4096);
-    let pages = |label: &str| -> u64 { lines.iter().find(|l| l.starts_with(label)).and_then(|l| l.rsplit(':').next()).and_then(|n| n.trim().trim_end_matches('.').parse().ok()).unwrap_or(0) };
+    let page_size: u64 = lines
+        .iter()
+        .find_map(|l| l.split_once("page size of ").and_then(|(_, r)| r.split_whitespace().next()).and_then(|n| n.parse().ok()))
+        .unwrap_or(4096);
+    let pages = |label: &str| -> u64 {
+        lines
+            .iter()
+            .find(|l| l.starts_with(label))
+            .and_then(|l| l.rsplit(':').next())
+            .and_then(|n| n.trim().trim_end_matches('.').parse().ok())
+            .unwrap_or(0)
+    };
     let used_pages = pages("Pages active") + pages("Pages wired down") + pages("Pages occupied by compressor");
     (total_bytes / (1024 * 1024), used_pages * page_size / (1024 * 1024))
 }
@@ -312,7 +325,11 @@ mod tests {
         assert_eq!(light.os, full.os);
         assert_eq!((light.cpu_model.clone(), light.cpus), (full.cpu_model.clone(), 8));
         assert_eq!(light.battery, full.battery, "only Windows reports a WSL machine's battery, in the full reading");
-        assert_eq!((light.load1, light.mem_used_mb, light.containers_running), (2.50, 6000, 3), "what changes comes from the light reading");
+        assert_eq!(
+            (light.load1, light.mem_used_mb, light.containers_running),
+            (2.50, 6000, 3),
+            "what changes comes from the light reading"
+        );
     }
 
     #[test]

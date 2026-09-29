@@ -165,7 +165,11 @@ export function DropSheet() {
                           onChange={(e) => setLocal(port.published, Number(e.target.value.replace(/\D/g, "")))}
                         />
                         {taken ? (
-                          <button type="button" className="whitespace-nowrap text-[11px] text-warning underline-offset-2 hover:underline" onClick={() => setLocal(port.published, port.published + 1000)}>
+                          <button
+                            type="button"
+                            className="whitespace-nowrap text-[11px] text-warning underline-offset-2 hover:underline"
+                            onClick={() => setLocal(port.published, port.published + 1000)}
+                          >
                             in use here, try {port.published + 1000}
                           </button>
                         ) : null}
@@ -196,7 +200,11 @@ export function DropSheet() {
         </ul>
       ) : null}
 
-      <BindMounts binds={preview.binds} skipped={skipped} onSkip={(path, skip) => setSkipped((list) => (skip ? [...list, path] : list.filter((p) => p !== path)))} />
+      <BindMounts
+        binds={preview.binds}
+        skipped={skipped}
+        onSkip={(path, skip) => setSkipped((list) => (skip ? [...list, path] : list.filter((p) => p !== path)))}
+      />
 
       <div className="mt-4">
         <Field label="Do not copy" hint="Comma separated. Excluded folders the containers create on the machine are kept.">

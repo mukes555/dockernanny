@@ -20,11 +20,7 @@ impl Output {
     }
 
     pub fn failed(message: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            stdout: String::new(),
-            stderr: message.into(),
-        }
+        Self { ok: false, stdout: String::new(), stderr: message.into() }
     }
 }
 
@@ -47,11 +43,7 @@ pub struct Row {
 }
 
 pub fn row(name: &'static str, ok: bool, detail: impl Into<String>) -> Row {
-    Row {
-        name,
-        state: if ok { State::Ok } else { State::Missing },
-        detail: detail.into(),
-    }
+    Row { name, state: if ok { State::Ok } else { State::Missing }, detail: detail.into() }
 }
 
 /// The network Windows is connected to, and whether it is marked Public
@@ -152,9 +144,7 @@ pub fn run(program: &str, args: &[&str], stdin: Option<&str>, env: &[(&str, &str
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
-    cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(err) => return Output::failed(format!("could not start {program}: {err}")),
@@ -163,11 +153,7 @@ pub fn run(program: &str, args: &[&str], stdin: Option<&str>, env: &[(&str, &str
         let _ = pipe.write_all(text.as_bytes());
     }
     match child.wait_with_output() {
-        Ok(out) => Output {
-            ok: out.status.success(),
-            stdout: decode(&out.stdout),
-            stderr: decode(&out.stderr),
-        },
+        Ok(out) => Output { ok: out.status.success(), stdout: decode(&out.stdout), stderr: decode(&out.stderr) },
         Err(err) => Output::failed(err.to_string()),
     }
 }
@@ -201,7 +187,9 @@ pub fn host_key_from_pub(text: &str) -> String {
     let mut fields = text.split_whitespace();
     match (fields.next(), fields.next()) {
         // sk- keys live on a hardware security key (FIDO); they are ssh keys too.
-        (Some(key_type), Some(blob)) if key_type.starts_with("ssh-") || key_type.starts_with("ecdsa-") || key_type.starts_with("sk-") => format!("{key_type} {blob}"),
+        (Some(key_type), Some(blob)) if key_type.starts_with("ssh-") || key_type.starts_with("ecdsa-") || key_type.starts_with("sk-") => {
+            format!("{key_type} {blob}")
+        }
         _ => String::new(),
     }
 }
@@ -213,7 +201,10 @@ pub fn parse_ifconfig(text: &str) -> Vec<String> {
     for line in text.lines() {
         let Some(address) = line.split_whitespace().skip_while(|t| *t != "inet").nth(1) else { continue };
         let address = address.split('/').next().unwrap_or(address);
-        let skip = address.starts_with("127.") || address.starts_with("169.254.") || !address.contains('.') || addresses.iter().any(|a| a == address);
+        let skip = address.starts_with("127.")
+            || address.starts_with("169.254.")
+            || !address.contains('.')
+            || addresses.iter().any(|a| a == address);
         if !skip {
             addresses.push(address.to_string());
         }
@@ -266,7 +257,8 @@ pub fn parse_ipconfig(text: &str) -> Vec<String> {
     for line in text.lines() {
         let is_adapter_header = !line.starts_with(' ') && line.contains("adapter");
         if is_adapter_header {
-            in_virtual_adapter = line.contains("vEthernet") || line.contains("Hyper-V") || line.contains("VirtualBox") || line.contains("VMware");
+            in_virtual_adapter =
+                line.contains("vEthernet") || line.contains("Hyper-V") || line.contains("VirtualBox") || line.contains("VMware");
             continue;
         }
         if in_virtual_adapter || !line.contains("IPv4") {
@@ -284,7 +276,8 @@ pub fn parse_ipconfig(text: &str) -> Vec<String> {
 
 /// This computer's IPv4 addresses on its networks, whatever the OS.
 pub fn lan_addresses() -> Vec<String> {
-    let text = |program: &str, args: &[&str]| decode(&crate::tools::native_std(program).args(args).output().map(|o| o.stdout).unwrap_or_default());
+    let text =
+        |program: &str, args: &[&str]| decode(&crate::tools::native_std(program).args(args).output().map(|o| o.stdout).unwrap_or_default());
     if cfg!(windows) {
         return parse_ipconfig(&text("ipconfig", &[]));
     }

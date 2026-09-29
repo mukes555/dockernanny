@@ -3,13 +3,13 @@
 //!
 //!   DOCKERNANNY_HOME=~/.dockernanny-test cargo run --example volume -- <user> <host> <port> ~/.ssh/id_ed25519
 
-use dockernanny_lib::machine::Machine;
 use dockernanny_lib::copy::discover::NamedVolume;
 use dockernanny_lib::copy::endpoint::Site;
 use dockernanny_lib::copy::progress::Tracker;
 use dockernanny_lib::copy::transfer::copy_volume;
 use dockernanny_lib::copy::{EndpointRef, Report, Sink};
 use dockernanny_lib::job::Line;
+use dockernanny_lib::machine::Machine;
 use dockernanny_lib::ssh::Ssh;
 use dockernanny_lib::stack::Phase;
 use dockernanny_lib::store;
@@ -49,12 +49,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("== copy to the machine as dn-example_data");
     let _ = ssh.run(&alias, "docker volume rm -f dn-example_data >/dev/null 2>&1").await;
-    let volume = NamedVolume {
-        key: "data".into(),
-        name: "dn-volume-src".into(),
-        size: "small".into(),
-        external: false,
-    };
+    let volume = NamedVolume { key: "data".into(), name: "dn-volume-src".into(), size: "small".into(), external: false };
     let from = Site::local("local", ".", "docker-compose.yml");
     let to = Site::machine("dn-example", "docker-compose.yml", &alias, "the machine");
     let make_sink = || -> Sink { Box::new(|line: Line| println!("  | {}", line.text)) };

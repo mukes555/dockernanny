@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 
 use dockernanny_lib::compose;
-use dockernanny_lib::machine::Machine;
 use dockernanny_lib::job::Line;
+use dockernanny_lib::machine::Machine;
 use dockernanny_lib::ssh::Ssh;
 use dockernanny_lib::stack::{shell_quote, Stack};
 use dockernanny_lib::{store, sync};

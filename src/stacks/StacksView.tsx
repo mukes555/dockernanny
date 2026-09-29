@@ -54,14 +54,21 @@ export function StacksView() {
   }
 
   const copyButton = (
-    <Button onClick={() => setCopyOpen({ open: true })} disabled={machines.length === 0} title="Copy a stack's config and data between this computer and a machine, in either direction">
+    <Button
+      onClick={() => setCopyOpen({ open: true })}
+      disabled={machines.length === 0}
+      title="Copy a stack's config and data between this computer and a machine, in either direction"
+    >
       Copy a stack…
     </Button>
   );
   const running = stacks.filter((stack) => ["running", "partial"].includes(statuses[stack.id]?.phase ?? "")).length;
   const groups = machines.map((machine) => ({ machine, stacks: stacks.filter((s) => s.machine_id === machine.id) })).filter((group) => group.stacks.length > 0);
   const orphans = stacks.filter((s) => !allMachines.some((m) => m.id === s.machine_id));
-  const summary = stacks.length === 0 ? "Compose projects running on your machines, reachable here on localhost" : `${running} of ${stacks.length} running, on ${groups.length} ${groups.length === 1 ? "machine" : "machines"}`;
+  const summary =
+    stacks.length === 0
+      ? "Compose projects running on your machines, reachable here on localhost"
+      : `${running} of ${stacks.length} running, on ${groups.length} ${groups.length === 1 ? "machine" : "machines"}`;
 
   return (
     <Page
@@ -100,7 +107,12 @@ function MachineGroup({ machine, stacks }: { machine: Machine; stacks: Stack[] }
   const selectMachine = useStore((state) => state.selectMachine);
   return (
     <section className="space-y-3">
-      <button type="button" onClick={() => selectMachine(machine.id)} className="group inline-flex items-center gap-2 text-[13px] font-semibold text-ink" title={`Open ${machine.name}'s page`}>
+      <button
+        type="button"
+        onClick={() => selectMachine(machine.id)}
+        className="group inline-flex items-center gap-2 text-[13px] font-semibold text-ink"
+        title={`Open ${machine.name}'s page`}
+      >
         <span className={cx("h-2 w-2 rounded-full", online ? "bg-good" : "bg-hairline")} />
         <span className="group-hover:text-accent">{machine.name}</span>
         <span className="font-normal text-ink-3">

@@ -35,7 +35,19 @@ export function Button({
   const pad = size === "sm" ? "px-2.5 py-1 text-[12px]" : "px-3.5 py-1.5 text-[13px]";
   const faded = disabled && !busy;
   return (
-    <button disabled={disabled || busy} aria-busy={busy || undefined} className={cx("relative inline-flex items-center justify-center rounded-lg font-medium transition", BUTTON[tone], pad, faded && "opacity-40", busy && "cursor-wait", className)} {...rest}>
+    <button
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
+      className={cx(
+        "relative inline-flex items-center justify-center rounded-lg font-medium transition",
+        BUTTON[tone],
+        pad,
+        faded && "opacity-40",
+        busy && "cursor-wait",
+        className,
+      )}
+      {...rest}
+    >
       <span className={cx("inline-flex items-center gap-1.5", busy && "opacity-0")}>{children}</span>
       {busy ? (
         <span className="absolute inset-0 flex items-center justify-center">
@@ -65,7 +77,19 @@ export function Chip({ tone = "neutral", children, className, title }: { tone?: 
 
 /** A titled block of a page. The title is a real heading, so a page reads
  * as sections instead of a column of look-alike boxes. */
-export function Card({ title, description, actions, children, className }: { title?: ReactNode; description?: ReactNode; actions?: ReactNode; children?: ReactNode; className?: string }) {
+export function Card({
+  title,
+  description,
+  actions,
+  children,
+  className,
+}: {
+  title?: ReactNode;
+  description?: ReactNode;
+  actions?: ReactNode;
+  children?: ReactNode;
+  className?: string;
+}) {
   return (
     <section className={cx("rounded-xl border border-line bg-surface p-5", className)}>
       {title || actions ? (
@@ -82,7 +106,8 @@ export function Card({ title, description, actions, children, className }: { tit
   );
 }
 
-export const INPUT = "rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:border-accent focus:ring-2 focus:ring-accent/25";
+export const INPUT =
+  "rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:border-accent focus:ring-2 focus:ring-accent/25";
 
 /** Full width unless the caller gives a width: two width classes on one
  * element do not combine, and the stylesheet's order would pick the winner. */
@@ -115,7 +140,13 @@ export function Select({ className, children, ...rest }: SelectHTMLAttributes<HT
 
 export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (checked: boolean) => void; label?: string }) {
   return (
-    <button type="button" role="switch" aria-checked={checked} className="inline-flex items-center gap-2 text-[13px] text-ink-2" onClick={() => onChange(!checked)}>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      className="inline-flex items-center gap-2 text-[13px] text-ink-2"
+      onClick={() => onChange(!checked)}
+    >
       <span className={cx("relative h-5 w-9 rounded-full transition", checked ? "bg-accent" : "bg-hairline")}>
         <span className={cx("absolute top-0.5 h-4 w-4 rounded-full bg-white transition", checked ? "left-4.5" : "left-0.5")} />
       </span>
@@ -131,7 +162,19 @@ export function EmptyState({ children, className }: { children: ReactNode; class
 
 /** A roomier empty state for the main area: an optional mark, a line, and a
  * way forward. Every "nothing here yet" screen looks the same this way. */
-export function EmptyPanel({ icon, title, action, children, className }: { icon?: ReactNode; title: string; action?: ReactNode; children?: ReactNode; className?: string }) {
+export function EmptyPanel({
+  icon,
+  title,
+  action,
+  children,
+  className,
+}: {
+  icon?: ReactNode;
+  title: string;
+  action?: ReactNode;
+  children?: ReactNode;
+  className?: string;
+}) {
   return (
     <div className={cx("flex flex-col items-center gap-2 rounded-2xl border border-dashed border-hairline bg-surface/30 px-6 py-10 text-center", className)}>
       {icon ? <span className="mb-1 text-ink-3">{icon}</span> : null}

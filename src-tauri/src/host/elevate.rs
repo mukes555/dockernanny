@@ -12,12 +12,7 @@ use std::path::{Path, PathBuf};
 pub enum Task {
     /// Windows: firewall rules for sshd and pairing, optionally the power
     /// settings that keep it awake, and optionally one named network marked Private.
-    Firewall {
-        pairing_port: u16,
-        ssh_port: u16,
-        keep_awake: bool,
-        private_network: Option<String>,
-    },
+    Firewall { pairing_port: u16, ssh_port: u16, keep_awake: bool, private_network: Option<String> },
 }
 
 pub fn log_path() -> PathBuf {
@@ -71,7 +66,9 @@ pub fn task_from_args(args: &[String]) -> Option<(Task, PathBuf)> {
 #[cfg(windows)]
 pub fn run_task(task: &Task, log: &Path) -> i32 {
     match task {
-        Task::Firewall { pairing_port, ssh_port, keep_awake, private_network } => super::windows_steps::elevated_batch(*pairing_port, *ssh_port, *keep_awake, private_network.as_deref(), log),
+        Task::Firewall { pairing_port, ssh_port, keep_awake, private_network } => {
+            super::windows_steps::elevated_batch(*pairing_port, *ssh_port, *keep_awake, private_network.as_deref(), log)
+        }
     }
 }
 

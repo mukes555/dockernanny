@@ -68,7 +68,9 @@ export function TerminalDialog({ machine, onClose }: { machine: Machine | null; 
     <Dialog open={machine !== null} onClose={onClose} eyebrow="Terminal" title={machine ? `Use ${machine.name} from your terminal` : ""} width={520}>
       {machine ? (
         <div className="mt-3 space-y-4 text-[13px] text-ink-2">
-          <p>dockerNanny keeps its ssh settings in its own file and never edits yours. Add one line at the top of ~/.ssh/config and the alias works everywhere:</p>
+          <p>
+            dockerNanny keeps its ssh settings in its own file and never edits yours. Add one line at the top of ~/.ssh/config and the alias works everywhere:
+          </p>
           <CodeBlock code={`Include ${config}`} />
           <CodeBlock code={`ssh dn-${machine.id}`} />
           <p>

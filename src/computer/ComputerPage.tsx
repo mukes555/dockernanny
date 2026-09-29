@@ -29,7 +29,9 @@ export function ComputerPage() {
   }, [loadComputerInfo]);
 
   const who = info ? `${info.user}@${info.probe.hostname ?? computerName}` : "This computer";
-  const roles = [settings?.use_machines ? "uses other machines" : null, settings?.share_this_computer ? "shared with others" : null].filter(Boolean).join(" and ");
+  const roles = [settings?.use_machines ? "uses other machines" : null, settings?.share_this_computer ? "shared with others" : null]
+    .filter(Boolean)
+    .join(" and ");
 
   return (
     <Page
@@ -142,7 +144,8 @@ function DockerMissing({ detail }: { detail: string }) {
     <div className="rounded-xl border border-dashed border-hairline px-4 py-3">
       <div className="text-[13px] font-medium text-ink">Docker isn't installed or running here</div>
       <p className="mt-1 text-[12px] leading-relaxed text-ink-2">
-        That is fine for running stacks on machines. It is only needed to copy this computer's own projects, and to preview a dropped compose file. Start Docker Desktop, OrbStack or Docker Engine, then refresh.
+        That is fine for running stacks on machines. It is only needed to copy this computer's own projects, and to preview a dropped compose file. Start Docker
+        Desktop, OrbStack or Docker Engine, then refresh.
       </p>
       <details className="mt-2 text-[11px] text-ink-3">
         <summary className="cursor-pointer">What Docker said</summary>
@@ -174,7 +177,13 @@ function ProjectRow({ project, canCopy, onCopy }: { project: LocalProject; canCo
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-3">
         <span>{volumes}</span>
         {project.ports.map((port) => (
-          <button key={port} type="button" className="tabular inline-flex items-center gap-1 text-ink-2 underline-offset-2 hover:text-ink hover:underline" onClick={() => void api.openLocal(port)} title={`Open localhost:${port}`}>
+          <button
+            key={port}
+            type="button"
+            className="tabular inline-flex items-center gap-1 text-ink-2 underline-offset-2 hover:text-ink hover:underline"
+            onClick={() => void api.openLocal(port)}
+            title={`Open localhost:${port}`}
+          >
             :{port} <ExternalIcon size={10} />
           </button>
         ))}

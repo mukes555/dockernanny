@@ -1,0 +1,4 @@
+# Wide lines on purpose: the code reads best when a call and its arguments
+# stay on one line. "Max" lets rustfmt use the whole width before breaking.
+max_width = 140
+use_small_heuristics = "Max"

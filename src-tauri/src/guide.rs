@@ -52,7 +52,11 @@ pub async fn public_key(key_path: &str) -> anyhow::Result<String> {
         .output()
         .await
         .context("run ssh-keygen")?;
-    anyhow::ensure!(out.status.success(), "no {pub_path}, and ssh-keygen could not read the key: {}", String::from_utf8_lossy(&out.stderr).trim());
+    anyhow::ensure!(
+        out.status.success(),
+        "no {pub_path}, and ssh-keygen could not read the key: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
@@ -81,9 +85,7 @@ impl Drop for ScriptServer {
 }
 
 pub async fn serve(port: u16, script: String, on_fetch: impl Fn(Fetched) + Send + Sync + 'static) -> anyhow::Result<ScriptServer> {
-    let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port)))
-        .await
-        .with_context(|| format!("listen on port {port}"))?;
+    let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await.with_context(|| format!("listen on port {port}"))?;
     let bound = listener.local_addr()?.port();
     let (stop, mut stopped) = watch::channel(false);
     let on_fetch = std::sync::Arc::new(on_fetch);
@@ -151,10 +153,7 @@ fn is_script_request(first_line: &str) -> bool {
 }
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 pub fn key_exists(key_path: &str) -> bool {

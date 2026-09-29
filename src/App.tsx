@@ -89,7 +89,24 @@ export default function App() {
     // window listened is read here.
     started("the update check", () => api.updateStatus().then((status) => useStore.getState().setUpdateStatus(status)));
     return unsubscribe;
-  }, [load, loadSettings, loadHost, loadComputerInfo, setStats, pushDoctorRow, setStatus, setForward, appendOutput, appendLog, setScriptFetched, setHost, appendHostLog, setCopyProgress, appendContainerLog, pushNotice]);
+  }, [
+    load,
+    loadSettings,
+    loadHost,
+    loadComputerInfo,
+    setStats,
+    pushDoctorRow,
+    setStatus,
+    setForward,
+    appendOutput,
+    appendLog,
+    setScriptFetched,
+    setHost,
+    appendHostLog,
+    setCopyProgress,
+    appendContainerLog,
+    pushNotice,
+  ]);
 
   // A new page starts at its top; the main area is one scroller shared by every page.
   useEffect(() => {

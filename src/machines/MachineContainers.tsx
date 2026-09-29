@@ -88,7 +88,14 @@ export function MachineContainers({ machine }: { machine: Machine }) {
           </div>
           <div className="overflow-hidden rounded-xl border border-line">
             {shown.map((container, index) => (
-              <ContainerRow key={container.id} container={container} busy={busyId === container.id} first={index === 0} onAct={(action) => void act(container, action)} onLogs={() => openContainerLogs({ machineId: machine.id, id: container.id, name: container.name })} />
+              <ContainerRow
+                key={container.id}
+                container={container}
+                busy={busyId === container.id}
+                first={index === 0}
+                onAct={(action) => void act(container, action)}
+                onLogs={() => openContainerLogs({ machineId: machine.id, id: container.id, name: container.name })}
+              />
             ))}
             {shown.length === 0 ? <div className="px-3 py-3 text-[12px] text-ink-3">Nothing is running. Turn off "Only running" to see the rest.</div> : null}
           </div>
@@ -98,7 +105,19 @@ export function MachineContainers({ machine }: { machine: Machine }) {
   );
 }
 
-function ContainerRow({ container, busy, first, onAct, onLogs }: { container: Container; busy: boolean; first: boolean; onAct: (action: ContainerAction) => void; onLogs: () => void }) {
+function ContainerRow({
+  container,
+  busy,
+  first,
+  onAct,
+  onLogs,
+}: {
+  container: Container;
+  busy: boolean;
+  first: boolean;
+  onAct: (action: ContainerAction) => void;
+  onLogs: () => void;
+}) {
   const running = RUNNING_LIKE.includes(container.state);
   return (
     <div className={cx("flex items-center gap-3 px-3 py-2.5 text-[12px]", !first && "border-t border-line")}>

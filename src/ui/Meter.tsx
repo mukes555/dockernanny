@@ -7,7 +7,15 @@ export function Meter({ label, value, text, size = "sm" }: { label: string; valu
   return (
     <div className={`flex items-center gap-2 ${font}`}>
       <span className="w-8 uppercase tracking-wider text-ink-3">{label}</span>
-      <span role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-valuetext={text} className={`${height} flex-1 overflow-hidden rounded-full bg-hairline`}>
+      <span
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        aria-valuetext={text}
+        className={`${height} flex-1 overflow-hidden rounded-full bg-hairline`}
+      >
         <span className="block h-full rounded-full transition-all duration-700" style={{ width: `${Math.min(100, Math.max(0, value))}%`, background: tone }} />
       </span>
       <span className="tabular w-[84px] text-right text-ink-2">{text}</span>

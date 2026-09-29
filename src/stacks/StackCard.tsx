@@ -92,7 +92,13 @@ export function StackCard({ stack }: { stack: Stack }) {
         <div className="flex shrink-0 items-center gap-1.5">
           {/* The first thing wanted: a stopped stack starts, a running one opens. Rebuilding, the heaviest action, is in the menu. */}
           {!running ? (
-            <Button size="sm" tone="primary" disabled={busy || !machine} onClick={() => void call(api.upStack(stack.id, false))} title="Sync the folder and start the stack on the machine; images are built only if missing">
+            <Button
+              size="sm"
+              tone="primary"
+              disabled={busy || !machine}
+              onClick={() => void call(api.upStack(stack.id, false))}
+              title="Sync the folder and start the stack on the machine; images are built only if missing"
+            >
               <PlayIcon size={11} /> Start
             </Button>
           ) : ports.length > 0 ? (
@@ -100,10 +106,21 @@ export function StackCard({ stack }: { stack: Stack }) {
               <ExternalIcon size={11} /> Open
             </Button>
           ) : null}
-          <Button size="sm" disabled={!canStop} onClick={() => void call(api.stopStack(stack.id))} title="Stop the containers; they stay, so Start brings them back quickly">
+          <Button
+            size="sm"
+            disabled={!canStop}
+            onClick={() => void call(api.stopStack(stack.id))}
+            title="Stop the containers; they stay, so Start brings them back quickly"
+          >
             <StopIcon size={11} /> Stop
           </Button>
-          <Button size="sm" tone={logsOpen ? "primary" : "secondary"} disabled={!machine} onClick={() => openLogs(logsOpen ? null : stack.id)} title="Follow the stack's logs">
+          <Button
+            size="sm"
+            tone={logsOpen ? "primary" : "secondary"}
+            disabled={!machine}
+            onClick={() => openLogs(logsOpen ? null : stack.id)}
+            title="Follow the stack's logs"
+          >
             <LogsIcon size={11} /> Logs
           </Button>
           {/* Always the same items, so none moves under the cursor when the state changes. */}
@@ -161,7 +178,12 @@ export function StackCard({ stack }: { stack: Stack }) {
           <SyncLine syncedAt={status?.synced_at_ms ?? null} files={status?.synced_files ?? 0} />
           {stack.live_sync ? <span className="text-accent">live</span> : null}
           {copy ? (
-            <button type="button" className={cx("inline-flex items-center gap-1", copy.finished_ms ? (copy.failed ? "text-critical" : "hover:text-ink") : "text-accent")} onClick={() => openProgress(stack.id)} title="Show the copy's steps, bytes and result">
+            <button
+              type="button"
+              className={cx("inline-flex items-center gap-1", copy.finished_ms ? (copy.failed ? "text-critical" : "hover:text-ink") : "text-accent")}
+              onClick={() => openProgress(stack.id)}
+              title="Show the copy's steps, bytes and result"
+            >
               {!copy.finished_ms ? <SpinnerIcon size={10} /> : null}
               {copy.finished_ms ? (copy.failed ? "copy failed" : "last copy") : `copying from ${copy.from}`}
             </button>
@@ -180,16 +202,22 @@ export function StackCard({ stack }: { stack: Stack }) {
         </div>
       ) : null}
       {status?.message ? <div className={cx("mt-2 text-[12px]", phase === "error" ? "text-critical" : "text-warning")}>{status.message}</div> : null}
-      {status?.folder_missing ? <div className="mt-2 text-[12px] text-warning">The project folder is gone from the machine. Start copies it there again.</div> : null}
+      {status?.folder_missing ? (
+        <div className="mt-2 text-[12px] text-warning">The project folder is gone from the machine. Start copies it there again.</div>
+      ) : null}
       {error ? <div className="mt-2 text-[12px] text-critical">{error}</div> : null}
 
       {removing ? (
-        <div ref={removeStrip} className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-critical/40 bg-surface-2 px-3 py-2 text-[12px]">
+        <div
+          ref={removeStrip}
+          className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-critical/40 bg-surface-2 px-3 py-2 text-[12px]"
+        >
           {machine ? (
             <div>
               <div className="text-ink">Remove {stack.name}? It is stopped and its folder on the machine is deleted.</div>
               <label className="mt-1 flex items-center gap-2 text-ink-2">
-                <input type="checkbox" checked={withVolumes} onChange={(e) => setWithVolumes(e.target.checked)} /> also delete its volumes (databases and other data)
+                <input type="checkbox" checked={withVolumes} onChange={(e) => setWithVolumes(e.target.checked)} /> also delete its volumes (databases and other
+                data)
               </label>
             </div>
           ) : (
@@ -233,7 +261,15 @@ function ServiceRow({ stack, service, forwardUp }: { stack: Stack; service: Serv
           const local = localPort(stack, port.published);
           const udp = port.protocol === "udp";
           const reachable = running && stack.forward_ports && forwardUp && !udp;
-          const hint = udp ? "UDP does not go through the bridge" : !stack.forward_ports ? "The bridge is off for this stack" : !running ? "The service is not running" : !forwardUp ? "The bridge is connecting…" : `Open http://localhost:${local} (container port ${port.target})`;
+          const hint = udp
+            ? "UDP does not go through the bridge"
+            : !stack.forward_ports
+              ? "The bridge is off for this stack"
+              : !running
+                ? "The service is not running"
+                : !forwardUp
+                  ? "The bridge is connecting…"
+                  : `Open http://localhost:${local} (container port ${port.target})`;
           return (
             <button
               key={`${port.published}-${port.protocol}`}

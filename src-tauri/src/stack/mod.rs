@@ -148,13 +148,7 @@ pub fn set_status(app: &AppHandle, stack_id: &str, change: impl FnOnce(&mut Stac
         (before != *status).then(|| status.clone())
     };
     if let Some(status) = updated {
-        let _ = app.emit(
-            STATUS_EVENT,
-            StatusEvent {
-                stack_id: stack_id.to_string(),
-                status,
-            },
-        );
+        let _ = app.emit(STATUS_EVENT, StatusEvent { stack_id: stack_id.to_string(), status });
     }
 }
 
@@ -173,7 +167,14 @@ mod tests {
 
     #[test]
     fn phase_follows_service_states() {
-        let running = |s: &str| ServiceState { service: s.into(), container: String::new(), state: "running".into(), health: String::new(), exit_code: 0, ports: vec![] };
+        let running = |s: &str| ServiceState {
+            service: s.into(),
+            container: String::new(),
+            state: "running".into(),
+            health: String::new(),
+            exit_code: 0,
+            ports: vec![],
+        };
         let exited = |s: &str| ServiceState { state: "exited".into(), ..running(s) };
         assert_eq!(derive_phase(&[]), Phase::Stopped);
         assert_eq!(derive_phase(&[running("a"), running("b")]), Phase::Running);

@@ -3,7 +3,20 @@
 // Every name, address and path here is made up (RFC 5737 addresses).
 
 import type { Api, Handlers } from "./ipc";
-import type { CopyProgress, DoctorRow, ForwardState, HostOs, HostSnapshot, Machine, MachineStats, Preview, Settings, Stack, StackStatus, UpdateStatus } from "./types";
+import type {
+  CopyProgress,
+  DoctorRow,
+  ForwardState,
+  HostOs,
+  HostSnapshot,
+  Machine,
+  MachineStats,
+  Preview,
+  Settings,
+  Stack,
+  StackStatus,
+  UpdateStatus,
+} from "./types";
 
 const KEY_PATH = "/home/alex/.ssh/id_ed25519";
 // The mock starts without a key, so the readiness list shows how one is created.
@@ -132,7 +145,14 @@ const statuses: Record<string, StackStatus> = {
     synced_at_ms: Date.now() - 42000,
     synced_files: 142,
     services: [
-      { service: "api", container: "shop-api-api-1", state: "running", health: "healthy", exit_code: 0, ports: [{ target: 3000, published: 3000, protocol: "tcp" }] },
+      {
+        service: "api",
+        container: "shop-api-api-1",
+        state: "running",
+        health: "healthy",
+        exit_code: 0,
+        ports: [{ target: 3000, published: 3000, protocol: "tcp" }],
+      },
       { service: "db", container: "shop-api-db-1", state: "running", health: "", exit_code: 0, ports: [{ target: 5432, published: 5432, protocol: "tcp" }] },
       { service: "worker", container: "shop-api-worker-1", state: "exited", health: "", exit_code: 1, ports: [] },
     ],
@@ -140,7 +160,16 @@ const statuses: Record<string, StackStatus> = {
 };
 
 const forwards: Record<string, ForwardState> = {
-  s1s1s1s1: { up: true, error: null, attempts: 0, since_ms: Date.now() - 47 * 60_000, ports: [{ local: 3000, remote: 3000 }, { local: 6432, remote: 5432 }] },
+  s1s1s1s1: {
+    up: true,
+    error: null,
+    attempts: 0,
+    since_ms: Date.now() - 47 * 60_000,
+    ports: [
+      { local: 3000, remote: 3000 },
+      { local: 6432, remote: 5432 },
+    ],
+  },
 };
 
 const samplePreview: Preview = {
@@ -152,7 +181,10 @@ const samplePreview: Preview = {
     { name: "echo", image: "hashicorp/http-echo", builds: false, ports: [{ target: 5678, published: 8088, protocol: "tcp" }] },
     { name: "web", image: "nginx:alpine", builds: false, ports: [{ target: 80, published: 8087, protocol: "tcp" }] },
   ],
-  warnings: ["echo: port 9099/udp is not forwarded (SSH forwards TCP only)", "echo: mounts /etc/hosts, which is outside the project folder and will not exist on the machine"],
+  warnings: [
+    "echo: port 9099/udp is not forwarded (SSH forwards TCP only)",
+    "echo: mounts /etc/hosts, which is outside the project folder and will not exist on the machine",
+  ],
   binds: [
     { path: "html", read_only: false, services: ["web"], exists_here: true },
     { path: "pgdata", read_only: false, services: ["db"], exists_here: false },
@@ -165,10 +197,35 @@ const copies: Record<string, CopyProgress> = {};
 
 /** A copy that takes a few seconds: every step in turn, bytes on the volume. */
 function pretendCopy(cardId: string, name: string, from: string, to: string, destination: CopyProgress["destination"], withData: boolean) {
-  const names = ["looking at both ends", ...(withData ? [`stopping ${name} on ${to}`] : []), `copying the project folder to ${to}`, ...(withData ? ["copying volume pgdata (412MB)", `creating the containers on ${to}`, "copying /var/lib/postgresql/data from db"] : []), `starting ${name} on ${to}`, `checking the result on ${to}`];
-  const progress: CopyProgress = { stack_id: cardId, name, from, to, destination, steps: names.map((n) => ({ name: n, state: "pending" })), current: null, lines: [], started_ms: Date.now(), finished_ms: null, outcome: null, failed: false };
+  const names = [
+    "looking at both ends",
+    ...(withData ? [`stopping ${name} on ${to}`] : []),
+    `copying the project folder to ${to}`,
+    ...(withData ? ["copying volume pgdata (412MB)", `creating the containers on ${to}`, "copying /var/lib/postgresql/data from db"] : []),
+    `starting ${name} on ${to}`,
+    `checking the result on ${to}`,
+  ];
+  const progress: CopyProgress = {
+    stack_id: cardId,
+    name,
+    from,
+    to,
+    destination,
+    steps: names.map((n) => ({ name: n, state: "pending" })),
+    current: null,
+    lines: [],
+    started_ms: Date.now(),
+    finished_ms: null,
+    outcome: null,
+    failed: false,
+  };
   const send = () => {
-    copies[cardId] = { ...progress, steps: progress.steps.map((s) => ({ ...s })), lines: [...progress.lines], current: progress.current ? { ...progress.current } : null };
+    copies[cardId] = {
+      ...progress,
+      steps: progress.steps.map((s) => ({ ...s })),
+      lines: [...progress.lines],
+      current: progress.current ? { ...progress.current } : null,
+    };
     handlers?.onCopyProgress(copies[cardId]);
   };
   const say = (text: string) => {
@@ -215,14 +272,71 @@ let logTimer: number | null = null;
 let ctrLogTimer: number | null = null;
 
 // A pretend `docker ps -a` for the online machine, mutated by the actions.
-const mockContainers: Record<string, Array<{ id: string; name: string; image: string; state: string; status: string; ports: string; created: string; project: string | null }>> = {
+const mockContainers: Record<
+  string,
+  Array<{ id: string; name: string; image: string; state: string; status: string; ports: string; created: string; project: string | null }>
+> = {
   a1b2c3d4: [
-    { id: "a1b2c3d4e5f6", name: "shop-api-api-1", image: "shop-api-api:latest", state: "running", status: "Up 6 minutes", ports: "0.0.0.0:3000->3000/tcp", created: "2026-01-01 10:00:00", project: "shop-api" },
-    { id: "b2c3d4e5f6a7", name: "shop-api-db-1", image: "postgres:16", state: "running", status: "Up 6 minutes (healthy)", ports: "0.0.0.0:5432->5432/tcp", created: "2026-01-01 10:00:00", project: "shop-api" },
-    { id: "c3d4e5f6a7b8", name: "blog-web-1", image: "nginx:alpine", state: "running", status: "Up 2 hours", ports: "0.0.0.0:8081->80/tcp", created: "2026-01-01 08:00:00", project: "blog" },
-    { id: "d4e5f6a7b8c9", name: "shop-api-worker-1", image: "shop-api-worker:latest", state: "exited", status: "Exited (1) 3 minutes ago", ports: "", created: "2026-01-01 10:00:00", project: "shop-api" },
-    { id: "e5f6a7b8c9d0", name: "scratch-postgres", image: "postgres:16", state: "exited", status: "Exited (0) 12 days ago", ports: "", created: "2025-12-20 09:00:00", project: null },
-    { id: "f6a7b8c9d0e1", name: "buildx_buildkit_builder0", image: "moby/buildkit:buildx-stable-1", state: "exited", status: "Exited (0) 2 days ago", ports: "", created: "2025-12-30 09:00:00", project: null },
+    {
+      id: "a1b2c3d4e5f6",
+      name: "shop-api-api-1",
+      image: "shop-api-api:latest",
+      state: "running",
+      status: "Up 6 minutes",
+      ports: "0.0.0.0:3000->3000/tcp",
+      created: "2026-01-01 10:00:00",
+      project: "shop-api",
+    },
+    {
+      id: "b2c3d4e5f6a7",
+      name: "shop-api-db-1",
+      image: "postgres:16",
+      state: "running",
+      status: "Up 6 minutes (healthy)",
+      ports: "0.0.0.0:5432->5432/tcp",
+      created: "2026-01-01 10:00:00",
+      project: "shop-api",
+    },
+    {
+      id: "c3d4e5f6a7b8",
+      name: "blog-web-1",
+      image: "nginx:alpine",
+      state: "running",
+      status: "Up 2 hours",
+      ports: "0.0.0.0:8081->80/tcp",
+      created: "2026-01-01 08:00:00",
+      project: "blog",
+    },
+    {
+      id: "d4e5f6a7b8c9",
+      name: "shop-api-worker-1",
+      image: "shop-api-worker:latest",
+      state: "exited",
+      status: "Exited (1) 3 minutes ago",
+      ports: "",
+      created: "2026-01-01 10:00:00",
+      project: "shop-api",
+    },
+    {
+      id: "e5f6a7b8c9d0",
+      name: "scratch-postgres",
+      image: "postgres:16",
+      state: "exited",
+      status: "Exited (0) 12 days ago",
+      ports: "",
+      created: "2025-12-20 09:00:00",
+      project: null,
+    },
+    {
+      id: "f6a7b8c9d0e1",
+      name: "buildx_buildkit_builder0",
+      image: "moby/buildkit:buildx-stable-1",
+      state: "exited",
+      status: "Exited (0) 2 days ago",
+      ports: "",
+      created: "2025-12-30 09:00:00",
+      project: null,
+    },
   ],
 };
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -240,7 +354,12 @@ async function pretendUp(stack: Stack) {
     handlers?.onStackOutput({ stack_id: stack.id, lines: [{ stream: "stdout", text: `>f+++++++++ ${file}` }] });
   }
   publish(stack.id, { phase: "starting", synced_at_ms: Date.now(), synced_files: 3 });
-  for (const line of [" Network sample-stack_default Creating", " Container sample-stack-web-1 Starting", " Container sample-stack-echo-1 Started", " Container sample-stack-web-1 Started"]) {
+  for (const line of [
+    " Network sample-stack_default Creating",
+    " Container sample-stack-web-1 Starting",
+    " Container sample-stack-echo-1 Started",
+    " Container sample-stack-web-1 Started",
+  ]) {
     await wait(400);
     handlers?.onStackOutput({ stack_id: stack.id, lines: [{ stream: "stderr", text: line }] });
   }
@@ -248,13 +367,36 @@ async function pretendUp(stack: Stack) {
     phase: "running",
     known: true,
     services: [
-      { service: "echo", container: `${stack.name}-echo-1`, state: "running", health: "", exit_code: 0, ports: [{ target: 5678, published: 8088, protocol: "tcp" }] },
-      { service: "web", container: `${stack.name}-web-1`, state: "running", health: "", exit_code: 0, ports: [{ target: 80, published: 8087, protocol: "tcp" }] },
+      {
+        service: "echo",
+        container: `${stack.name}-echo-1`,
+        state: "running",
+        health: "",
+        exit_code: 0,
+        ports: [{ target: 5678, published: 8088, protocol: "tcp" }],
+      },
+      {
+        service: "web",
+        container: `${stack.name}-web-1`,
+        state: "running",
+        health: "",
+        exit_code: 0,
+        ports: [{ target: 80, published: 8087, protocol: "tcp" }],
+      },
     ],
   });
   await wait(600);
   const local = (published: number) => stack.port_overrides[String(published)] ?? published;
-  forwards[stack.id] = { up: true, error: null, attempts: 0, since_ms: Date.now(), ports: [{ local: local(8088), remote: 8088 }, { local: local(8087), remote: 8087 }] };
+  forwards[stack.id] = {
+    up: true,
+    error: null,
+    attempts: 0,
+    since_ms: Date.now(),
+    ports: [
+      { local: local(8088), remote: 8088 },
+      { local: local(8087), remote: 8087 },
+    ],
+  };
   handlers?.onForward({ stack_id: stack.id, state: forwards[stack.id] });
 }
 
@@ -277,7 +419,11 @@ const hostSnapshot = (): HostSnapshot => {
         : { name: "Docker Engine", state: hostReady ? "ok" : "missing", detail: hostReady ? "29.8.1" : "not installed; Set up installs it" },
       { name: "SSH server", state: hostReady ? "ok" : "missing", detail: hostReady ? "listening on 2222" : "not listening on 2222" },
       { name: "Firewall", state: hostReady ? "ok" : "missing", detail: hostReady ? "ports open" : "ports closed (Set up opens them)" },
-      { name: "Network", state: hostReady ? "ok" : "missing", detail: hostReady ? "Home Wi-Fi (Private)" : "Home Wi-Fi is marked Public, which blocks the firewall rules" },
+      {
+        name: "Network",
+        state: hostReady ? "ok" : "missing",
+        detail: hostReady ? "Home Wi-Fi (Private)" : "Home Wi-Fi is marked Public, which blocks the firewall rules",
+      },
     ],
     user: "alex",
     ssh_port: 2222,
@@ -288,7 +434,12 @@ const hostSnapshot = (): HostSnapshot => {
     setup_running: false,
     notice: null,
     pairing: { listening: hostReady, armed: remaining > 0, locked: false, code: remaining > 0 ? "481 923" : null, remaining_s: remaining, note: null },
-    paired: hostReady ? [{ name: "desk", address: "192.0.2.20", key_type: "ssh-ed25519", paired_at_ms: Date.now() - 3 * 86400_000 }, { name: "", address: "192.0.2.21", key_type: "ssh-rsa", paired_at_ms: Date.now() - 3600_000 }] : [],
+    paired: hostReady
+      ? [
+          { name: "desk", address: "192.0.2.20", key_type: "ssh-ed25519", paired_at_ms: Date.now() - 3 * 86400_000 },
+          { name: "", address: "192.0.2.21", key_type: "ssh-rsa", paired_at_ms: Date.now() - 3600_000 },
+        ]
+      : [],
     connected: hostReady ? [{ address: "192.0.2.20", name: "desk", since_ms: Date.now() - 25 * 60_000 }] : [],
   };
 };
@@ -305,20 +456,48 @@ export const mockApi: Api = {
   computerInfo: async () => ({
     name: "desk",
     user: "alex",
-    probe: { hostname: "desk", os: "macOS 15.1", cpu_model: "Apple M2", cpus: 8, load1: 2.1, uptime_s: 3 * 86400 + 5 * 3600, mem_used_mb: 11800, mem_total_mb: 16384, disk_free_bytes: 210e9, disk_total_bytes: 494e9, battery: { percent: 64, charging: false }, docker_version: "29.7.2", flavor: "Docker Desktop", containers_running: 9 },
+    probe: {
+      hostname: "desk",
+      os: "macOS 15.1",
+      cpu_model: "Apple M2",
+      cpus: 8,
+      load1: 2.1,
+      uptime_s: 3 * 86400 + 5 * 3600,
+      mem_used_mb: 11800,
+      mem_total_mb: 16384,
+      disk_free_bytes: 210e9,
+      disk_total_bytes: 494e9,
+      battery: { percent: 64, charging: false },
+      docker_version: "29.7.2",
+      flavor: "Docker Desktop",
+      containers_running: 9,
+    },
   }),
   newMachineId: async () => Math.random().toString(16).slice(2, 10),
   defaultKeyPath: async () => KEY_PATH,
   computerReadiness: async () => {
     await wait(400);
-    const wsl: DoctorRow[] = MOCK_OS === "windows" ? [{ key: "wsl", label: "WSL", ok: true, detail: "Ubuntu, Linux 6.6.87.2-microsoft-standard-WSL2", fix: null }] : [];
+    const wsl: DoctorRow[] =
+      MOCK_OS === "windows" ? [{ key: "wsl", label: "WSL", ok: true, detail: "Ubuntu, Linux 6.6.87.2-microsoft-standard-WSL2", fix: null }] : [];
     // On Windows the mock starts without rsync in WSL, so the install button shows.
     const rsyncOk = MOCK_OS !== "windows" || wslToolsInstalled;
     return [
       ...wsl,
       { key: "ssh", label: "SSH client", ok: true, detail: "OpenSSH_9.8p1", fix: null },
-      { key: "rsync", label: "rsync", ok: rsyncOk, detail: rsyncOk ? "rsync  version 3.2.7  protocol version 31" : "not found", fix: rsyncOk ? null : "dockerNanny runs rsync inside WSL: open the distribution and run `sudo apt install rsync`." },
-      { key: "key", label: "SSH key", ok: keyMade, detail: keyMade ? KEY_PATH : `no key at ${KEY_PATH}`, fix: keyMade ? null : "Create one with the button below, or choose an existing key in Settings." },
+      {
+        key: "rsync",
+        label: "rsync",
+        ok: rsyncOk,
+        detail: rsyncOk ? "rsync  version 3.2.7  protocol version 31" : "not found",
+        fix: rsyncOk ? null : "dockerNanny runs rsync inside WSL: open the distribution and run `sudo apt install rsync`.",
+      },
+      {
+        key: "key",
+        label: "SSH key",
+        ok: keyMade,
+        detail: keyMade ? KEY_PATH : `no key at ${KEY_PATH}`,
+        fix: keyMade ? null : "Create one with the button below, or choose an existing key in Settings.",
+      },
       { key: "docker", label: "Docker here", ok: true, detail: "Docker 27.3.1", fix: null },
     ];
   },
@@ -331,7 +510,8 @@ export const mockApi: Api = {
     keyMade = true;
     return `${KEY_PATH}.pub`;
   },
-  diagnostics: async () => "dockerNanny 0.3.0 on macos aarch64\nroles: use other machines on, share this computer off\nmachines: 2 (1 online), stacks: 1\nssh: OpenSSH_9.8p1\nrsync: rsync  version 3.2.7\ndocker: 27.3.1\n\n--- end of app.log ---\nINFO copy <this-computer> -> machine-1: done\n",
+  diagnostics: async () =>
+    "dockerNanny 0.3.0 on macos aarch64\nroles: use other machines on, share this computer off\nmachines: 2 (1 online), stacks: 1\nssh: OpenSSH_9.8p1\nrsync: rsync  version 3.2.7\ndocker: 27.3.1\n\n--- end of app.log ---\nINFO copy <this-computer> -> machine-1: done\n",
   revealAppFile: async () => {},
   openLink: async (url) => void window.open(url, "_blank"),
   // `?update=1` in the address pretends a newer release exists.
@@ -351,7 +531,13 @@ export const mockApi: Api = {
     const rows: DoctorRow[] = [
       { key: "ssh", label: "SSH", ok: true, detail: `${machine.user}@${machine.host}:${machine.port} answers`, fix: null },
       { key: "docker", label: "Docker", ok: true, detail: "Docker Engine 29.0.0", fix: null },
-      { key: "compose", label: "Compose", ok: false, detail: "docker: 'compose' is not a docker command", fix: "sudo apt-get install -y docker-compose-plugin" },
+      {
+        key: "compose",
+        label: "Compose",
+        ok: false,
+        detail: "docker: 'compose' is not a docker command",
+        fix: "sudo apt-get install -y docker-compose-plugin",
+      },
       { key: "rsync", label: "rsync", ok: true, detail: "rsync  version 3.2.7  protocol version 31", fix: null },
       { key: "host", label: "Host", ok: true, detail: "Linux 6.8.0, 16 cpus", fix: null },
     ];
@@ -381,9 +567,26 @@ export const mockApi: Api = {
   pairMachine: async (address, code, keyPath, name) => {
     await wait(900);
     if (code === "000000") throw "wrong code";
-    const machine: Machine = { id: Math.random().toString(16).slice(2, 10), name: name || "studio", user: "alex", host: address, port: 2222, key_path: keyPath, docker_context: false, pinned: true };
+    const machine: Machine = {
+      id: Math.random().toString(16).slice(2, 10),
+      name: name || "studio",
+      user: "alex",
+      host: address,
+      port: 2222,
+      key_path: keyPath,
+      docker_context: false,
+      pinned: true,
+    };
     machines.push(machine);
-    stats[machine.id] = onlineStats({ hostname: machine.name.toLowerCase(), cpus: 12, load1: 0.3, mem_used_mb: 900, mem_total_mb: 16000, battery: { percent: 91, charging: true }, os: "Windows 11 (build 22631) · Ubuntu 24.04 LTS in WSL2" });
+    stats[machine.id] = onlineStats({
+      hostname: machine.name.toLowerCase(),
+      cpus: 12,
+      load1: 0.3,
+      mem_used_mb: 900,
+      mem_total_mb: 16000,
+      battery: { percent: 91, charging: true },
+      os: "Windows 11 (build 22631) · Ubuntu 24.04 LTS in WSL2",
+    });
     return machine;
   },
   setDockerContext: async (id, enabled) => {
@@ -437,7 +640,9 @@ export const mockApi: Api = {
     const stack = stacks.find((s) => s.id === id);
     if (!stack) throw new Error("That stack is no longer known.");
     stack.forward_ports = on;
-    const ports = statuses[id]?.services.flatMap((s) => s.ports.map((p) => ({ local: stack.port_overrides[String(p.published)] ?? p.published, remote: p.published }))) ?? [];
+    const ports =
+      statuses[id]?.services.flatMap((s) => s.ports.map((p) => ({ local: stack.port_overrides[String(p.published)] ?? p.published, remote: p.published }))) ??
+      [];
     if (!on) {
       forwards[id] = { up: false, error: null, attempts: 0, since_ms: null, ports: [] };
       handlers?.onForward({ stack_id: id, state: forwards[id] });
@@ -465,22 +670,55 @@ export const mockApi: Api = {
       ports: [5432, 9000],
       warnings: ["api: mounts /home/alex/projects/shop-api/src, which is outside the project folder and will not exist on the machine"],
     },
-    { name: "blog", status: "exited(2)", config_file: "/home/alex/projects/blog/docker-compose.yml", project_dir: "/home/alex/projects/blog", compose_rel: "docker-compose.yml", volumes: [{ key: "postgres", name: "blog_postgres", size: "78MB", external: false }], ports: [5433, 6379], warnings: [] },
+    {
+      name: "blog",
+      status: "exited(2)",
+      config_file: "/home/alex/projects/blog/docker-compose.yml",
+      project_dir: "/home/alex/projects/blog",
+      compose_rel: "docker-compose.yml",
+      volumes: [{ key: "postgres", name: "blog_postgres", size: "78MB", external: false }],
+      ports: [5433, 6379],
+      warnings: [],
+    },
   ],
   copyPlan: async (request) => {
     await wait(600);
     const fromShop = request.project?.name === "shop-api" || stacks.some((s) => s.id === request.stack_id && s.name === "shop-api");
     return {
       from: request.source.kind === "this_computer" ? "this computer" : "Studio",
-      to: request.destination.kind === "this_computer" ? "this computer" : (machines.find((m) => request.destination.kind === "machine" && m.id === request.destination.machine_id)?.name ?? "machine"),
-      destination_exists: request.destination.kind === "machine" && stacks.some((s) => request.destination.kind === "machine" && s.machine_id === request.destination.machine_id && s.name === request.name),
+      to:
+        request.destination.kind === "this_computer"
+          ? "this computer"
+          : (machines.find((m) => request.destination.kind === "machine" && m.id === request.destination.machine_id)?.name ?? "machine"),
+      destination_exists:
+        request.destination.kind === "machine" &&
+        stacks.some((s) => request.destination.kind === "machine" && s.machine_id === request.destination.machine_id && s.name === request.name),
       source_running: true,
       ports: fromShop ? [3000, 5432] : [5433, 6379],
-      volumes: fromShop ? [{ key: "pgdata", name: "shop-api_pgdata", size: "412MB", destination_name: `${request.name}_pgdata`, external: false }] : [{ key: "postgres", name: "blog_postgres", size: "78MB", destination_name: `${request.name}_postgres`, external: false }],
+      volumes: fromShop
+        ? [{ key: "pgdata", name: "shop-api_pgdata", size: "412MB", destination_name: `${request.name}_pgdata`, external: false }]
+        : [{ key: "postgres", name: "blog_postgres", size: "78MB", destination_name: `${request.name}_postgres`, external: false }],
       containers: fromShop
         ? [
-            { service: "api", container: "shop-api-api-1", anonymous_volumes: [], changed_paths: [{ path: "/app/storage", entries: 14, suggested: true }, { path: "/app/.cache", entries: 3, suggested: false }], note: null },
-            { service: "db", container: "shop-api-db-1", anonymous_volumes: [{ name: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", destination: "/var/lib/postgresql/data", size: "84.2MB" }], changed_paths: [], note: null },
+            {
+              service: "api",
+              container: "shop-api-api-1",
+              anonymous_volumes: [],
+              changed_paths: [
+                { path: "/app/storage", entries: 14, suggested: true },
+                { path: "/app/.cache", entries: 3, suggested: false },
+              ],
+              note: null,
+            },
+            {
+              service: "db",
+              container: "shop-api-db-1",
+              anonymous_volumes: [
+                { name: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", destination: "/var/lib/postgresql/data", size: "84.2MB" },
+              ],
+              changed_paths: [],
+              note: null,
+            },
           ]
         : [],
       images: fromShop ? ["shop-api-worker:local"] : [],
@@ -493,7 +731,17 @@ export const mockApi: Api = {
       const machineId = request.destination.machine_id;
       let record = stacks.find((s) => s.machine_id === machineId && s.name === request.name);
       if (!record) {
-        record = { id: Math.random().toString(16).slice(2, 10), name: request.name, machine_id: machineId, project_dir: request.project?.project_dir ?? "/home/alex/projects/" + request.name, compose_rel: "docker-compose.yml", excludes: [".git", "node_modules"], forward_ports: true, live_sync: false, port_overrides: request.port_overrides };
+        record = {
+          id: Math.random().toString(16).slice(2, 10),
+          name: request.name,
+          machine_id: machineId,
+          project_dir: request.project?.project_dir ?? "/home/alex/projects/" + request.name,
+          compose_rel: "docker-compose.yml",
+          excludes: [".git", "node_modules"],
+          forward_ports: true,
+          live_sync: false,
+          port_overrides: request.port_overrides,
+        };
         stacks.push(record);
       }
       const card = record;
@@ -518,7 +766,12 @@ export const mockApi: Api = {
     logTimer = window.setInterval(() => {
       const service = services[n % services.length];
       n += 1;
-      handlers?.onStackLog({ stack_id: id, lines: [{ stream: "stdout", text: `${stack.name}-${service}-1  | ${new Date().toISOString()} request ${n} handled in ${(Math.random() * 40).toFixed(1)}ms` }] });
+      handlers?.onStackLog({
+        stack_id: id,
+        lines: [
+          { stream: "stdout", text: `${stack.name}-${service}-1  | ${new Date().toISOString()} request ${n} handled in ${(Math.random() * 40).toFixed(1)}ms` },
+        ],
+      });
     }, 700);
   },
   stopLogs: async () => {
@@ -546,7 +799,12 @@ export const mockApi: Api = {
     let n = 0;
     ctrLogTimer = window.setInterval(() => {
       n += 1;
-      handlers?.onContainerLog({ id, lines: [{ stream: n % 5 === 0 ? "stderr" : "stdout", text: `${new Date().toISOString()} INFO  handled event ${n} in ${(Math.random() * 30).toFixed(1)}ms` }] });
+      handlers?.onContainerLog({
+        id,
+        lines: [
+          { stream: n % 5 === 0 ? "stderr" : "stdout", text: `${new Date().toISOString()} INFO  handled event ${n} in ${(Math.random() * 30).toFixed(1)}ms` },
+        ],
+      });
     }, 600);
   },
   stopContainerLogs: async () => {
@@ -554,7 +812,8 @@ export const mockApi: Api = {
     ctrLogTimer = null;
   },
 
-  scriptPreview: async (request) => `# dockerNanny machine setup (mock)\n$distro = '${request.distro}'\n$port = ${request.port}\n$memory = '${request.memory_gb}GB'\n$pubkey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA alex@studio'\n# ... installs Docker, sshd, rsync, writes .wslconfig, opens the firewall`,
+  scriptPreview: async (request) =>
+    `# dockerNanny machine setup (mock)\n$distro = '${request.distro}'\n$port = ${request.port}\n$memory = '${request.memory_gb}GB'\n$pubkey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA alex@studio'\n# ... installs Docker, sshd, rsync, writes .wslconfig, opens the firewall`,
   scriptServe: async () => {
     window.setTimeout(() => handlers?.onScriptFetched({ from: "192.0.2.20", at_ms: Date.now() }), 4000);
     return { addresses: ["192.0.2.10"], port: 47431 };

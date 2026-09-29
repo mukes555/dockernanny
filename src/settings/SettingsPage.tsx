@@ -60,7 +60,10 @@ export function SettingsPage() {
               type="button"
               onClick={() => openSettings(item.id)}
               aria-current={item.id === section ? "page" : undefined}
-              className={cx("rounded-lg px-3 py-1.5 text-left text-[13px] transition", item.id === section ? "bg-accent-soft font-medium text-ink" : "text-ink-2 hover:bg-surface-2 hover:text-ink")}
+              className={cx(
+                "rounded-lg px-3 py-1.5 text-left text-[13px] transition",
+                item.id === section ? "bg-accent-soft font-medium text-ink" : "text-ink-2 hover:bg-surface-2 hover:text-ink",
+              )}
             >
               {item.label}
             </button>

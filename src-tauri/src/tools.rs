@@ -296,7 +296,11 @@ mod wsl {
             return NO_HOME.into();
         }
         let out = super::unix_std("sh").args(["-c", "printf %s \"$HOME\""]).stdin(Stdio::null()).output();
-        let found = out.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|h| h.starts_with('/'));
+        let found = out
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|h| h.starts_with('/'));
         let mut chosen = CHOSEN.write().expect("wsl lock");
         let Some(entry) = chosen.as_mut() else { return found.unwrap_or_else(|| NO_HOME.into()) };
         match found {
@@ -342,7 +346,8 @@ mod job {
 
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
     // A HANDLE is a raw pointer; kept as a number so it can sit in a static.

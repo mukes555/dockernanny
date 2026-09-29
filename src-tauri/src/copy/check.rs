@@ -20,9 +20,16 @@ pub async fn preflight(ssh: &Ssh, to: &Site, needed_bytes: u64) -> anyhow::Resul
     let mut notes = vec![format!("compose {} on {}", compose.stdout.trim(), to.label)];
 
     let df_line = match &to.endpoint {
-        Endpoint::Machine { .. } => to.endpoint.run_script(ssh, "df -Pk \"$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /)\" 2>/dev/null | tail -1").await.map(|o| o.stdout).unwrap_or_default(),
+        Endpoint::Machine { .. } => to
+            .endpoint
+            .run_script(ssh, "df -Pk \"$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /)\" 2>/dev/null | tail -1")
+            .await
+            .map(|o| o.stdout)
+            .unwrap_or_default(),
         // Docker Desktop keeps its disk image in the home folder; the home disk is a fair proxy.
-        Endpoint::Local if cfg!(unix) => to.endpoint.run_script(ssh, "df -Pk \"$HOME\" 2>/dev/null | tail -1").await.map(|o| o.stdout).unwrap_or_default(),
+        Endpoint::Local if cfg!(unix) => {
+            to.endpoint.run_script(ssh, "df -Pk \"$HOME\" 2>/dev/null | tail -1").await.map(|o| o.stdout).unwrap_or_default()
+        }
         Endpoint::Local => String::new(),
     };
     let free = match &to.endpoint {
@@ -133,16 +140,29 @@ impl Summary {
 pub async fn post_copy(ssh: &Ssh, to: &Site) -> Summary {
     let ps = to.compose_output(ssh, "ps --format json").await.map(|o| o.stdout).unwrap_or_default();
     let sockets = match &to.endpoint {
-        Endpoint::Machine { .. } => to.endpoint.run_script(ssh, "ss -ltn 2>/dev/null || netstat -an 2>/dev/null").await.map(|o| o.stdout).unwrap_or_default(),
-        Endpoint::Local if cfg!(windows) => crate::tools::native("netstat").arg("-an").output().await.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default(),
-        Endpoint::Local => to.endpoint.run_script(ssh, "ss -ltn 2>/dev/null || netstat -an 2>/dev/null").await.map(|o| o.stdout).unwrap_or_default(),
+        Endpoint::Machine { .. } => {
+            to.endpoint.run_script(ssh, "ss -ltn 2>/dev/null || netstat -an 2>/dev/null").await.map(|o| o.stdout).unwrap_or_default()
+        }
+        Endpoint::Local if cfg!(windows) => crate::tools::native("netstat")
+            .arg("-an")
+            .output()
+            .await
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default(),
+        Endpoint::Local => {
+            to.endpoint.run_script(ssh, "ss -ltn 2>/dev/null || netstat -an 2>/dev/null").await.map(|o| o.stdout).unwrap_or_default()
+        }
     };
     summarize(&compose::parse_ps(&ps), &sockets)
 }
 
 fn summarize(services: &[compose::ServiceState], sockets: &str) -> Summary {
     let services_up = services.iter().filter(|s| s.state == "running").count();
-    let unhealthy: Vec<String> = services.iter().filter(|s| s.state == "running" && !s.health.is_empty() && s.health != "healthy").map(|s| s.service.clone()).collect();
+    let unhealthy: Vec<String> = services
+        .iter()
+        .filter(|s| s.state == "running" && !s.health.is_empty() && s.health != "healthy")
+        .map(|s| s.service.clone())
+        .collect();
     let mut ports: Vec<u16> = services.iter().flat_map(|s| s.ports.iter().filter(|p| p.protocol == "tcp").map(|p| p.published)).collect();
     ports.sort_unstable();
     ports.dedup();
@@ -205,7 +225,11 @@ mod tests {
 
     #[test]
     fn summary_counts_services_and_ports_on_every_platform() {
-        let services = vec![service("db", "running", "healthy", 5432), service("api", "running", "starting", 3000), service("worker", "exited", "", 9000)];
+        let services = vec![
+            service("db", "running", "healthy", 5432),
+            service("api", "running", "starting", 3000),
+            service("worker", "exited", "", 9000),
+        ];
         let linux = "State  Recv-Q Send-Q Local Address:Port\nLISTEN 0      128    0.0.0.0:5432\nLISTEN 0      128    [::]:3000\n";
         let summary = summarize(&services, linux);
         assert_eq!(summary.services_up, 2);

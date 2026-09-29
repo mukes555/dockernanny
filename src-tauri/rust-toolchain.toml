@@ -1,0 +1,7 @@
+# CI and releases build with exactly this Rust. A new stable release can
+# add clippy lints, and clippy runs with -D warnings, so moving up is a
+# deliberate change here rather than a surprise red CI.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

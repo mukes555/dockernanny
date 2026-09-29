@@ -98,7 +98,10 @@ pub async fn set_docker_context(machine: &Machine, enabled: bool) -> anyhow::Res
     // Docker on Windows would reach the machine with Windows' own ssh, which
     // knows neither the alias nor the key; that is left for a later version.
     let supported = !cfg!(windows);
-    anyhow::ensure!(!enabled || supported, "a Docker context for a machine is not available on Windows yet; use the ssh line from this dialog inside WSL");
+    anyhow::ensure!(
+        !enabled || supported,
+        "a Docker context for a machine is not available on Windows yet; use the ssh line from this dialog inside WSL"
+    );
     let name = context_name(machine);
     let _ = crate::tools::native("docker").args(["context", "rm", "-f", &name]).output().await;
     if !enabled {
@@ -124,10 +127,7 @@ pub async fn poll(ssh: &Ssh, machine: &Machine) -> MachineStats {
 /// Given the last full reading, only what changes is read again and the
 /// rest is taken from it.
 async fn poll_with(ssh: &Ssh, machine: &Machine, full: Option<&Probe>) -> MachineStats {
-    let offline = |error: String| MachineStats {
-        error: Some(error),
-        ..Default::default()
-    };
+    let offline = |error: String| MachineStats { error: Some(error), ..Default::default() };
     let script = probe::script(full.is_none());
     match timeout(POLL_TIMEOUT, ssh.run(&machine.alias(), &script)).await {
         Ok(Ok(out)) if out.ok() => {
@@ -244,7 +244,16 @@ mod tests {
 
     #[test]
     fn loopback_and_own_names_point_at_this_computer() {
-        let machine = |host: &str| Machine { id: "x".into(), name: "x".into(), user: "alex".into(), host: host.into(), port: 22, key_path: String::new(), docker_context: false, pinned: false };
+        let machine = |host: &str| Machine {
+            id: "x".into(),
+            name: "x".into(),
+            user: "alex".into(),
+            host: host.into(),
+            port: 22,
+            key_path: String::new(),
+            docker_context: false,
+            pinned: false,
+        };
         assert!(machine("localhost").points_at_this_computer("studio"));
         assert!(machine("127.0.0.1").points_at_this_computer(""));
         assert!(machine("Studio.local").points_at_this_computer("studio"));

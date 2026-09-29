@@ -45,7 +45,8 @@ export function DropHero({ extra }: { extra?: ReactNode }) {
         <p className="mx-auto mt-2 max-w-md text-[13px] leading-relaxed text-ink-2">
           {target ? (
             <>
-              Or a project folder that has one. The stack runs on <span className="font-medium text-ink">{target.name}</span> and its ports show up on this computer as localhost.
+              Or a project folder that has one. The stack runs on <span className="font-medium text-ink">{target.name}</span> and its ports show up on this
+              computer as localhost.
             </>
           ) : (
             <>Or a project folder that has one. Add a machine in the sidebar first, so there is somewhere to run it.</>

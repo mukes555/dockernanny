@@ -37,7 +37,11 @@ export function ActivityPage() {
         <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
           {list.map((copy) => (
             <li key={copy.stack_id}>
-              <button type="button" onClick={() => openProgress(copy.stack_id)} className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-2/60">
+              <button
+                type="button"
+                onClick={() => openProgress(copy.stack_id)}
+                className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-2/60"
+              >
                 <StateMark copy={copy} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13px] font-medium text-ink">{copy.name}</div>
