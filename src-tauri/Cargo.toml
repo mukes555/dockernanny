@@ -33,7 +33,7 @@ tauri-plugin-clipboard-manager = "2.3.3"
 # The sharing role: one instance, a tray icon, start at login, a random pairing code.
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
-getrandom = "0.3"
+getrandom = "0.4"
 # Reads the tar `docker cp` writes, so listing a local container folder needs no Unix tools.
 tar = { version = "0.4", default-features = false }
 # Updates from the GitHub release: signed, checked by the app every hour, installed when the user says so.
