@@ -73,6 +73,14 @@ impl Site {
         argv
     }
 
+    /// Every container of the project with its state, `compose ps --all`; an
+    /// error when compose could not answer, which is not the same as none.
+    pub async fn services(&self, ssh: &Ssh) -> anyhow::Result<Vec<crate::compose::ServiceState>> {
+        let out = self.compose_output(ssh, "ps --all --format json").await?;
+        anyhow::ensure!(out.ok(), "compose ps on {} failed: {}", self.label, crate::machine::first_line(&out.stderr));
+        Ok(crate::compose::parse_ps(&out.stdout))
+    }
+
     /// One compose command to completion, both streams captured.
     pub async fn compose_output(&self, ssh: &Ssh, args: &str) -> anyhow::Result<Output> {
         match &self.endpoint {

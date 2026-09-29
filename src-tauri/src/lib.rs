@@ -46,7 +46,9 @@ pub struct AppState {
     /// before the next tick.
     pub stats: Mutex<HashMap<String, MachineStats>>,
     pub statuses: Mutex<HashMap<String, StackStatus>>,
-    /// The compose operation running per stack id, so a new one can cancel it.
+    /// The one operation allowed per stack (Start, Stop, a copy, ...).
+    pub operations: stack::Operations,
+    /// Log streams by key (a stack's, a container's), so a new one or a close ends it.
     pub jobs: Mutex<HashMap<String, JobHandle>>,
     pub forwarders: Mutex<HashMap<String, Forwarder>>,
     pub forward_states: Mutex<HashMap<String, ForwardState>>,
@@ -237,6 +239,7 @@ fn boot() -> anyhow::Result<AppState> {
         host: host::Host::default(),
         stats: Mutex::new(HashMap::new()),
         statuses: Mutex::new(HashMap::new()),
+        operations: stack::Operations::default(),
         jobs: Mutex::new(HashMap::new()),
         forwarders: Mutex::new(HashMap::new()),
         forward_states: Mutex::new(HashMap::new()),

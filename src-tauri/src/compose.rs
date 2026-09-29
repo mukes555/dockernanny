@@ -1,7 +1,11 @@
 //! What a compose file says, as Docker itself reads it. `compose config`
 //! resolves variables and expands short syntax, so the preview shows exactly
 //! what will run. Its output can contain secrets (env_file is inlined), so it
-//! is parsed in memory and dropped. The same file also reads `compose ps`.
+//! is parsed in memory and dropped. What `compose ps` says is in `ps`.
+
+mod ps;
+
+pub use ps::{parse_ps, Readiness, ServiceState};
 
 use std::path::{Path, PathBuf};
 
@@ -48,17 +52,6 @@ pub struct Port {
     pub target: u16,
     pub published: u16,
     pub protocol: String,
-}
-
-/// One row of `compose ps`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct ServiceState {
-    pub service: String,
-    pub container: String,
-    pub state: String,
-    pub health: String,
-    pub exit_code: i32,
-    pub ports: Vec<Port>,
 }
 
 /// The compose file for a dropped path: the file itself, or the first
@@ -267,47 +260,6 @@ pub fn sanitize_name(raw: &str) -> String {
     name
 }
 
-/// `compose ps --format json`: one object per line today, an array in older
-/// versions. `Publishers` is null when nothing is published, and every port
-/// appears once per address family; this computer only cares about the number.
-pub fn parse_ps(text: &str) -> Vec<ServiceState> {
-    let trimmed = text.trim();
-    let objects: Vec<Value> = if trimmed.starts_with('[') {
-        serde_json::from_str(trimmed).unwrap_or_default()
-    } else {
-        trimmed.lines().filter_map(|line| serde_json::from_str(line).ok()).collect()
-    };
-    let mut services: Vec<ServiceState> = objects.iter().map(parse_ps_entry).collect();
-    services.sort_by(|a, b| a.service.cmp(&b.service));
-    services
-}
-
-fn parse_ps_entry(entry: &Value) -> ServiceState {
-    let text = |key: &str| entry.get(key).and_then(Value::as_str).unwrap_or("").to_string();
-    let mut ports: Vec<Port> = Vec::new();
-    for publisher in entry.get("Publishers").and_then(Value::as_array).into_iter().flatten() {
-        let number = |key: &str| publisher.get(key).and_then(Value::as_u64).unwrap_or(0) as u16;
-        let port = Port {
-            target: number("TargetPort"),
-            published: number("PublishedPort"),
-            protocol: publisher.get("Protocol").and_then(Value::as_str).unwrap_or("tcp").to_string(),
-        };
-        let unpublished = port.published == 0;
-        if unpublished || ports.contains(&port) {
-            continue;
-        }
-        ports.push(port);
-    }
-    ServiceState {
-        service: text("Service"),
-        container: text("Name"),
-        state: text("State"),
-        health: text("Health"),
-        exit_code: entry.get("ExitCode").and_then(Value::as_i64).unwrap_or(0) as i32,
-        ports,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,26 +338,5 @@ mod tests {
         assert_eq!(sanitize_name("--weird__"), "weird");
         assert_eq!(sanitize_name("???"), "stack");
         assert_eq!(sanitize_name("api_server"), "api_server");
-    }
-
-    #[test]
-    fn ps_json_lines_dedupe_address_families() {
-        let text = r#"{"ExitCode":0,"Health":"","Name":"s-web-1","Publishers":[{"URL":"0.0.0.0","TargetPort":80,"PublishedPort":8087,"Protocol":"tcp"},{"URL":"::","TargetPort":80,"PublishedPort":8087,"Protocol":"tcp"}],"Service":"web","State":"running"}
-{"ExitCode":1,"Health":"","Name":"s-db-1","Publishers":null,"Service":"db","State":"exited"}"#;
-        let services = parse_ps(text);
-        assert_eq!(services.len(), 2);
-        assert_eq!(services[0].service, "db");
-        assert_eq!(services[0].exit_code, 1);
-        assert!(services[0].ports.is_empty());
-        assert_eq!(services[1].ports, vec![Port { target: 80, published: 8087, protocol: "tcp".into() }]);
-    }
-
-    #[test]
-    fn ps_array_and_empty_are_fine() {
-        let array = r#"[{"Name":"a","Service":"a","State":"running","Publishers":[{"TargetPort":1,"PublishedPort":0,"Protocol":"tcp"}]}]"#;
-        let services = parse_ps(array);
-        assert_eq!(services.len(), 1);
-        assert!(services[0].ports.is_empty());
-        assert!(parse_ps("").is_empty());
     }
 }

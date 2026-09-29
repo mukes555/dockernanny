@@ -12,6 +12,7 @@ import type {
   Machine,
   MachineStats,
   Preview,
+  ServiceState,
   Settings,
   Stack,
   StackStatus,
@@ -139,9 +140,10 @@ const stacks: Stack[] = [
 
 const statuses: Record<string, StackStatus> = {
   s1s1s1s1: {
-    phase: "running",
+    phase: "partial",
     known: true,
-    message: null,
+    error: null,
+    sync_warning: null,
     synced_at_ms: Date.now() - 42000,
     synced_files: 142,
     services: [
@@ -152,9 +154,21 @@ const statuses: Record<string, StackStatus> = {
         health: "healthy",
         exit_code: 0,
         ports: [{ target: 3000, published: 3000, protocol: "tcp" }],
+        job: false,
+        readiness: "ready",
       },
-      { service: "db", container: "shop-api-db-1", state: "running", health: "", exit_code: 0, ports: [{ target: 5432, published: 5432, protocol: "tcp" }] },
-      { service: "worker", container: "shop-api-worker-1", state: "exited", health: "", exit_code: 1, ports: [] },
+      {
+        service: "db",
+        container: "shop-api-db-1",
+        state: "running",
+        health: "",
+        exit_code: 0,
+        ports: [{ target: 5432, published: 5432, protocol: "tcp" }],
+        job: false,
+        readiness: "ready",
+      },
+      { service: "migrate", container: "shop-api-migrate-1", state: "exited", health: "", exit_code: 0, ports: [], job: true, readiness: "done" },
+      { service: "worker", container: "shop-api-worker-1", state: "exited", health: "", exit_code: 1, ports: [], job: false, readiness: "stopped" },
     ],
   },
 };
@@ -342,13 +356,21 @@ const mockContainers: Record<
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function publish(stackId: string, change: Partial<StackStatus>) {
-  const base: StackStatus = statuses[stackId] ?? { phase: "idle", services: [], message: null, synced_at_ms: null, synced_files: 0, known: false };
+  const base: StackStatus = statuses[stackId] ?? {
+    phase: "idle",
+    services: [],
+    error: null,
+    sync_warning: null,
+    synced_at_ms: null,
+    synced_files: 0,
+    known: false,
+  };
   statuses[stackId] = { ...base, ...change };
   handlers?.onStackStatus({ stack_id: stackId, status: statuses[stackId] });
 }
 
 async function pretendUp(stack: Stack) {
-  publish(stack.id, { phase: "syncing", message: null });
+  publish(stack.id, { phase: "syncing", error: null });
   for (const file of ["docker-compose.yml", "html/index.html", ".env"]) {
     await wait(250);
     handlers?.onStackOutput({ stack_id: stack.id, lines: [{ stream: "stdout", text: `>f+++++++++ ${file}` }] });
@@ -363,28 +385,32 @@ async function pretendUp(stack: Stack) {
     await wait(400);
     handlers?.onStackOutput({ stack_id: stack.id, lines: [{ stream: "stderr", text: line }] });
   }
-  publish(stack.id, {
-    phase: "running",
-    known: true,
-    services: [
-      {
-        service: "echo",
-        container: `${stack.name}-echo-1`,
-        state: "running",
-        health: "",
-        exit_code: 0,
-        ports: [{ target: 5678, published: 8088, protocol: "tcp" }],
-      },
-      {
-        service: "web",
-        container: `${stack.name}-web-1`,
-        state: "running",
-        health: "",
-        exit_code: 0,
-        ports: [{ target: 80, published: 8087, protocol: "tcp" }],
-      },
-    ],
-  });
+  // Up first, then ready once web's health check passes, as Compose reports it.
+  const services = (webHealth: string): ServiceState[] => [
+    {
+      service: "echo",
+      container: `${stack.name}-echo-1`,
+      state: "running",
+      health: "",
+      exit_code: 0,
+      ports: [{ target: 5678, published: 8088, protocol: "tcp" }],
+      job: false,
+      readiness: "ready",
+    },
+    {
+      service: "web",
+      container: `${stack.name}-web-1`,
+      state: "running",
+      health: webHealth,
+      exit_code: 0,
+      ports: [{ target: 80, published: 8087, protocol: "tcp" }],
+      job: false,
+      readiness: webHealth === "healthy" ? "ready" : "starting",
+    },
+  ];
+  publish(stack.id, { phase: "waiting", known: true, services: services("starting") });
+  await wait(1500);
+  publish(stack.id, { phase: "running", services: services("healthy") });
   await wait(600);
   const local = (published: number) => stack.port_overrides[String(published)] ?? published;
   forwards[stack.id] = {
@@ -615,7 +641,8 @@ export const mockApi: Api = {
   stopStack: async (id) => {
     publish(id, { phase: "stopping" });
     await wait(800);
-    publish(id, { phase: "stopped", services: (statuses[id]?.services ?? []).map((s) => ({ ...s, state: "exited" })) });
+    const stopped = (statuses[id]?.services ?? []).map((s) => ({ ...s, state: "exited", health: "", readiness: "stopped" as const }));
+    publish(id, { phase: "stopped", services: stopped });
   },
   downStack: async (id) => {
     publish(id, { phase: "stopping" });
@@ -745,7 +772,7 @@ export const mockApi: Api = {
         stacks.push(record);
       }
       const card = record;
-      publish(card.id, { phase: "migrating", message: "copying the project folder" });
+      publish(card.id, { phase: "migrating", error: null });
       pretendCopy(card.id, request.name, "this computer", machines.find((m) => m.id === machineId)?.name ?? "machine", request.destination, request.data);
       window.setTimeout(() => void pretendUp(card), 9000);
       return { stacks: [...stacks], card_id: card.id };

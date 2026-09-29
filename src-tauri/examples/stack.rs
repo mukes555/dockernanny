@@ -9,7 +9,7 @@ use dockernanny_lib::compose;
 use dockernanny_lib::job::Line;
 use dockernanny_lib::machine::Machine;
 use dockernanny_lib::ssh::Ssh;
-use dockernanny_lib::stack::{shell_quote, Stack};
+use dockernanny_lib::stack::{down_args, shell_quote, up_args, Stack};
 use dockernanny_lib::{store, sync};
 
 fn print(line: Line) {
@@ -69,17 +69,17 @@ async fn main() -> anyhow::Result<()> {
     println!("  remote folder: {}", listing.stdout.replace('\n', " "));
 
     println!("== up");
-    let code = ssh.job(&alias, &stack.compose_cmd("up -d --build --remove-orphans"), print)?.wait().await?;
+    let code = ssh.job(&alias, &stack.compose_cmd(up_args(true)), print)?.wait().await?;
     println!("  exit {code:?}");
 
     println!("== ps");
     let out = ssh.run(&alias, &stack.compose_cmd("ps --all --format json")).await?;
     for service in compose::parse_ps(&out.stdout) {
-        println!("  {} {} {:?}", service.service, service.state, service.ports);
+        println!("  {} {} {:?} {:?}", service.service, service.state, service.readiness, service.ports);
     }
 
     println!("== down + remove");
-    let code = ssh.job(&alias, &stack.compose_cmd("down --remove-orphans"), print)?.wait().await?;
+    let code = ssh.job(&alias, &stack.compose_cmd(down_args(false)), print)?.wait().await?;
     println!("  exit {code:?}");
     let removed = ssh.run(&alias, &format!("rm -rf {}", shell_quote(&stack.remote_dir()))).await?;
     println!("  rm exit {:?}", removed.code);

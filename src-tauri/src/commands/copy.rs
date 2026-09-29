@@ -8,7 +8,7 @@ use crate::copy::endpoint::Site;
 use crate::copy::local::LocalProject;
 use crate::copy::progress::{CopyProgress, Publish, Tracker};
 use crate::copy::{self, CopyPlan, CopyRequest, EndpointRef, Report, Sides, Sink};
-use crate::stack::{self, Phase, Stack};
+use crate::stack::{self, Phase, Stack, Ticket};
 use crate::{compose, sync, AppState};
 
 type CmdResult<T> = Result<T, String>;
@@ -49,14 +49,17 @@ pub async fn copy_plan(state: State<'_, AppState>, request: CopyRequest) -> CmdR
 #[tauri::command]
 pub async fn copy_stack(app: AppHandle, state: State<'_, AppState>, request: CopyRequest) -> CmdResult<CopyStarted> {
     let resolved = resolve(&state, &request)?;
+    let Some(card) = resolved.card.clone() else {
+        return Err("nothing to show the progress on".into());
+    };
+    // The card is the copy's until it is done: a running Start or Stop ends,
+    // and a second copy of the same stack is refused.
+    let ticket = Ticket::begin_copy(&app, &card.id).map_err(|err| format!("{err:#}"))?;
     if let Some(record) = &resolved.new_record {
         let mut stacks = state.store.stacks();
         stacks.push(record.clone());
         state.store.save_stacks(stacks).map_err(|err| format!("{err:#}"))?;
     }
-    let Some(card) = resolved.card.clone() else {
-        return Err("nothing to show the progress on".into());
-    };
     if card.live_sync {
         stack::stop_watcher(&app, &card.id);
     }
@@ -70,31 +73,26 @@ pub async fn copy_stack(app: AppHandle, state: State<'_, AppState>, request: Cop
         let sink_app = app.clone();
         let sink_id = card.id.clone();
         let make_sink = move || -> Sink { Box::new(stack::output_sink(&sink_app, &sink_id)) };
-        let status_app = app.clone();
-        let status_id = card.id.clone();
-        let status = move |phase: Phase, message: &str| {
-            stack::set_status(&status_app, &status_id, |s| {
-                s.phase = phase;
-                s.message = Some(message.to_string());
-            });
+        ticket.set_status(|s| s.error = None);
+        let copied = {
+            // The card shows the phase; the step names and the outcome are the progress panel's.
+            let status = |phase: Phase, _step: &str| ticket.set_status(|s| s.phase = phase);
+            let report = Report { make_sink: &make_sink, status: &status, progress };
+            copy::run(&state.ssh, &home, &sides, &request, &report).await
         };
-        let report = Report { make_sink: &make_sink, status: &status, progress };
-        match copy::run(&state.ssh, &home, &sides, &request, &report).await {
-            Ok(outcome) => stack::set_status(&app, &card.id, |s| {
+        match copied {
+            Ok(outcome) => ticket.set_status(|s| {
                 if let Some(mirrored) = &outcome.mirrored {
                     s.synced_at_ms = Some(stack::now_ms());
                     s.synced_files = mirrored.files;
                 }
-                s.message = Some(outcome.summary.text(&sides.to));
             }),
             Err(err) => {
                 tracing::warn!("copy failed: {err:#}");
-                stack::set_status(&app, &card.id, |s| {
-                    s.phase = Phase::Error;
-                    s.message = Some(format!("copy failed: {err:#}"));
-                });
+                ticket.set_status(|s| s.error = Some(format!("copy failed: {err:#}")));
             }
         }
+        drop(ticket);
         stack::refresh_now(&app, &card).await;
         if card.live_sync {
             stack::start_watcher(&app, &card);

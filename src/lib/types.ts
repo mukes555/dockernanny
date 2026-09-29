@@ -229,7 +229,11 @@ export interface CopyPlan {
   warnings: string[];
 }
 
-export type Phase = "idle" | "syncing" | "migrating" | "starting" | "running" | "partial" | "stopped" | "stopping" | "error";
+/** "waiting": up, while a health check has not passed yet. */
+export type Phase = "idle" | "syncing" | "migrating" | "starting" | "waiting" | "running" | "partial" | "stopped" | "stopping";
+
+/** Docker Compose's own judgement of one container (see compose/ps.rs). */
+export type Readiness = "ready" | "starting" | "done" | "unhealthy" | "stopped";
 
 export interface ServiceState {
   service: string;
@@ -238,12 +242,18 @@ export interface ServiceState {
   health: string;
   exit_code: number;
   ports: Port[];
+  /** Another service waits for this one to finish: a one-shot job. */
+  job: boolean;
+  readiness: Readiness;
 }
 
 export interface StackStatus {
   phase: Phase;
   services: ServiceState[];
-  message: string | null;
+  /** Why the last operation failed; cleared when the next one starts. */
+  error: string | null;
+  /** What the last folder sync could not do. */
+  sync_warning: string | null;
   synced_at_ms: number | null;
   synced_files: number;
   known: boolean;

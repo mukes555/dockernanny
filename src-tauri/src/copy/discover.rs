@@ -90,9 +90,7 @@ pub async fn volume_sizes(ssh: &Ssh, endpoint: &Endpoint) -> HashMap<String, Str
 
 /// One entry per service that has a container, in service order.
 pub async fn container_data(ssh: &Ssh, site: &Site) -> anyhow::Result<Vec<ContainerData>> {
-    let out = site.compose_output(ssh, "ps -a --format json").await?;
-    anyhow::ensure!(out.ok(), "docker compose ps failed on {}: {}", site.label, out.stderr);
-    let services = compose::parse_ps(&out.stdout);
+    let services = site.services(ssh).await?;
     let sizes = volume_sizes(ssh, &site.endpoint).await;
 
     let mut result = Vec::new();
