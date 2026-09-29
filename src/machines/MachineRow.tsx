@@ -10,7 +10,19 @@ import { cx } from "../ui/primitives";
 
 /** One machine in the sidebar: whether it answers and one line on how it is
  * doing. Clicking it opens the machine's page; its menu shows on hover. */
-export function MachineRow({ machine, stats, stackCount, selected, onSelect }: { machine: Machine; stats?: MachineStats; stackCount: number; selected: boolean; onSelect: () => void }) {
+export function MachineRow({
+  machine,
+  stats,
+  stackCount,
+  selected,
+  onSelect,
+}: {
+  machine: Machine;
+  stats?: MachineStats;
+  stackCount: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   const online = stats?.online ?? false;
   const summary = summaryOf(stats, stackCount);
   const browse = useBrowse();
@@ -32,7 +44,10 @@ export function MachineRow({ machine, stats, stackCount, selected, onSelect }: {
         onClick={onSelect}
         aria-current={selected ? "page" : undefined}
         title={`${machine.user}@${machine.host}:${machine.port}${stats?.error ? `\n${stats.error}` : ""}`}
-        className={cx("flex w-full items-center gap-2.5 rounded-lg py-1.5 pr-8 pl-2.5 text-left transition", selected ? "bg-accent-soft" : "hover:bg-surface-2")}
+        className={cx(
+          "flex w-full items-center gap-2.5 rounded-lg py-1.5 pr-8 pl-2.5 text-left transition",
+          selected ? "bg-accent-soft" : "hover:bg-surface-2",
+        )}
       >
         <span className={cx("relative shrink-0", selected ? "text-ink" : "text-ink-3")}>
           <OsGlyph os={stats?.os} size={16} />
@@ -52,7 +67,11 @@ export function MachineRow({ machine, stats, stackCount, selected, onSelect }: {
         </span>
       </button>
       {/* Hidden until the row is hovered, the button has focus or its menu is open, so the list stays calm. */}
-      <Menu label={`${machine.name} menu`} className="absolute top-2 right-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100" width="w-48">
+      <Menu
+        label={`${machine.name} menu`}
+        className="absolute top-2 right-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100"
+        width="w-48"
+      >
         <MenuItem onClick={() => ask("check")}>Check connection</MenuItem>
         <MenuItem onClick={() => ask("terminal")}>Use from a terminal…</MenuItem>
         <MenuSeparator />

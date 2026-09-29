@@ -80,7 +80,13 @@ export function CopySheet() {
       setProject(null);
       setName("");
       setFolder("");
-      setDestination(intent.destinationMachineId ? { kind: "machine", machine_id: intent.destinationMachineId } : (machines[0] ? { kind: "machine", machine_id: machines[0].id } : null));
+      setDestination(
+        intent.destinationMachineId
+          ? { kind: "machine", machine_id: intent.destinationMachineId }
+          : machines[0]
+            ? { kind: "machine", machine_id: machines[0].id }
+            : null,
+      );
     }
     setProjects(null);
     api
@@ -193,7 +199,9 @@ export function CopySheet() {
 
   return (
     <Dialog open onClose={close} eyebrow="Copy" title="Copy a stack" width={720} closeOnBackdrop={false}>
-      <p className="mt-1 text-[13px] text-ink-2">Config is the project folder; data is the volumes and what the containers keep inside. Nothing at the source is deleted.</p>
+      <p className="mt-1 text-[13px] text-ink-2">
+        Config is the project folder; data is the volumes and what the containers keep inside. Nothing at the source is deleted.
+      </p>
 
       {sourceName && destination ? (
         <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface-2/50 px-3 py-2 text-[12px]">
@@ -211,7 +219,18 @@ export function CopySheet() {
       ) : null}
 
       <Section step="1" title="From">
-        <EndpointPills chosen={source} machines={machines} online={isOnline} exclude={null} onPick={(ref) => { setSource(ref); setProject(null); setStackId(null); setPlan(null); }} />
+        <EndpointPills
+          chosen={source}
+          machines={machines}
+          online={isOnline}
+          exclude={null}
+          onPick={(ref) => {
+            setSource(ref);
+            setProject(null);
+            setStackId(null);
+            setPlan(null);
+          }}
+        />
         {source.kind === "this_computer" ? (
           projects === null ? (
             <div className="mt-2 flex items-center gap-2 text-[12px] text-ink-3">
@@ -222,22 +241,57 @@ export function CopySheet() {
           ) : (
             <div className="mt-2 space-y-1.5">
               {projects.map((p) => (
-                <PickRow key={p.name} selected={project?.name === p.name} onClick={() => { setProject(p); if (!name || name === project?.name) setName(p.name); }} title={p.name} subtitle={p.project_dir} chip={p.status} good={p.status.startsWith("running")} extra={`${p.volumes.length === 1 ? "1 volume" : `${p.volumes.length} volumes`} · ${p.ports.length === 1 ? "1 port" : `${p.ports.length} ports`}`} />
+                <PickRow
+                  key={p.name}
+                  selected={project?.name === p.name}
+                  onClick={() => {
+                    setProject(p);
+                    if (!name || name === project?.name) setName(p.name);
+                  }}
+                  title={p.name}
+                  subtitle={p.project_dir}
+                  chip={p.status}
+                  good={p.status.startsWith("running")}
+                  extra={`${p.volumes.length === 1 ? "1 volume" : `${p.volumes.length} volumes`} · ${p.ports.length === 1 ? "1 port" : `${p.ports.length} ports`}`}
+                />
               ))}
             </div>
           )
         ) : (
           <div className="mt-2 space-y-1.5">
-            {stacks.filter((s) => source.kind === "machine" && s.machine_id === source.machine_id).map((s) => (
-              <PickRow key={s.id} selected={stackId === s.id} onClick={() => { setStackId(s.id); if (!name || name === sourceStack?.name) setName(s.name); setFolder(s.project_dir); }} title={s.name} subtitle={s.project_dir} />
-            ))}
-            {stacks.every((s) => source.kind !== "machine" || s.machine_id !== source.machine_id) ? <div className="text-[12px] text-ink-3">No stacks on that machine yet.</div> : null}
+            {stacks
+              .filter((s) => source.kind === "machine" && s.machine_id === source.machine_id)
+              .map((s) => (
+                <PickRow
+                  key={s.id}
+                  selected={stackId === s.id}
+                  onClick={() => {
+                    setStackId(s.id);
+                    if (!name || name === sourceStack?.name) setName(s.name);
+                    setFolder(s.project_dir);
+                  }}
+                  title={s.name}
+                  subtitle={s.project_dir}
+                />
+              ))}
+            {stacks.every((s) => source.kind !== "machine" || s.machine_id !== source.machine_id) ? (
+              <div className="text-[12px] text-ink-3">No stacks on that machine yet.</div>
+            ) : null}
           </div>
         )}
       </Section>
 
       <Section step="2" title="To">
-        <EndpointPills chosen={destination} machines={machines} online={isOnline} exclude={source} onPick={(ref) => { setDestination(ref); setPlan(null); }} />
+        <EndpointPills
+          chosen={destination}
+          machines={machines}
+          online={isOnline}
+          exclude={source}
+          onPick={(ref) => {
+            setDestination(ref);
+            setPlan(null);
+          }}
+        />
         <div className="mt-3 grid grid-cols-2 gap-3">
           <Field label="Name at the destination">
             <TextInput value={name} onChange={(e) => setName(e.target.value)} />
@@ -252,7 +306,8 @@ export function CopySheet() {
           <div className="mt-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] leading-relaxed text-warning">
             {destination?.kind === "this_computer" ? (
               <>
-                <span className="mono">{folder}</span> already has this project. Its files are replaced by the ones from {machineName(source!)}, files that exist only here are deleted (excluded folders like .git and node_modules stay), and its data is replaced. Choose another folder to keep both.
+                <span className="mono">{folder}</span> already has this project. Its files are replaced by the ones from {machineName(source!)}, files that
+                exist only here are deleted (excluded folders like .git and node_modules stay), and its data is replaced. Choose another folder to keep both.
               </>
             ) : (
               <>
@@ -286,18 +341,27 @@ export function CopySheet() {
             />
           </div>
         ) : null}
-        {plan?.images.length ? <div className="mt-2 text-[12px] text-ink-2">Images that only exist at the source are sent along: {plan.images.join(", ")}.</div> : null}
+        {plan?.images.length ? (
+          <div className="mt-2 text-[12px] text-ink-2">Images that only exist at the source are sent along: {plan.images.join(", ")}.</div>
+        ) : null}
 
         <div className="mt-3 space-y-1 text-[12px]">
           <div className="text-[10px] uppercase tracking-[0.12em] text-ink-3">The source during the copy</div>
-          <Radio value="stop" mode={mode} onChange={setMode} label={`Stop it for the data copy, then start it again${plan && !plan.source_running ? " (it is not running now)" : ""}`} />
+          <Radio
+            value="stop"
+            mode={mode}
+            onChange={setMode}
+            label={`Stop it for the data copy, then start it again${plan && !plan.source_running ? " (it is not running now)" : ""}`}
+          />
           <Radio value="leave" mode={mode} onChange={setMode} label="Stop it and leave it stopped: a move, which also frees its ports" />
           <Radio value="keep" mode={mode} onChange={setMode} label="Keep it running: fast, but a database copied while it writes may be inconsistent" />
         </div>
 
         {toMachine && plan && plan.ports.length > 0 ? (
           <div className="mt-3 rounded-xl border border-line">
-            <div className="border-b border-line bg-surface-2 px-3 py-1.5 text-[10px] uppercase tracking-[0.12em] text-ink-3">Ports on this computer afterwards</div>
+            <div className="border-b border-line bg-surface-2 px-3 py-1.5 text-[10px] uppercase tracking-[0.12em] text-ink-3">
+              Ports on this computer afterwards
+            </div>
             {plan.ports.map((port) => {
               const local = localFor(port);
               const taken = mode !== "leave" && busy.includes(local);
@@ -313,7 +377,11 @@ export function CopySheet() {
                     onChange={(e) => setOverrides({ ...overrides, [port]: Number(e.target.value.replace(/\D/g, "")) || port })}
                   />
                   {taken ? (
-                    <button type="button" className="whitespace-nowrap text-[11px] text-warning underline-offset-2 hover:underline" onClick={() => setOverrides({ ...overrides, [port]: port + 1000 })}>
+                    <button
+                      type="button"
+                      className="whitespace-nowrap text-[11px] text-warning underline-offset-2 hover:underline"
+                      onClick={() => setOverrides({ ...overrides, [port]: port + 1000 })}
+                    >
                       in use on this computer, try {port + 1000}
                     </button>
                   ) : null}
@@ -336,7 +404,13 @@ export function CopySheet() {
         <Button tone="ghost" onClick={close}>
           Cancel
         </Button>
-        <Button tone="primary" onClick={() => void copy()} busy={working} disabled={planning || !plan || !request() || blocked || (!config && !data)} title={blocked ? "Pick other local ports or leave the source stopped" : undefined}>
+        <Button
+          tone="primary"
+          onClick={() => void copy()}
+          busy={working}
+          disabled={planning || !plan || !request() || blocked || (!config && !data)}
+          title={blocked ? "Pick other local ports or leave the source stopped" : undefined}
+        >
           Copy to {destination ? machineName(destination) : "…"}
         </Button>
       </DialogActions>
@@ -358,7 +432,19 @@ function Section({ step, title, children }: { step: string; title: string; child
 
 /** This computer and every machine; an offline machine is shown but cannot
  * be picked, so it does not look forgotten. */
-function EndpointPills({ chosen, machines, online, exclude, onPick }: { chosen: EndpointRef | null; machines: Array<{ id: string; name: string }>; online: (id: string) => boolean; exclude: EndpointRef | null; onPick: (ref: EndpointRef) => void }) {
+function EndpointPills({
+  chosen,
+  machines,
+  online,
+  exclude,
+  onPick,
+}: {
+  chosen: EndpointRef | null;
+  machines: Array<{ id: string; name: string }>;
+  online: (id: string) => boolean;
+  exclude: EndpointRef | null;
+  onPick: (ref: EndpointRef) => void;
+}) {
   const options: Array<{ ref: EndpointRef; label: string; offline: boolean }> = [
     { ref: { kind: "this_computer" }, label: "This computer", offline: false },
     ...machines.map((m) => ({ ref: { kind: "machine", machine_id: m.id } as EndpointRef, label: m.name, offline: !online(m.id) })),
@@ -376,7 +462,11 @@ function EndpointPills({ chosen, machines, online, exclude, onPick }: { chosen: 
             disabled={unavailable}
             onClick={() => onPick(option.ref)}
             title={option.offline ? `${option.label} does not answer right now` : undefined}
-            className={cx("rounded-full border px-3 py-1 text-[12px] transition", selected ? "border-accent bg-accent-soft text-ink" : "border-line text-ink-2 hover:text-ink", unavailable && "opacity-40")}
+            className={cx(
+              "rounded-full border px-3 py-1 text-[12px] transition",
+              selected ? "border-accent bg-accent-soft text-ink" : "border-line text-ink-2 hover:text-ink",
+              unavailable && "opacity-40",
+            )}
           >
             {option.label}
             {option.offline ? " (offline)" : ""}
@@ -387,9 +477,32 @@ function EndpointPills({ chosen, machines, online, exclude, onPick }: { chosen: 
   );
 }
 
-function PickRow({ selected, onClick, title, subtitle, chip, good, extra }: { selected: boolean; onClick: () => void; title: string; subtitle: string; chip?: string; good?: boolean; extra?: string }) {
+function PickRow({
+  selected,
+  onClick,
+  title,
+  subtitle,
+  chip,
+  good,
+  extra,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  title: string;
+  subtitle: string;
+  chip?: string;
+  good?: boolean;
+  extra?: string;
+}) {
   return (
-    <button type="button" onClick={onClick} className={cx("flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition", selected ? "border-accent bg-accent-soft" : "border-line hover:bg-surface-2")}>
+    <button
+      type="button"
+      onClick={onClick}
+      className={cx(
+        "flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition",
+        selected ? "border-accent bg-accent-soft" : "border-line hover:bg-surface-2",
+      )}
+    >
       <div className="min-w-0">
         <div className="text-[13px] font-medium text-ink">{title}</div>
         <div className="mono truncate text-[11px] text-ink-3">{subtitle}</div>

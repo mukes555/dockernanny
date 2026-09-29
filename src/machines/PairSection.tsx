@@ -45,13 +45,21 @@ export function PairSection({ keyPath, onPaired }: { keyPath: string; onPaired: 
   return (
     <div className="rounded-xl border border-accent/40 bg-accent-soft/40 p-4">
       <div className="text-[13px] font-medium text-ink">Machine showing a pairing code</div>
-      <p className="mt-1 text-[12px] text-ink-2">Type the address and the six digit code from the machine's sharing page. The user, port and host key come from the machine; nothing else to fill in.</p>
+      <p className="mt-1 text-[12px] text-ink-2">
+        Type the address and the six digit code from the machine's sharing page. The user, port and host key come from the machine; nothing else to fill in.
+      </p>
       <div className="mt-3 grid grid-cols-3 gap-3">
         <Field label="Address">
           <TextInput value={address} onChange={(e) => setAddress(e.target.value)} placeholder="192.0.2.15" autoFocus />
         </Field>
         <Field label="Code">
-          <TextInput value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" inputMode="numeric" className="tabular" />
+          <TextInput
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+            placeholder="000000"
+            inputMode="numeric"
+            className="tabular"
+          />
         </Field>
         <Field label="Name" hint="Optional">
           <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="workshop" />

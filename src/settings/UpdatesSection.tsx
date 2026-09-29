@@ -55,7 +55,9 @@ export function UpdatesSection({ draft, commit }: SectionProps) {
         </div>
         <div className="mt-4 border-t border-line pt-4">
           <Toggle checked={draft.check_updates} onChange={(on) => commit({ check_updates: on })} label="Check automatically at start and every hour" />
-          <p className="mt-1.5 text-[12px] text-ink-3">Only the version file of the latest GitHub release is fetched; nothing is installed until you choose to.</p>
+          <p className="mt-1.5 text-[12px] text-ink-3">
+            Only the version file of the latest GitHub release is fetched; nothing is installed until you choose to.
+          </p>
         </div>
       </Card>
       {update ? <UpdateReady update={update} /> : null}
@@ -83,7 +85,19 @@ function StatusLine(props: { checking: boolean; error: string | null; status: Up
 }
 
 /** The most useful thing to say, in this order: working, failed now, found, the last answer. */
-function answerOf({ checking, error, status, update, automatic }: { checking: boolean; error: string | null; status: UpdateStatus | null; update: AvailableUpdate | null; automatic: boolean }): Answer {
+function answerOf({
+  checking,
+  error,
+  status,
+  update,
+  automatic,
+}: {
+  checking: boolean;
+  error: string | null;
+  status: UpdateStatus | null;
+  update: AvailableUpdate | null;
+  automatic: boolean;
+}): Answer {
   if (checking) return { text: "Checking GitHub for a new version…", tone: "text-ink-3" };
   if (error) return { text: error, tone: "text-critical" };
   if (update) return { text: `Version ${update.version} is available`, tone: "text-accent" };
@@ -122,15 +136,27 @@ function UpdateReady({ update }: { update: AvailableUpdate }) {
 
   return (
     <Card title={`What's new in ${update.version}`}>
-      {update.notes ? <pre className="selectable max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-plane/60 px-3 py-2 font-sans text-[12px] leading-relaxed text-ink-2">{update.notes}</pre> : null}
+      {update.notes ? (
+        <pre className="selectable max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-plane/60 px-3 py-2 font-sans text-[12px] leading-relaxed text-ink-2">
+          {update.notes}
+        </pre>
+      ) : null}
       <p className="mt-3 text-[12px] leading-relaxed text-ink-2">
-        Installing restarts dockerNanny. Stacks keep running on their machines; their ports on localhost come back a few seconds after the restart, and sharing pauses for the same moment.
+        Installing restarts dockerNanny. Stacks keep running on their machines; their ports on localhost come back a few seconds after the restart, and sharing
+        pauses for the same moment.
         {os === "windows" ? " Windows shows a small progress window while it installs." : ""}
       </p>
       {working ? (
         <div className="mt-3">
           <div className="text-[12px] text-ink-2">{percent === null ? "Downloading…" : percent < 100 ? `Downloading, ${percent}%` : "Installing…"}</div>
-          <div role="progressbar" aria-label="Update download" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined} className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-hairline">
+          <div
+            role="progressbar"
+            aria-label="Update download"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent ?? undefined}
+            className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-hairline"
+          >
             <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${percent ?? 15}%` }} />
           </div>
         </div>

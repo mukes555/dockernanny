@@ -6,7 +6,21 @@ import { cx } from "./primitives";
  * page scrolls, with the page's name, one line about it, its actions and,
  * for pages with several parts, tabs. The header doubles as the window's
  * drag area, because the macOS title bar is drawn over the app. */
-export function Page({ title, summary, actions, tabs, width = "max-w-5xl", children }: { title: ReactNode; summary?: ReactNode; actions?: ReactNode; tabs?: ReactNode; width?: string; children: ReactNode }) {
+export function Page({
+  title,
+  summary,
+  actions,
+  tabs,
+  width = "max-w-5xl",
+  children,
+}: {
+  title: ReactNode;
+  summary?: ReactNode;
+  actions?: ReactNode;
+  tabs?: ReactNode;
+  width?: string;
+  children: ReactNode;
+}) {
   return (
     <div className="min-h-full">
       <header data-tauri-drag-region className="sticky top-0 z-10 border-b border-line bg-plane/90 backdrop-blur-md">
@@ -51,7 +65,10 @@ export function Tabs<Id extends string>({ tabs, value, onChange }: { tabs: TabIt
             role="tab"
             aria-selected={selected}
             onClick={() => onChange(tab.id)}
-            className={cx("border-b-2 pt-1 pb-2.5 text-[13px] font-medium transition", selected ? "border-accent text-ink" : "border-transparent text-ink-3 hover:text-ink")}
+            className={cx(
+              "border-b-2 pt-1 pb-2.5 text-[13px] font-medium transition",
+              selected ? "border-accent text-ink" : "border-transparent text-ink-3 hover:text-ink",
+            )}
           >
             {tab.label}
             {tab.count !== undefined ? <span className="tabular ml-1.5 text-ink-3">{tab.count}</span> : null}

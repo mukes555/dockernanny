@@ -147,7 +147,9 @@ export function MachinePage({ machine }: { machine: Machine }) {
       {removing ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-critical/40 bg-surface-2 px-4 py-3 text-[12px]">
           <span className="text-ink">
-            Remove {machine.name} from this computer? {stacks.length === 1 ? "Its stack is forgotten here and its ports" : `Its ${stacks.length} stacks are forgotten here and their ports`} on localhost close. What runs on the machine stays as it is.
+            Remove {machine.name} from this computer?{" "}
+            {stacks.length === 1 ? "Its stack is forgotten here and its ports" : `Its ${stacks.length} stacks are forgotten here and their ports`} on localhost
+            close. What runs on the machine stays as it is.
           </span>
           <div className="flex gap-2">
             <Button size="sm" tone="ghost" onClick={() => setRemoving(false)}>

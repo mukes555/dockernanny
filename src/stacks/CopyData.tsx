@@ -36,7 +36,19 @@ export function keepOffered(ticked: Set<string>, data: ContainerData[]): Set<str
 /** The box that lists everything a data copy carries: the named volumes,
  * and per container the data the image keeps for itself or the container
  * wrote into its own layer. */
-export function CopyData({ volumes, containers, loading, selected, onToggle }: { volumes: VolumePlan[]; containers: ContainerData[]; loading: boolean; selected: Set<string>; onToggle: (key: string, on: boolean) => void }) {
+export function CopyData({
+  volumes,
+  containers,
+  loading,
+  selected,
+  onToggle,
+}: {
+  volumes: VolumePlan[];
+  containers: ContainerData[];
+  loading: boolean;
+  selected: Set<string>;
+  onToggle: (key: string, on: boolean) => void;
+}) {
   const withData = containers.filter((c) => c.anonymous_volumes.length > 0 || c.changed_paths.length > 0);
   return (
     <div className="rounded-xl border border-line">
@@ -86,7 +98,19 @@ export function CopyData({ volumes, containers, loading, selected, onToggle }: {
   );
 }
 
-function Row({ checked, onChange, service, path, detail }: { checked: boolean; onChange: (on: boolean) => void; service: string; path: string; detail: string }) {
+function Row({
+  checked,
+  onChange,
+  service,
+  path,
+  detail,
+}: {
+  checked: boolean;
+  onChange: (on: boolean) => void;
+  service: string;
+  path: string;
+  detail: string;
+}) {
   return (
     <label className={cx("flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-[12px] hover:bg-surface-2/60", checked ? "text-ink" : "text-ink-2")}>
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="accent-accent" />

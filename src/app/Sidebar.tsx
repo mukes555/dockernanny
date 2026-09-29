@@ -52,8 +52,24 @@ export function Sidebar() {
       </div>
 
       <nav aria-label="Pages" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2 pb-3">
-        <NavItem icon={<StacksIcon size={16} />} label="Stacks" count={running} countTitle="stacks running" active={view === "stacks" && selectedMachineId === null} onClick={() => selectMachine(null)} />
-        {usesMachines ? <NavItem icon={<PlugIcon size={16} />} label="Ports" count={ports} countTitle="ports on localhost" active={view === "ports"} onClick={() => setView("ports")} /> : null}
+        <NavItem
+          icon={<StacksIcon size={16} />}
+          label="Stacks"
+          count={running}
+          countTitle="stacks running"
+          active={view === "stacks" && selectedMachineId === null}
+          onClick={() => selectMachine(null)}
+        />
+        {usesMachines ? (
+          <NavItem
+            icon={<PlugIcon size={16} />}
+            label="Ports"
+            count={ports}
+            countTitle="ports on localhost"
+            active={view === "ports"}
+            onClick={() => setView("ports")}
+          />
+        ) : null}
         {showActivity ? (
           <NavItem
             icon={copiesRunning > 0 ? <SpinnerIcon size={16} className="text-accent" /> : <ActivityIcon size={16} />}
@@ -77,7 +93,11 @@ export function Sidebar() {
 
       <footer className="shrink-0 space-y-0.5 border-t border-line p-2">
         {update ? (
-          <button type="button" onClick={() => openSettings("updates")} className="mb-1.5 w-full rounded-lg border border-accent/40 bg-accent-soft px-3 py-2 text-left transition hover:border-accent">
+          <button
+            type="button"
+            onClick={() => openSettings("updates")}
+            className="mb-1.5 w-full rounded-lg border border-accent/40 bg-accent-soft px-3 py-2 text-left transition hover:border-accent"
+          >
             <span className="block text-[12px] font-semibold text-accent">Version {update.version} is ready</span>
             <span className="block text-[11px] text-ink-2">See what's new and restart to update</span>
           </button>
@@ -136,14 +156,36 @@ function MachinesSection({ usesMachines, onAdd }: { usesMachines: boolean; onAdd
           onSelect={() => selectMachine(machine.id)}
         />
       ))}
-      {machines.length === 0 ? <p className="px-2.5 pb-1 text-[12px] leading-relaxed text-ink-3">No machines yet. Add the one that will run your stacks.</p> : null}
+      {machines.length === 0 ? (
+        <p className="px-2.5 pb-1 text-[12px] leading-relaxed text-ink-3">No machines yet. Add the one that will run your stacks.</p>
+      ) : null}
       <NavItem icon={<PlusIcon size={16} />} label="Add machine" onClick={onAdd} active={false} quiet />
       <NavItem icon={<BookIcon size={16} />} label="How to prepare one" onClick={() => setView("guide")} active={view === "guide"} quiet />
     </div>
   );
 }
 
-function NavItem({ icon, label, count, countTitle, trailing, title, active, quiet = false, onClick }: { icon: ReactNode; label: string; count?: number; countTitle?: string; trailing?: ReactNode; title?: string; active: boolean; quiet?: boolean; onClick: () => void }) {
+function NavItem({
+  icon,
+  label,
+  count,
+  countTitle,
+  trailing,
+  title,
+  active,
+  quiet = false,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  count?: number;
+  countTitle?: string;
+  trailing?: ReactNode;
+  title?: string;
+  active: boolean;
+  quiet?: boolean;
+  onClick: () => void;
+}) {
   const showCount = count !== undefined && count > 0;
   return (
     <button
@@ -153,7 +195,11 @@ function NavItem({ icon, label, count, countTitle, trailing, title, active, quie
       aria-current={active ? "page" : undefined}
       className={cx(
         "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition",
-        active ? "bg-accent-soft font-medium text-ink" : quiet ? "text-ink-3 hover:bg-surface-2 hover:text-ink" : "text-ink-2 hover:bg-surface-2 hover:text-ink",
+        active
+          ? "bg-accent-soft font-medium text-ink"
+          : quiet
+            ? "text-ink-3 hover:bg-surface-2 hover:text-ink"
+            : "text-ink-2 hover:bg-surface-2 hover:text-ink",
       )}
     >
       <span className={cx("flex w-4 shrink-0 justify-center", active ? "text-accent" : "text-ink-3")}>{icon}</span>

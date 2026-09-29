@@ -40,10 +40,17 @@ export function SharingSections() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-[15px] font-semibold text-ink">Let other computers run their stacks here</h2>
-          <p className="mt-1 text-[13px] leading-relaxed text-ink-2">Two steps: make this computer ready, then pair it with the computer that will use it. After that, that computer runs Docker stacks here by itself.</p>
+          <p className="mt-1 text-[13px] leading-relaxed text-ink-2">
+            Two steps: make this computer ready, then pair it with the computer that will use it. After that, that computer runs Docker stacks here by itself.
+          </p>
         </div>
         {settings?.share_this_computer ? (
-          <Button size="sm" className="shrink-0" onClick={() => run(() => saveSettings({ ...settings, share_this_computer: false }))} title="Stop sharing: the pairing port closes and nothing else is touched. Paired computers keep their keys and can be let back in by turning it on again.">
+          <Button
+            size="sm"
+            className="shrink-0"
+            onClick={() => run(() => saveSettings({ ...settings, share_this_computer: false }))}
+            title="Stop sharing: the pairing port closes and nothing else is touched. Paired computers keep their keys and can be let back in by turning it on again."
+          >
             Turn sharing off
           </Button>
         ) : null}
@@ -98,7 +105,9 @@ function StatusSection({ host, onError }: { host: HostSnapshot; onError: (messag
 
   const setup = () => {
     onError(null);
-    api.hostSetup({ memory_gb: memoryGb, make_network_private: makePrivate ? publicNetwork : null, keep_awake: isWindows && keepAwake }).catch((err) => onError(errorMessage(err)));
+    api
+      .hostSetup({ memory_gb: memoryGb, make_network_private: makePrivate ? publicNetwork : null, keep_awake: isWindows && keepAwake })
+      .catch((err) => onError(errorMessage(err)));
   };
 
   return (
@@ -116,7 +125,14 @@ function StatusSection({ host, onError }: { host: HostSnapshot; onError: (messag
       </div>
 
       {host.notice ? (
-        <div className={cx("mt-4 whitespace-pre-wrap rounded-lg px-3 py-2 text-[13px] font-medium", host.notice.failed ? "bg-critical/10 text-critical" : "bg-warning/10 text-warning")}>{host.notice.text}</div>
+        <div
+          className={cx(
+            "mt-4 whitespace-pre-wrap rounded-lg px-3 py-2 text-[13px] font-medium",
+            host.notice.failed ? "bg-critical/10 text-critical" : "bg-warning/10 text-warning",
+          )}
+        >
+          {host.notice.text}
+        </div>
       ) : null}
 
       {isWindows && host.total_memory_gb > 0 ? (
@@ -124,22 +140,50 @@ function StatusSection({ host, onError }: { host: HostSnapshot; onError: (messag
           <span>
             Docker may use up to {memoryGb} of this computer's {host.total_memory_gb} GB
           </span>
-          <input type="range" min={2} max={Math.max(2, host.total_memory_gb - 2)} value={memoryGb} onChange={(e) => setMemory(Number(e.target.value))} onPointerUp={saveMemory} onKeyUp={saveMemory} onBlur={saveMemory} className="accent-accent" />
+          <input
+            type="range"
+            min={2}
+            max={Math.max(2, host.total_memory_gb - 2)}
+            value={memoryGb}
+            onChange={(e) => setMemory(Number(e.target.value))}
+            onPointerUp={saveMemory}
+            onKeyUp={saveMemory}
+            onBlur={saveMemory}
+            className="accent-accent"
+          />
         </label>
       ) : null}
 
-      <SetupChanges os={os} open={!allOk} keepAwake={keepAwake} onKeepAwake={setKeepAwake} publicNetwork={publicNetwork} makePrivate={makePrivate} onMakePrivate={setMakePrivate} />
+      <SetupChanges
+        os={os}
+        open={!allOk}
+        keepAwake={keepAwake}
+        onKeepAwake={setKeepAwake}
+        publicNetwork={publicNetwork}
+        makePrivate={makePrivate}
+        onMakePrivate={setMakePrivate}
+      />
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <Button tone="primary" onClick={setup} busy={host.setup_running}>
           {allOk ? "Run set up again" : "Set up this computer"}
         </Button>
         {host.setup_running ? <span className="text-[13px] text-ink-2">Working. This can take a few minutes.</span> : null}
-        {settings ? <Toggle checked={settings.start_at_login} onChange={(on) => void saveSettings({ ...settings, start_at_login: on }).catch((err) => onError(errorMessage(err)))} label="Start at login" /> : null}
+        {settings ? (
+          <Toggle
+            checked={settings.start_at_login}
+            onChange={(on) => void saveSettings({ ...settings, start_at_login: on }).catch((err) => onError(errorMessage(err)))}
+            label="Start at login"
+          />
+        ) : null}
       </div>
 
       <p className="mt-3 text-[12px] text-ink-3">
-        {isWindows ? "Windows asks once for administrator permission. The app is not signed, so it says Unknown publisher; that is expected." : host.os === "macOS" ? "macOS asks for your password once, to turn Remote Login on." : "Anything that needs root is one script, shown here or run through your password prompt."}
+        {isWindows
+          ? "Windows asks once for administrator permission. The app is not signed, so it says Unknown publisher; that is expected."
+          : host.os === "macOS"
+            ? "macOS asks for your password once, to turn Remote Login on."
+            : "Anything that needs root is one script, shown here or run through your password prompt."}
       </p>
     </Card>
   );
@@ -183,7 +227,9 @@ function PairingSection({ host, onError }: { host: HostSnapshot; onError: (messa
               </div>
             </div>
           </div>
-          <p className="mt-4 text-[13px] text-ink-2">On the other computer open dockerNanny, click Add machine, and type this address and code in the top section. That is all.</p>
+          <p className="mt-4 text-[13px] text-ink-2">
+            On the other computer open dockerNanny, click Add machine, and type this address and code in the top section. That is all.
+          </p>
           <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3">
             <span>Pairing is on for another {minutes}.</span>
             <Button size="sm" onClick={() => call(api.hostDisarmPairing)}>
@@ -194,7 +240,9 @@ function PairingSection({ host, onError }: { host: HostSnapshot; onError: (messa
       ) : (
         <>
           <p className={cx("text-[13px]", pairing.locked ? "text-warning" : "text-ink-2")}>
-            {pairing.locked ? "Pairing is locked after too many wrong codes." : "Pairing is off. Turn it on when you are at the other computer and ready to type the code."}
+            {pairing.locked
+              ? "Pairing is locked after too many wrong codes."
+              : "Pairing is off. Turn it on when you are at the other computer and ready to type the code."}
           </p>
           <div className="mt-3">
             <Button tone="primary" onClick={() => call(api.hostArmPairing)}>
@@ -229,7 +277,9 @@ function UsersSection({ host }: { host: HostSnapshot }) {
       <div className="mt-4 text-[12px] font-semibold text-ink-2">Paired</div>
       {host.paired.length === 0 ? (
         <p className="mt-1 text-[13px] text-ink-2">
-          {host.ready_for_pairing ? "No computer has paired yet. Turn pairing on above and type the code on the other computer." : "No computer has paired yet. Pairing opens once step 1 is done."}
+          {host.ready_for_pairing
+            ? "No computer has paired yet. Turn pairing on above and type the code on the other computer."
+            : "No computer has paired yet. Pairing opens once step 1 is done."}
         </p>
       ) : null}
       <div className="mt-1 space-y-1">

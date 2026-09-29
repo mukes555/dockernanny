@@ -50,7 +50,14 @@ export function PortsPage() {
     // Nothing forwarded yet: still show what the stack would publish.
     for (const service of services) {
       for (const port of service.ports.filter((p) => p.protocol === "tcp")) {
-        rows.push({ local: stack.port_overrides[String(port.published)] ?? port.published, remote: port.published, stack, machine, service: service.service, bridge });
+        rows.push({
+          local: stack.port_overrides[String(port.published)] ?? port.published,
+          remote: port.published,
+          stack,
+          machine,
+          service: service.service,
+          bridge,
+        });
       }
     }
   }
@@ -83,9 +90,18 @@ export function PortsPage() {
   return (
     <Page
       title="Ports"
-      summary={rows.length === 0 ? "What localhost points at on this computer" : `${connectedCount} of ${rows.length} ${rows.length === 1 ? "port" : "ports"} connected to their machines`}
+      summary={
+        rows.length === 0
+          ? "What localhost points at on this computer"
+          : `${connectedCount} of ${rows.length} ${rows.length === 1 ? "port" : "ports"} connected to their machines`
+      }
       actions={
-        <Button onClick={() => void restartAll()} busy={working === "all"} disabled={working !== null || rows.length === 0} title="Drop every bridge and let the running stacks bring theirs back">
+        <Button
+          onClick={() => void restartAll()}
+          busy={working === "all"}
+          disabled={working !== null || rows.length === 0}
+          title="Drop every bridge and let the running stacks bring theirs back"
+        >
           <RefreshIcon /> Restart all bridges
         </Button>
       }
@@ -146,7 +162,11 @@ export function PortsPage() {
                           onClick={() => void flip(row.stack)}
                           busy={working === row.stack.id}
                           disabled={working !== null}
-                          title={row.stack.forward_ports ? `All of ${row.stack.name}'s ports close here; the stack keeps running` : `Bring ${row.stack.name}'s ports to localhost`}
+                          title={
+                            row.stack.forward_ports
+                              ? `All of ${row.stack.name}'s ports close here; the stack keeps running`
+                              : `Bring ${row.stack.name}'s ports to localhost`
+                          }
                         >
                           {row.stack.forward_ports ? "Stop bridge" : "Start bridge"}
                         </Button>

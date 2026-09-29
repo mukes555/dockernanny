@@ -32,7 +32,11 @@ export function HelpPage() {
   const reveal = (which: "folder" | "log") => void api.revealAppFile(which).catch((err) => setError(errorMessage(err)));
 
   return (
-    <Page title="Help" summary={`dockerNanny ${VERSION} for ${OS_NAMES[os]}: run Docker Compose stacks on other computers and use them on localhost here`} width="max-w-3xl">
+    <Page
+      title="Help"
+      summary={`dockerNanny ${VERSION} for ${OS_NAMES[os]}: run Docker Compose stacks on other computers and use them on localhost here`}
+      width="max-w-3xl"
+    >
       {error ? <div className="text-[12px] text-critical">{error}</div> : null}
 
       <Card title="Getting started" description="The three-step welcome, and how to get a machine ready by hand.">
@@ -100,7 +104,10 @@ function Diagnostics({ onOpenIssue, children }: { onOpenIssue: () => void; child
   };
 
   return (
-    <Card title="When something goes wrong" description="Copy a report to paste into an issue. Names, addresses, users and paths are replaced with placeholders before it is copied.">
+    <Card
+      title="When something goes wrong"
+      description="Copy a report to paste into an issue. Names, addresses, users and paths are replaced with placeholders before it is copied."
+    >
       <div className="flex flex-wrap gap-2">
         <Button tone="primary" onClick={() => void copy()} busy={busy}>
           Copy diagnostics
@@ -114,7 +121,9 @@ function Diagnostics({ onOpenIssue, children }: { onOpenIssue: () => void; child
       {report ? (
         <div className="mt-3">
           <div className="text-[12px] text-good">Copied. This is exactly what is on the clipboard:</div>
-          <pre className="mono selectable mt-2 max-h-64 overflow-auto rounded-lg border border-line bg-plane/60 px-3 py-2 text-[11px] leading-[1.6] text-ink-2">{report}</pre>
+          <pre className="mono selectable mt-2 max-h-64 overflow-auto rounded-lg border border-line bg-plane/60 px-3 py-2 text-[11px] leading-[1.6] text-ink-2">
+            {report}
+          </pre>
         </div>
       ) : null}
     </Card>

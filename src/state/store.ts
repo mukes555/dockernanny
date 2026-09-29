@@ -1,7 +1,25 @@
 import { create } from "zustand";
 
 import { api, errorMessage } from "../lib/ipc";
-import type { AvailableUpdate, ComputerInfo, CopyProgress, DoctorRow, Fetched, ForwardState, HostOs, HostSnapshot, Machine, MachineStats, OutputLine, Preview, Settings, Stack, StackStatus, Theme, UpdateStatus } from "../lib/types";
+import type {
+  AvailableUpdate,
+  ComputerInfo,
+  CopyProgress,
+  DoctorRow,
+  Fetched,
+  ForwardState,
+  HostOs,
+  HostSnapshot,
+  Machine,
+  MachineStats,
+  OutputLine,
+  Preview,
+  Settings,
+  Stack,
+  StackStatus,
+  Theme,
+  UpdateStatus,
+} from "../lib/types";
 
 /** The pages the sidebar leads to. A machine's page is "stacks" with a machine selected. */
 export type View = "stacks" | "ports" | "activity" | "computer" | "guide" | "settings" | "help";
@@ -327,7 +345,8 @@ export const useStore = create<State>((set, get) => ({
       const lines = [...state.containerLog, ...added];
       return { containerLog: lines.length > MAX_LOG_LINES ? lines.slice(lines.length - MAX_LOG_LINES) : lines };
     }),
-  openContainerLogs: (containerLogsFor) => set(containerLogsFor ? { containerLogsFor, containerLog: [], logsFor: null, progressFor: null } : { containerLogsFor: null, containerLog: [] }),
+  openContainerLogs: (containerLogsFor) =>
+    set(containerLogsFor ? { containerLogsFor, containerLog: [], logsFor: null, progressFor: null } : { containerLogsFor: null, containerLog: [] }),
   setDragging: (dragging) => set({ dragging }),
   setPreview: (preview) => set({ preview, dropError: null }),
   setDropError: (dropError) => set({ dropError }),

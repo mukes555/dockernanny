@@ -58,7 +58,8 @@ export function SetupChanges({
           </Choice>
           {publicNetwork ? (
             <Choice checked={makePrivate} onChange={onMakePrivate}>
-              Mark the network "{publicNetwork}" as Private. Windows blocks incoming connections on Public networks, so other computers cannot reach this one until then. Only on a network you trust.
+              Mark the network "{publicNetwork}" as Private. Windows blocks incoming connections on Public networks, so other computers cannot reach this one
+              until then. Only on a network you trust.
             </Choice>
           ) : null}
         </div>

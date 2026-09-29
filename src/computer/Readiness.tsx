@@ -88,7 +88,9 @@ export function Readiness() {
       <DoctorRows rows={rows} checking={checking} checks={checks} fixesAreCommands={false} />
       {canInstallTools ? (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-surface-2/40 px-3 py-2.5">
-          <span className="text-[12px] text-ink-2">Installs openssh-client and rsync inside the WSL distribution with apt-get, as its root user. Windows is not changed.</span>
+          <span className="text-[12px] text-ink-2">
+            Installs openssh-client and rsync inside the WSL distribution with apt-get, as its root user. Windows is not changed.
+          </span>
           <Button tone="primary" onClick={() => void installTools()} busy={installing}>
             Install in WSL
           </Button>

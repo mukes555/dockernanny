@@ -37,7 +37,17 @@ export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: ()
 
   const rows = doctorRows[paired?.id ?? draftId] ?? [];
   const sshOk = rows.some((row) => row.key === "ssh" && row.ok);
-  const draft = (): Machine => paired ?? { id: draftId, name: name.trim(), user: user.trim(), host: host.trim(), port: Number(port) || 22, key_path: keyPath.trim(), docker_context: false, pinned: false };
+  const draft = (): Machine =>
+    paired ?? {
+      id: draftId,
+      name: name.trim(),
+      user: user.trim(),
+      host: host.trim(),
+      port: Number(port) || 22,
+      key_path: keyPath.trim(),
+      docker_context: false,
+      pinned: false,
+    };
 
   // A check answers for the details it was run with; changing one of them
   // clears the answer, so a machine is never added on an old "passed".
@@ -153,7 +163,12 @@ export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: ()
             <Button onClick={() => void check()} busy={checking} disabled={!host.trim() || !user.trim()}>
               {checked ? "Check again" : "Check connection"}
             </Button>
-            <Button tone="primary" onClick={() => void add()} disabled={!sshOk || checking || !name.trim()} title={!sshOk ? "Run the connection check first" : !name.trim() ? "Give it a name" : undefined}>
+            <Button
+              tone="primary"
+              onClick={() => void add()}
+              disabled={!sshOk || checking || !name.trim()}
+              title={!sshOk ? "Run the connection check first" : !name.trim() ? "Give it a name" : undefined}
+            >
               Add machine
             </Button>
           </div>
@@ -162,4 +177,3 @@ export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: ()
     </Dialog>
   );
 }
-

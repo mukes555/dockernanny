@@ -27,7 +27,16 @@ export function osFamily(os: string | null | undefined): "windows" | "macos" | "
 /** A small mark for the operating system, drawn with strokes like the other icons. */
 export function OsGlyph({ os, size = 16, className }: { os: string | null | undefined; size?: number; className?: string }) {
   const family = osFamily(os);
-  const base = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  const base = {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.6,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
   if (family === "windows") {
     return (
       <svg {...base} className={className} aria-label="Windows">
@@ -63,7 +72,14 @@ export function BatteryPill({ battery, className }: { battery: Battery | null | 
   if (!battery) return null;
   const low = !battery.charging && battery.percent < 20;
   return (
-    <span className={cx("inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] tabular", low ? "border-critical/40 text-critical" : "border-line text-ink-2", className)} title={battery.charging ? "Plugged in" : "On battery"}>
+    <span
+      className={cx(
+        "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] tabular",
+        low ? "border-critical/40 text-critical" : "border-line text-ink-2",
+        className,
+      )}
+      title={battery.charging ? "Plugged in" : "On battery"}
+    >
       <svg width="14" height="10" viewBox="0 0 28 14" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
         <rect x="1" y="1.5" width="23" height="11" rx="2" />
         <rect x="25" y="4.5" width="2" height="5" rx="0.5" fill="currentColor" stroke="none" />

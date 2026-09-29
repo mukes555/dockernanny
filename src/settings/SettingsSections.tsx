@@ -24,8 +24,18 @@ export function GeneralSection({ draft, commit }: SectionProps) {
     <>
       <Card title="What this computer is for" description="Both can be on at the same time.">
         <div className="space-y-3">
-          <RoleRow checked={draft.use_machines} onChange={(on) => commit({ use_machines: on })} label="Use other machines" hint="Send your compose stacks to other machines and keep using localhost here." />
-          <RoleRow checked={draft.share_this_computer} onChange={(on) => commit({ share_this_computer: on })} label="Share this computer" hint="Let other computers run their stacks here. This computer's Sharing tab sets it up and shows the pairing code." />
+          <RoleRow
+            checked={draft.use_machines}
+            onChange={(on) => commit({ use_machines: on })}
+            label="Use other machines"
+            hint="Send your compose stacks to other machines and keep using localhost here."
+          />
+          <RoleRow
+            checked={draft.share_this_computer}
+            onChange={(on) => commit({ share_this_computer: on })}
+            label="Share this computer"
+            hint="Let other computers run their stacks here. This computer's Sharing tab sets it up and shows the pairing code."
+          />
         </div>
       </Card>
       <Card title="Appearance">
@@ -52,7 +62,13 @@ export function MachinesSection({ draft, setDraft, commit }: SectionProps) {
       <div className="space-y-4">
         <Field label="Private key" hint="Offered when adding a machine. Empty means the first key found in ~/.ssh.">
           <div className="flex gap-2">
-            <TextInput value={draft.key_path} onChange={(e) => setDraft({ ...draft, key_path: e.target.value })} onBlur={() => commit({ key_path: draft.key_path })} className="mono" placeholder="~/.ssh/id_ed25519" />
+            <TextInput
+              value={draft.key_path}
+              onChange={(e) => setDraft({ ...draft, key_path: e.target.value })}
+              onBlur={() => commit({ key_path: draft.key_path })}
+              className="mono"
+              placeholder="~/.ssh/id_ed25519"
+            />
             <Button onClick={() => void browseKey()}>Browse</Button>
           </div>
         </Field>
@@ -69,7 +85,10 @@ export function SharingSection({ draft, setDraft, commit }: SectionProps) {
     <Card title="Sharing this computer" description="What Set up on this computer's Sharing tab uses.">
       <div className="space-y-4">
         {os === "windows" ? (
-          <Field label="Memory for Docker (GB)" hint="How much WSL may use. The slider on the Sharing tab sets the same value. 0 means half of this computer's memory.">
+          <Field
+            label="Memory for Docker (GB)"
+            hint="How much WSL may use. The slider on the Sharing tab sets the same value. 0 means half of this computer's memory."
+          >
             <TextInput
               value={String(draft.host_memory_gb)}
               inputMode="numeric"
@@ -79,7 +98,11 @@ export function SharingSection({ draft, setDraft, commit }: SectionProps) {
             />
           </Field>
         ) : null}
-        <Toggle checked={draft.start_at_login} onChange={(on) => commit({ start_at_login: on })} label="Start dockerNanny at login, hidden in the tray, so this computer is ready after a reboot" />
+        <Toggle
+          checked={draft.start_at_login}
+          onChange={(on) => commit({ start_at_login: on })}
+          label="Start dockerNanny at login, hidden in the tray, so this computer is ready after a reboot"
+        />
       </div>
     </Card>
   );
@@ -105,8 +128,20 @@ export function AdvancedSection({ draft, commit, onError }: SectionProps) {
     <>
       <Card title="Network ports" description="Both computers must use the same pairing port: the shared one listens on it, the other connects to it.">
         <div className="grid grid-cols-2 gap-4">
-          <PortField label="Pairing port" hint={`Default ${DEFAULT_PAIRING_PORT}.`} value={draft.pairing_port} onCommit={(pairing_port) => commit({ pairing_port })} />
-          {draft.use_machines ? <PortField label="Setup script port" hint="Where the guide to prepare a machine serves the Windows setup script." value={draft.script_port} onCommit={(script_port) => commit({ script_port })} /> : null}
+          <PortField
+            label="Pairing port"
+            hint={`Default ${DEFAULT_PAIRING_PORT}.`}
+            value={draft.pairing_port}
+            onCommit={(pairing_port) => commit({ pairing_port })}
+          />
+          {draft.use_machines ? (
+            <PortField
+              label="Setup script port"
+              hint="Where the guide to prepare a machine serves the Windows setup script."
+              value={draft.script_port}
+              onCommit={(script_port) => commit({ script_port })}
+            />
+          ) : null}
         </div>
       </Card>
       <Card title="Maintenance">
@@ -148,7 +183,11 @@ function LoopbackMachines({ onError }: { onError: (message: string) => void }) {
       {hidden.map((machine) => (
         <div key={machine.id} className="flex items-center justify-between gap-3">
           <span>
-            <span className="font-medium text-ink">{machine.name}</span> <span className="mono text-ink-3">({machine.user}@{machine.host})</span> points at this computer, so it is not listed as a machine.
+            <span className="font-medium text-ink">{machine.name}</span>{" "}
+            <span className="mono text-ink-3">
+              ({machine.user}@{machine.host})
+            </span>{" "}
+            points at this computer, so it is not listed as a machine.
           </span>
           <Button onClick={() => remove(machine.id)}>Remove</Button>
         </div>
@@ -177,7 +216,19 @@ function ExcludesField({ value, onCommit }: { value: string[]; onCommit: (exclud
   useEffect(() => setText(value.join(", ")), [value]);
   return (
     <Field label="Paths not synced" hint="Comma separated. Applied to new stacks; .git and node_modules are the usual suspects.">
-      <TextInput value={text} onChange={(e) => setText(e.target.value)} onBlur={() => onCommit(text.split(",").map((part) => part.trim()).filter(Boolean))} className="mono" />
+      <TextInput
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() =>
+          onCommit(
+            text
+              .split(",")
+              .map((part) => part.trim())
+              .filter(Boolean),
+          )
+        }
+        className="mono"
+      />
     </Field>
   );
 }
@@ -198,7 +249,12 @@ function WslCard({ draft, onCommit }: { draft: Settings; onCommit: (change: Part
   return (
     <Card title="WSL" description="ssh and rsync run inside this Linux distribution. When this computer is shared, Docker and the SSH server run there too.">
       <div className="grid grid-cols-2 gap-4">
-        <Field label="Distribution" hint={none ? "WSL lists none. In PowerShell: wsl --install -d Ubuntu" : "Applies at once. When this computer is shared, run Set up again for the new one."}>
+        <Field
+          label="Distribution"
+          hint={
+            none ? "WSL lists none. In PowerShell: wsl --install -d Ubuntu" : "Applies at once. When this computer is shared, run Set up again for the new one."
+          }
+        >
           <Select value={draft.wsl_distro} onChange={(e) => onCommit({ wsl_distro: e.target.value })}>
             {names.map((name) => (
               <option key={name} value={name}>
@@ -207,7 +263,14 @@ function WslCard({ draft, onCommit }: { draft: Settings; onCommit: (change: Part
             ))}
           </Select>
         </Field>
-        {draft.share_this_computer ? <PortField label="SSH port when shared" hint="Run Set up again after changing it." value={draft.wsl_ssh_port} onCommit={(wsl_ssh_port) => onCommit({ wsl_ssh_port })} /> : null}
+        {draft.share_this_computer ? (
+          <PortField
+            label="SSH port when shared"
+            hint="Run Set up again after changing it."
+            value={draft.wsl_ssh_port}
+            onCommit={(wsl_ssh_port) => onCommit({ wsl_ssh_port })}
+          />
+        ) : null}
       </div>
     </Card>
   );
@@ -218,7 +281,10 @@ function HelperImageField({ value, onCommit }: { value: string; onCommit: (image
   const [text, setText] = useState(value);
   useEffect(() => setText(value), [value]);
   return (
-    <Field label="Image for copying volumes" hint="A small image with sh and tar. Both ends pull it during a copy; offline machines need it already there. Default alpine:3.">
+    <Field
+      label="Image for copying volumes"
+      hint="A small image with sh and tar. Both ends pull it during a copy; offline machines need it already there. Default alpine:3."
+    >
       <TextInput value={text} onChange={(e) => setText(e.target.value)} onBlur={() => onCommit(text.trim())} className="mono" placeholder="alpine:3" />
     </Field>
   );
@@ -229,7 +295,13 @@ function PortField({ label, hint, value, onCommit }: { label: string; hint: stri
   useEffect(() => setText(String(value)), [value]);
   return (
     <Field label={label} hint={hint}>
-      <TextInput value={text} inputMode="numeric" onChange={(e) => setText(e.target.value.replace(/\D/g, "").slice(0, 5))} onBlur={() => onCommit(Math.min(65535, Number(text) || 0))} className="tabular" />
+      <TextInput
+        value={text}
+        inputMode="numeric"
+        onChange={(e) => setText(e.target.value.replace(/\D/g, "").slice(0, 5))}
+        onBlur={() => onCommit(Math.min(65535, Number(text) || 0))}
+        className="tabular"
+      />
     </Field>
   );
 }

@@ -17,7 +17,14 @@ export function ProbeFacts({ probe, children }: { probe: Probe; children?: React
     <div className="space-y-3">
       <div className="grid grid-cols-1 gap-x-6 gap-y-2 md:grid-cols-3">
         <Meter label="load" value={loadPercent(probe.load1, probe.cpus)} text={`${probe.load1.toFixed(1)} / ${probe.cpus} cpus`} size="md" />
-        {probe.mem_total_mb > 0 ? <Meter label="ram" value={memoryPercent(probe.mem_used_mb, probe.mem_total_mb)} text={`${gigabytes(probe.mem_used_mb)} / ${gigabytes(probe.mem_total_mb)} GB`} size="md" /> : null}
+        {probe.mem_total_mb > 0 ? (
+          <Meter
+            label="ram"
+            value={memoryPercent(probe.mem_used_mb, probe.mem_total_mb)}
+            text={`${gigabytes(probe.mem_used_mb)} / ${gigabytes(probe.mem_total_mb)} GB`}
+            size="md"
+          />
+        ) : null}
         {probe.disk_total_bytes > 0 ? <Meter label="disk" value={diskPercent} text={`${gigabytesOf(probe.disk_free_bytes)} free`} size="md" /> : null}
       </div>
       <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-[12px] md:grid-cols-3">

@@ -21,7 +21,11 @@ export function BindMounts({ binds, skipped, onSkip }: { binds: BindMount[]; ski
               </span>
               <span className="text-ink-3">{bind.services.join(", ")}</span>
               {bind.read_only ? <Chip tone="neutral">read-only</Chip> : null}
-              <Toggle checked={copied} onChange={(on) => onSkip(bind.path, !on)} label={copied ? "copied from this computer" : "left as it is on the machine"} />
+              <Toggle
+                checked={copied}
+                onChange={(on) => onSkip(bind.path, !on)}
+                label={copied ? "copied from this computer" : "left as it is on the machine"}
+              />
               {!bind.exists_here ? <span className="basis-full text-[11px] text-ink-3">Not on this computer, so the machine keeps its own.</span> : null}
             </li>
           );

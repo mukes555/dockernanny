@@ -14,7 +14,21 @@ const ROOM_FOR_LIST = 280;
  * moves through the items with the arrow keys and lands back on the button.
  * The list is drawn on top of the whole window, next to the button, so no
  * scrolling sidebar or rounded table around the button can cut it off. */
-export function Menu({ label, onClose, className, width = "w-44", icon, children }: { label: string; onClose?: () => void; className?: string; width?: string; icon?: ReactNode; children: ReactNode }) {
+export function Menu({
+  label,
+  onClose,
+  className,
+  width = "w-44",
+  icon,
+  children,
+}: {
+  label: string;
+  onClose?: () => void;
+  className?: string;
+  width?: string;
+  icon?: ReactNode;
+  children: ReactNode;
+}) {
   const [place, setPlace] = useState<CSSProperties | null>(null);
   const open = place !== null;
   const root = useRef<HTMLDivElement>(null);
@@ -96,7 +110,13 @@ export function Menu({ label, onClose, className, width = "w-44", icon, children
       </button>
       {place
         ? createPortal(
-            <div ref={list} role="menu" aria-label={label} style={place} className={cx("fixed z-50 overflow-hidden rounded-lg border border-line bg-surface-2 py-0.5 shadow-xl", width)}>
+            <div
+              ref={list}
+              role="menu"
+              aria-label={label}
+              style={place}
+              className={cx("fixed z-50 overflow-hidden rounded-lg border border-line bg-surface-2 py-0.5 shadow-xl", width)}
+            >
               <CloseMenu.Provider value={() => close(true)}>{children}</CloseMenu.Provider>
             </div>,
             document.body,
@@ -113,14 +133,29 @@ export function MenuSeparator() {
 
 /** One action in a `Menu`. `keepOpen` is for a first click that only asks
  * for a second one, like "Remove" turning into "Confirm remove". */
-export function MenuItem({ onClick, children, danger = false, disabled = false, keepOpen = false }: { onClick: () => void; children: ReactNode; danger?: boolean; disabled?: boolean; keepOpen?: boolean }) {
+export function MenuItem({
+  onClick,
+  children,
+  danger = false,
+  disabled = false,
+  keepOpen = false,
+}: {
+  onClick: () => void;
+  children: ReactNode;
+  danger?: boolean;
+  disabled?: boolean;
+  keepOpen?: boolean;
+}) {
   const close = useContext(CloseMenu);
   return (
     <button
       type="button"
       role="menuitem"
       disabled={disabled}
-      className={cx("block w-full px-3 py-1.5 text-left text-[12px] transition hover:bg-surface focus-visible:bg-surface disabled:opacity-40", danger ? "text-critical" : "text-ink-2 hover:text-ink")}
+      className={cx(
+        "block w-full px-3 py-1.5 text-left text-[12px] transition hover:bg-surface focus-visible:bg-surface disabled:opacity-40",
+        danger ? "text-critical" : "text-ink-2 hover:text-ink",
+      )}
       onClick={() => {
         onClick();
         if (!keepOpen) close();
