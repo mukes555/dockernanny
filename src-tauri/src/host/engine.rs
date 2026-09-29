@@ -38,6 +38,8 @@ pub enum ToEngine {
     /// Accept pairing requests for the next ten minutes.
     ArmPairing,
     DisarmPairing,
+    /// Remove the key of the computer that paired from this address, and its entry.
+    Forget(String),
     Quit,
 }
 
@@ -98,6 +100,7 @@ pub fn start(app: AppHandle, platform: Arc<dyn Platform>, pairing_port: u16) -> 
                 last_probe: None,
                 published: None,
                 paired: paired::load(&store::home_dir()),
+                host_fingerprint: None,
                 connected: Vec::new(),
                 first_seen: HashMap::new(),
                 last_peers: None,
@@ -130,6 +133,8 @@ struct Loop {
     last_probe: Option<Instant>,
     published: Option<HostSnapshot>,
     paired: Vec<PairedComputer>,
+    /// `SHA256:...` of this computer's ssh host key, read when pairing is first turned on.
+    host_fingerprint: Option<String>,
     connected: Vec<Connected>,
     /// When each peer address was first seen with a session open, so the
     /// page can say "since 12:40".
@@ -147,6 +152,7 @@ impl Loop {
                 Ok(ToEngine::Setup(options)) => self.setup(options),
                 Ok(ToEngine::ArmPairing) => self.arm_pairing(),
                 Ok(ToEngine::DisarmPairing) => self.disarm_pairing(),
+                Ok(ToEngine::Forget(address)) => self.forget(&address),
                 Ok(ToEngine::Quit) | Err(RecvTimeoutError::Disconnected) => {
                     self.keepalive.lock().expect("keepalive lock").stop();
                     self.say("sharing stopped");
@@ -193,7 +199,7 @@ impl Loop {
         }
         let (events_tx, events_rx) = channel::<Event>();
         let platform = self.platform.clone();
-        let install = move |key: &str| platform.install_key(key);
+        let install = move |key: &str, mark: &str| platform.install_key(key, mark);
         match pairing_server::serve(self.pairing_port, self.code.clone(), install, events_tx, self.stop_listener.clone()) {
             Ok(_) => {
                 self.listening = true;
@@ -213,14 +219,16 @@ impl Loop {
         let notes: Vec<String> = events
             .try_iter()
             .map(|event| match event {
-                Event::Paired { name, from, key_type } => {
-                    let computer = PairedComputer { name: name.clone(), address: from.clone(), key_type, paired_at_ms: now_ms() };
+                Event::Paired { name, from, key_type, mark, fingerprint } => {
+                    let key_note = format!("Its key: {fingerprint}, which the other computer shows too.");
+                    let computer =
+                        PairedComputer { name: name.clone(), address: from.clone(), key_type, paired_at_ms: now_ms(), mark, fingerprint };
                     match paired::remember(&store::home_dir(), computer) {
                         Ok(all) => self.paired = all,
                         Err(err) => super::log_to_file(&format!("paired.json could not be written: {err}")),
                     }
                     format!(
-                        "Paired with {} ({from}). It can use this computer now.",
+                        "Paired with {} ({from}). It can use this computer now. {key_note}",
                         if name.is_empty() { "another computer".into() } else { name }
                     )
                 }
@@ -245,6 +253,10 @@ impl Loop {
         };
         self.was_armed = true;
         self.pairing_note = None;
+        // Shown next to the code, to compare with what the other computer pins.
+        if self.host_fingerprint.is_none() {
+            self.host_fingerprint = crate::pairing::fingerprint(&self.platform.host_key());
+        }
         self.say(&format!("pairing on for {} minutes", pairing_server::ARMED_FOR.as_secs() / 60));
         // The code is written to the log only when a test asks for it.
         if env_flag("DOCKERNANNY_LOG_CODE") {
@@ -256,6 +268,37 @@ impl Loop {
         self.code.lock().expect("code lock").disarm();
         self.was_armed = false;
         self.say("pairing off");
+    }
+
+    /// Takes a paired computer's access away: the line its key got in
+    /// authorized_keys goes, found by its mark, and then its entry. Only
+    /// that line is touched. A computer paired before keys were marked
+    /// cannot be told apart from the user's own lines, so the notice says
+    /// what is left to do by hand.
+    fn forget(&mut self, address: &str) {
+        let Some(computer) = self.paired.iter().find(|c| c.address == address).cloned() else { return };
+        let name = if computer.name.is_empty() { address.to_string() } else { computer.name.clone() };
+        let has_mark = !computer.mark.is_empty();
+        if has_mark {
+            if let Err(err) = self.platform.remove_key(&computer.mark) {
+                self.notice = Some(Notice { text: format!("{name} could not be forgotten: {err}"), failed: true });
+                return;
+            }
+        }
+        match paired::forget(&store::home_dir(), address) {
+            Ok(all) => self.paired = all,
+            Err(err) => super::log_to_file(&format!("paired.json could not be written: {err}")),
+        }
+        let text = if has_mark {
+            format!("{name} can no longer log in to this computer; its key is gone.")
+        } else {
+            format!(
+                "{name} is off the list. Its key was added by an older dockerNanny without a mark, so remove its line from ~/.ssh/authorized_keys by hand{}.",
+                if cfg!(windows) { " (inside WSL)" } else { "" }
+            )
+        };
+        self.say(&text);
+        self.notice = Some(Notice { text, failed: false });
     }
 
     fn setup(&mut self, options: SetupOptions) {
@@ -365,6 +408,7 @@ impl Loop {
             notice: self.notice.clone(),
             pairing,
             paired: self.paired.clone(),
+            host_fingerprint: self.host_fingerprint.clone(),
             connected: self.connected.clone(),
         };
         if self.published.as_ref() == Some(&fresh) {

@@ -71,6 +71,9 @@ pub struct HostSnapshot {
     pub pairing: PairingState,
     /// The computers that paired with this one, oldest first.
     pub paired: Vec<paired::PairedComputer>,
+    /// `SHA256:...` of this computer's ssh host key, once pairing was on:
+    /// the other computer shows the key it pinned, and the two must match.
+    pub host_fingerprint: Option<String>,
     /// The computers with an ssh session open right now.
     pub connected: Vec<paired::Connected>,
 }

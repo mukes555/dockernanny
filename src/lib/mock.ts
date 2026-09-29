@@ -11,6 +11,7 @@ import type {
   HostSnapshot,
   Machine,
   MachineStats,
+  PairedComputer,
   Preview,
   ServiceState,
   Settings,
@@ -460,15 +461,24 @@ const hostSnapshot = (): HostSnapshot => {
     setup_running: false,
     notice: null,
     pairing: { listening: hostReady, armed: remaining > 0, locked: false, code: remaining > 0 ? "481 923" : null, remaining_s: remaining, note: null },
-    paired: hostReady
-      ? [
-          { name: "desk", address: "192.0.2.20", key_type: "ssh-ed25519", paired_at_ms: Date.now() - 3 * 86400_000 },
-          { name: "", address: "192.0.2.21", key_type: "ssh-rsa", paired_at_ms: Date.now() - 3600_000 },
-        ]
-      : [],
+    paired: hostReady ? pairedComputers.filter((computer) => !forgotten.includes(computer.address)) : [],
+    host_fingerprint: hostReady ? "SHA256:TxEHBXXWzSnbkxqbV6FxMRokiF0jHb/hTzN/O0wkqU8" : null,
     connected: hostReady ? [{ address: "192.0.2.20", name: "desk", since_ms: Date.now() - 25 * 60_000 }] : [],
   };
 };
+const pairedComputers: PairedComputer[] = [
+  {
+    name: "desk",
+    address: "192.0.2.20",
+    key_type: "ssh-ed25519",
+    paired_at_ms: Date.now() - 3 * 86400_000,
+    mark: "dockernanny:4f1c2a9e7b30",
+    fingerprint: "SHA256:q3Vd8yJmXbC1sR0fT6uWkN2pL9eHgA4zYxO7iUcMvE5",
+  },
+  // Paired by an older version: no mark and no fingerprint.
+  { name: "", address: "192.0.2.21", key_type: "ssh-rsa", paired_at_ms: Date.now() - 3600_000, mark: "", fingerprint: "" },
+];
+const forgotten: string[] = [];
 const publishHost = () => hostHandlers?.onHostSnapshot(hostSnapshot());
 const hostSay = (line: string) => hostHandlers?.onHostLog({ line });
 
@@ -613,7 +623,11 @@ export const mockApi: Api = {
       battery: { percent: 91, charging: true },
       os: "Windows 11 (build 22631) · Ubuntu 24.04 LTS in WSL2",
     });
-    return machine;
+    return {
+      machine,
+      host_fingerprint: "SHA256:TxEHBXXWzSnbkxqbV6FxMRokiF0jHb/hTzN/O0wkqU8",
+      key_fingerprint: "SHA256:8mKwq2Lr5nYcB0dFvT3hJxP7sUe1aGzR6oQiN4lWkC9",
+    };
   },
   setDockerContext: async (id, enabled) => {
     const machine = machines.find((m) => m.id === id);
@@ -877,6 +891,12 @@ export const mockApi: Api = {
     publishHost();
   },
   hostProbe: async () => publishHost(),
+  hostForget: async (address) => {
+    await wait(400);
+    forgotten.push(address);
+    hostSay(`forgot ${address}`);
+    publishHost();
+  },
 
   copyText: async (text) => {
     await navigator.clipboard.writeText(text).catch(() => {});

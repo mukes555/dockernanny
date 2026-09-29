@@ -41,6 +41,8 @@ tauri-plugin-updater = "2"
 # The updater's own HTTP client, given a connect timeout (updates.rs); the same crate the updater uses.
 reqwest = { version = "0.13", default-features = false }
 if-addrs = "0.15"
+sha2 = "0.10"
+base64 = "0.22"
 
 [dev-dependencies]
 # A test builds its own HTTP client, which needs the crypto provider the updater installs for its own.

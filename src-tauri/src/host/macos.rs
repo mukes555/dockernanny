@@ -109,13 +109,22 @@ impl Platform for MacOs {
         host_key_from_pub(&std::fs::read_to_string("/etc/ssh/ssh_host_ed25519_key.pub").unwrap_or_default())
     }
 
-    fn install_key(&self, key: &str) -> Result<Installed, String> {
+    fn install_key(&self, key: &str, mark: &str) -> Result<Installed, String> {
         let user = super::platform::checked_user(self.user())?;
-        let out = run("/bin/sh", &[], Some(&super::platform::authorized_keys_script(&user, key)), &[], CHECK_LIMIT);
+        let out = run("/bin/sh", &[], Some(&super::platform::authorized_keys_script(&user, key, mark)), &[], CHECK_LIMIT);
         if !out.ok || !out.stdout.contains("dockernanny-key-ok") {
             return Err(format!("could not write authorized_keys: {}", out.stderr.trim()));
         }
         Ok(Installed { user, port: SSH_PORT, hostname: self.hostname(), host_key: self.host_key() })
+    }
+
+    fn remove_key(&self, mark: &str) -> Result<(), String> {
+        let user = super::platform::checked_user(self.user())?;
+        let out = run("/bin/sh", &[], Some(&super::platform::forget_key_script(&user, mark)), &[], CHECK_LIMIT);
+        if !out.ok || !out.stdout.contains("dockernanny-key-gone") {
+            return Err(format!("could not change authorized_keys: {}", out.stderr.trim()));
+        }
+        Ok(())
     }
 
     fn spawn_keepalive(&self) -> Result<Option<Child>, String> {

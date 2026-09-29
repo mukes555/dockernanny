@@ -17,6 +17,20 @@ pub struct PairedComputer {
     /// `ssh-ed25519` and the like, from the key that was installed.
     pub key_type: String,
     pub paired_at_ms: u64,
+    /// The comment on its line in authorized_keys (`dockernanny:<id>`), by
+    /// which Forget finds that line and no other. Empty for a computer
+    /// paired before keys carried it.
+    #[serde(default)]
+    pub mark: String,
+    /// `SHA256:...` of its key, to compare with the other screen.
+    #[serde(default)]
+    pub fingerprint: String,
+}
+
+/// A fresh comment for a key that pairing adds: random, and only letters,
+/// digits and a colon, so shell scripts and `grep -F` take it as it is.
+pub fn new_mark() -> String {
+    format!("dockernanny:{}", &uuid::Uuid::new_v4().simple().to_string()[..12])
 }
 
 /// A computer with an ssh session open on the sharing port right now.
@@ -41,6 +55,14 @@ pub fn remember(home: &Path, computer: PairedComputer) -> anyhow::Result<Vec<Pai
     all.retain(|c| c.address != computer.address);
     all.push(computer);
     std::fs::create_dir_all(home)?;
+    crate::store::write_json(&home.join(FILE), &all)?;
+    Ok(all)
+}
+
+/// Drops the entry for that address; its key is the caller's to remove first.
+pub fn forget(home: &Path, address: &str) -> anyhow::Result<Vec<PairedComputer>> {
+    let mut all = load(home);
+    all.retain(|c| c.address != address);
     crate::store::write_json(&home.join(FILE), &all)?;
     Ok(all)
 }
@@ -110,17 +132,44 @@ mod tests {
         assert_eq!(parse_established(netstat, 22), vec!["192.0.2.20"]);
     }
 
+    fn computer(name: &str, address: &str) -> PairedComputer {
+        PairedComputer {
+            name: name.into(),
+            address: address.into(),
+            key_type: "ssh-ed25519".into(),
+            paired_at_ms: 1,
+            mark: new_mark(),
+            fingerprint: String::new(),
+        }
+    }
+
     #[test]
-    fn the_paired_file_keeps_one_line_per_address() {
+    fn the_paired_file_keeps_one_line_per_address_and_forgets_one() {
         let home = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(".tmp").join(format!("paired-test-{}", std::process::id()));
-        let first = PairedComputer { name: "desk".into(), address: "192.0.2.20".into(), key_type: "ssh-ed25519".into(), paired_at_ms: 1 };
+        let first = computer("desk", "192.0.2.20");
         remember(&home, first.clone()).unwrap();
         let again = PairedComputer { name: "desk again".into(), ..first.clone() };
-        let other = PairedComputer { name: String::new(), address: "192.0.2.21".into(), key_type: "ssh-rsa".into(), paired_at_ms: 3 };
+        let other = computer("", "192.0.2.21");
         remember(&home, again.clone()).unwrap();
         let all = remember(&home, other.clone()).unwrap();
-        assert_eq!(all, vec![again, other]);
+        assert_eq!(all, vec![again, other.clone()]);
         assert_eq!(load(&home), all);
+        assert_eq!(forget(&home, "192.0.2.20").unwrap(), vec![other]);
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn an_entry_from_before_marks_still_loads() {
+        let old = r#"[{"name":"desk","address":"192.0.2.20","key_type":"ssh-ed25519","paired_at_ms":1}]"#;
+        let entries: Vec<PairedComputer> = serde_json::from_str(old).unwrap();
+        assert_eq!((entries[0].mark.as_str(), entries[0].fingerprint.as_str()), ("", ""));
+    }
+
+    #[test]
+    fn marks_are_unique_and_safe_in_a_shell() {
+        let (a, b) = (new_mark(), new_mark());
+        assert_ne!(a, b);
+        assert!(a.starts_with("dockernanny:") && a.len() == "dockernanny:".len() + 12);
+        assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == ':'));
     }
 }

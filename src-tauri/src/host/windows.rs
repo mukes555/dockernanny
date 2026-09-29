@@ -311,14 +311,24 @@ impl Platform for Windows {
         host_key_from_pub(&self.in_distro_as_root("cat /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null").stdout)
     }
 
-    fn install_key(&self, key: &str) -> Result<Installed, String> {
+    fn install_key(&self, key: &str, mark: &str) -> Result<Installed, String> {
         let user = self.distro_user().ok_or_else(|| format!("{} has no user yet; run Set up first", self.distro))?;
         let user = super::platform::checked_user(user)?;
-        let out = self.in_distro_as_root(&super::platform::authorized_keys_script(&user, key));
+        let out = self.in_distro_as_root(&super::platform::authorized_keys_script(&user, key, mark));
         if !out.ok || !out.stdout.contains("dockernanny-key-ok") {
             return Err(format!("could not write authorized_keys: {}", out.stderr.trim()));
         }
         Ok(Installed { user, port: self.ssh_port, hostname: self.hostname(), host_key: self.host_key() })
+    }
+
+    fn remove_key(&self, mark: &str) -> Result<(), String> {
+        let user = self.distro_user().ok_or_else(|| format!("{} has no user", self.distro))?;
+        let user = super::platform::checked_user(user)?;
+        let out = self.in_distro_as_root(&super::platform::forget_key_script(&user, mark));
+        if !out.ok || !out.stdout.contains("dockernanny-key-gone") {
+            return Err(format!("could not change authorized_keys: {}", out.stderr.trim()));
+        }
+        Ok(())
     }
 
     fn spawn_keepalive(&self) -> Result<Option<Child>, String> {

@@ -163,6 +163,7 @@ pub fn run() {
             commands::host::host_arm_pairing,
             commands::host::host_disarm_pairing,
             commands::host::host_probe,
+            commands::host::host_forget,
             commands::updates::update_status,
             commands::updates::check_for_update,
             commands::updates::install_update,

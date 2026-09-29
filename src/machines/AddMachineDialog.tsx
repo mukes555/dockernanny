@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api, errorMessage } from "../lib/ipc";
-import type { Machine } from "../lib/types";
+import type { Machine, PairedMachine } from "../lib/types";
 import { useStore } from "../state/store";
 import { Dialog } from "../ui/Dialog";
 import { Button, Eyebrow, Field, TextInput } from "../ui/primitives";
@@ -23,14 +23,15 @@ export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: ()
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Set once a machine paired: the machine is already saved, only the doctor is left. */
-  const [paired, setPaired] = useState<Machine | null>(null);
+  const [pairing, setPairing] = useState<PairedMachine | null>(null);
+  const paired = pairing?.machine ?? null;
 
   // A fresh id and the default key every time the dialog opens.
   useEffect(() => {
     if (!open) return;
     setChecked(false);
     setError(null);
-    setPaired(null);
+    setPairing(null);
     void api.newMachineId().then(setDraftId).catch(console.warn);
     void api.defaultKeyPath().then(setKeyPath).catch(console.warn);
   }, [open]);
@@ -59,8 +60,9 @@ export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: ()
     }
   };
 
-  const onPaired = (machine: Machine) => {
-    setPaired(machine);
+  const onPaired = (result: PairedMachine) => {
+    const machine = result.machine;
+    setPairing(result);
     setChecking(true);
     resetDoctor(machine.id);
     void api
@@ -107,9 +109,12 @@ export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: ()
   return (
     <Dialog open={open} onClose={onClose} eyebrow="Machine" title="Add a machine" width={560} closeOnBackdrop={false}>
       {paired ? (
-        <p className="mt-1 text-[13px] text-ink-2">
-          Paired with <span className="font-medium text-ink">{paired.name}</span> ({paired.user}@{paired.host}:{paired.port}). Checking it now.
-        </p>
+        <>
+          <p className="mt-1 text-[13px] text-ink-2">
+            Paired with <span className="font-medium text-ink">{paired.name}</span> ({paired.user}@{paired.host}:{paired.port}). Checking it now.
+          </p>
+          <Fingerprints hostKey={pairing?.host_fingerprint ?? null} ownKey={pairing?.key_fingerprint ?? null} />
+        </>
       ) : (
         <>
           <div className="mt-4">
@@ -175,5 +180,26 @@ export function AddMachineDialog({ open, onClose }: { open: boolean; onClose: ()
         )}
       </div>
     </Dialog>
+  );
+}
+
+/** What the machine's sharing page shows too, so the two screens can be
+ * compared: a key swapped by someone in between would not match. */
+function Fingerprints({ hostKey, ownKey }: { hostKey: string | null; ownKey: string | null }) {
+  if (!hostKey && !ownKey) return null;
+  return (
+    <div className="mt-3 rounded-lg border border-line bg-surface-2 px-3 py-2 text-[12px] text-ink-2">
+      <div>The machine's screen shows the same two keys. If one differs, remove this machine: someone may be in between.</div>
+      {hostKey ? (
+        <div className="mt-1">
+          The machine's host key <span className="mono selectable text-ink">{hostKey}</span>
+        </div>
+      ) : null}
+      {ownKey ? (
+        <div>
+          This computer's key <span className="mono selectable text-ink">{ownKey}</span>
+        </div>
+      ) : null}
+    </div>
   );
 }

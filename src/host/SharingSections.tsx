@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { api, errorMessage } from "../lib/ipc";
-import type { HostRow, HostSnapshot } from "../lib/types";
+import type { HostRow, HostSnapshot, PairedComputer } from "../lib/types";
 import { useStore } from "../state/store";
 import { SpinnerIcon } from "../ui/icons";
 import { Button, Card, cx, Eyebrow, Toggle } from "../ui/primitives";
@@ -232,6 +232,12 @@ function PairingSection({ host, onError }: { host: HostSnapshot; onError: (messa
           <p className="mt-4 text-[13px] text-ink-2">
             On the other computer open dockerNanny, click Add machine, and type this address and code in the top section. That is all.
           </p>
+          {host.host_fingerprint ? (
+            <p className="mt-1 text-[12px] text-ink-3">
+              After pairing, the other computer shows this computer's host key: <span className="mono selectable text-ink-2">{host.host_fingerprint}</span>. If
+              it shows another, forget that computer below.
+            </p>
+          ) : null}
           <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3">
             <span>Pairing is on for another {minutes}.</span>
             <Button size="sm" onClick={() => call(api.hostDisarmPairing)}>
@@ -286,16 +292,54 @@ function UsersSection({ host }: { host: HostSnapshot }) {
       ) : null}
       <div className="mt-1 space-y-1">
         {host.paired.map((computer) => (
-          <div key={computer.address} className="flex items-center gap-3 text-[13px]">
-            <span className="font-medium text-ink">{computer.name || "another computer"}</span>
-            <span className="mono text-ink-3">{computer.address}</span>
-            <span className="ml-auto text-ink-3">
-              {computer.key_type} · paired {new Date(computer.paired_at_ms).toLocaleDateString()}
-            </span>
-          </div>
+          <PairedRow key={computer.address} computer={computer} />
         ))}
       </div>
+      {host.paired.length > 0 ? (
+        <p className="mt-2 text-[12px] text-ink-3">
+          A paired computer keeps its access while sharing is off: its key stays on this computer. Forget takes it away.
+        </p>
+      ) : null}
     </Card>
+  );
+}
+
+/** One paired computer, with Forget behind a confirmation. */
+function PairedRow({ computer }: { computer: PairedComputer }) {
+  const [asking, setAsking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const name = computer.name || "another computer";
+  const forget = () => {
+    setAsking(false);
+    api.hostForget(computer.address).catch((err) => setError(errorMessage(err)));
+  };
+  return (
+    <div className="rounded-lg px-2 py-1 text-[13px] hover:bg-surface-2/60">
+      <div className="flex items-center gap-3">
+        <span className="font-medium text-ink">{name}</span>
+        <span className="mono text-ink-3">{computer.address}</span>
+        <span className="ml-auto text-ink-3">
+          {computer.key_type} · paired {new Date(computer.paired_at_ms).toLocaleDateString()}
+        </span>
+        {asking ? (
+          <>
+            <Button size="sm" tone="ghost" onClick={() => setAsking(false)}>
+              Keep
+            </Button>
+            <Button size="sm" tone="danger" onClick={forget}>
+              Forget
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" onClick={() => setAsking(true)} title={`Remove ${name}'s key, so it can no longer log in here`}>
+            Forget…
+          </Button>
+        )}
+      </div>
+      {computer.fingerprint ? <div className="mono selectable text-[11px] text-ink-3">{computer.fingerprint}</div> : null}
+      {asking ? <div className="mt-1 text-[12px] text-ink-2">{name} can no longer log in here or run stacks. Pair again to give it access back.</div> : null}
+      {error ? <div className="mt-1 text-[12px] text-critical">{error}</div> : null}
+    </div>
   );
 }
 

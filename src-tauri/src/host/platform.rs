@@ -133,7 +133,10 @@ pub trait Platform: Send + Sync {
     fn setup(&self, options: &SetupOptions, say: &mut Say) -> Vec<(&'static str, Outcome)>;
     /// `type base64` of the sshd host key the other computer should pin.
     fn host_key(&self) -> String;
-    fn install_key(&self, key: &str) -> Result<Installed, String>;
+    /// Adds a paired computer's key with `mark` as its comment (`authorized_keys_script`).
+    fn install_key(&self, key: &str, mark: &str) -> Result<Installed, String>;
+    /// Removes the key line with that mark (`forget_key_script`).
+    fn remove_key(&self, mark: &str) -> Result<(), String>;
     /// A process to hold so the Docker host never idles out; None when the OS needs nothing.
     fn spawn_keepalive(&self) -> Result<Option<Child>, String>;
     /// The peer addresses with an ssh session open on `port` right now.
@@ -222,16 +225,40 @@ pub fn checked_user(user: String) -> Result<String, String> {
     Err(format!("the account name {user:?} cannot be used for ssh by dockerNanny"))
 }
 
-/// Appends a key to an authorized_keys file, creating the folder with the
-/// right permissions; the caller decides which user and how to run it. The
-/// key was reduced to `type base64` by the pairing server, so it cannot
-/// break out of the quotes.
-pub fn authorized_keys_script(user: &str, key: &str) -> String {
+/// The first lines of both key scripts: the user's authorized_keys as `$f`.
+fn authorized_keys_of(user: &str) -> String {
     format!(
         "set -e\nhome=$(getent passwd '{user}' 2>/dev/null | cut -d: -f6); [ -n \"$home\" ] || home=$(eval echo ~'{user}')\n\
-         install -d -m 700 \"$home/.ssh\"\ntouch \"$home/.ssh/authorized_keys\"\n\
-         grep -qF '{key}' \"$home/.ssh/authorized_keys\" || echo '{key}' >> \"$home/.ssh/authorized_keys\"\n\
-         chmod 600 \"$home/.ssh/authorized_keys\"\nchown -R '{user}' \"$home/.ssh\" 2>/dev/null || true\necho dockernanny-key-ok\n"
+         f=\"$home/.ssh/authorized_keys\"\n"
+    )
+}
+
+/// Adds a paired key to the user's authorized_keys with `mark` as its
+/// comment, creating the folder with the right permissions; the caller
+/// decides how to run it. A line the user added with this key stays as it
+/// is and nothing is added. A line dockerNanny added for it before gives way
+/// to the new mark, so Forget always finds it. The key was reduced to
+/// `type base64` by the pairing server and the mark is letters, digits and a
+/// colon, so neither can break out of the quotes. The file is rewritten in
+/// place (`cat >`), which keeps its owner and mode.
+pub fn authorized_keys_script(user: &str, key: &str, mark: &str) -> String {
+    format!(
+        "{start}install -d -m 700 \"$home/.ssh\"\ntouch \"$f\"\n\
+         if grep -F '{key}' \"$f\" | grep -qv ' dockernanny:'; then\n  echo 'the key was already there'\n\
+         else\n  grep -vF '{key} dockernanny:' \"$f\" > \"$f.dockernanny\" || true\n  cat \"$f.dockernanny\" > \"$f\"\n  rm -f \"$f.dockernanny\"\n  \
+         echo '{key} {mark}' >> \"$f\"\nfi\n\
+         chmod 600 \"$f\"\nchown -R '{user}' \"$home/.ssh\" 2>/dev/null || true\necho dockernanny-key-ok\n",
+        start = authorized_keys_of(user)
+    )
+}
+
+/// Removes the one line whose comment is `mark` from the user's
+/// authorized_keys, and nothing else.
+pub fn forget_key_script(user: &str, mark: &str) -> String {
+    format!(
+        "{start}if [ -f \"$f\" ]; then\n  grep -vF ' {mark}' \"$f\" > \"$f.dockernanny\" || true\n  cat \"$f.dockernanny\" > \"$f\"\n  rm -f \"$f.dockernanny\"\nfi\n\
+         echo dockernanny-key-gone\n",
+        start = authorized_keys_of(user)
     )
 }
 
@@ -371,6 +398,40 @@ mod tests {
         assert_eq!(decode("Ubuntu\n".as_bytes()), "Ubuntu\n");
         let utf16: Vec<u8> = "Ubuntu".encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
         assert_eq!(decode(&utf16), "Ubuntu");
+    }
+
+    /// The key scripts run by a real `sh` on a folder in .tmp: the home
+    /// lookup is swapped for it, so the user's own ~/.ssh is never touched.
+    #[cfg(unix)]
+    #[test]
+    fn paired_keys_are_added_replaced_and_forgotten_by_their_mark_alone() {
+        let home =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(".tmp").join(format!("keys-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let user = std::env::var("USER").unwrap_or_else(|_| "nobody".into());
+        let in_test_home = |script: String| {
+            script.replace(&authorized_keys_of(&user), &format!("set -e\nhome='{}'\nf=\"$home/.ssh/authorized_keys\"\n", home.display()))
+        };
+        let run_script = |script: String| {
+            let out = Command::new("sh").arg("-c").arg(in_test_home(script)).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        let file = || std::fs::read_to_string(home.join(".ssh/authorized_keys")).unwrap();
+        let (key, other) = ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPaired", "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABTheirOwn alex@laptop");
+
+        run_script(authorized_keys_script(&user, key, "dockernanny:aaaa"));
+        std::fs::write(home.join(".ssh/authorized_keys"), format!("{other}\n{}", file())).unwrap();
+        run_script(authorized_keys_script(&user, key, "dockernanny:bbbb"));
+        assert_eq!(file(), format!("{other}\n{key} dockernanny:bbbb\n"), "pairing again replaces the old mark, and the user's line stays");
+
+        run_script(forget_key_script(&user, "dockernanny:bbbb"));
+        assert_eq!(file(), format!("{other}\n"), "forget takes only the marked line");
+
+        let own = format!("{key} alex@desk");
+        std::fs::write(home.join(".ssh/authorized_keys"), format!("{own}\n")).unwrap();
+        run_script(authorized_keys_script(&user, key, "dockernanny:cccc"));
+        assert_eq!(file(), format!("{own}\n"), "a key the user added is left alone and not added twice");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
