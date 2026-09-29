@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "dockerNanny",
-  "version": "0.7.0",
   "identifier": "com.dockernanny.app",
   "build": {
     "beforeDevCommand": "pnpm dev",

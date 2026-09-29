@@ -26,6 +26,17 @@ jobs:
     # the updates every installed app accepts.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # src-tauri/Cargo.toml holds the one version number; a tag naming
+      # another would publish installers that call themselves something else.
+      - name: The tag names the version being built
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n 1)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version in src-tauri/Cargo.toml"
+            exit 1
+          fi
       - name: Linux prerequisites
         if: matrix.platform == 'ubuntu-22.04'
         run: |
