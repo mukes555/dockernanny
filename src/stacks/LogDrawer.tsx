@@ -3,10 +3,10 @@ import { AnimatePresence, motion } from "motion/react";
 
 import { api, errorMessage } from "../lib/ipc";
 import type { ServiceState } from "../lib/types";
-import { parseLogLine } from "../lib/types";
 import { useStore } from "../state/store";
 import { XIcon } from "../ui/icons";
-import { Button, cx, Select } from "../ui/primitives";
+import { LogRow } from "../ui/LogRow";
+import { Button, Select } from "../ui/primitives";
 import { useEscape } from "../ui/useEscape";
 
 // Selectors must return stable references; a fresh `[]` per render loops React.
@@ -38,8 +38,7 @@ export function LogDrawer() {
   }, [stackId]);
 
   const shown = useMemo(() => {
-    const parsed = lines.map((line) => ({ stream: line.stream, ...parseLogLine(line.text) }));
-    if (!service || !stack) return parsed;
+    if (!service || !stack) return lines;
     // Compose prefixes a line with the container name, or with "service-1";
     // a custom container_name is matched exactly.
     const containerName = services.find((s) => s.service === service)?.container;
@@ -47,7 +46,7 @@ export function LogDrawer() {
       const numbered = head.startsWith(`${service}-`) && /^\d+$/.test(head.slice(service.length + 1));
       return head === containerName || head.startsWith(`${stack.name}-${service}-`) || numbered;
     };
-    return parsed.filter((line) => fromService(line.container));
+    return lines.filter((line) => fromService(line.container));
   }, [lines, service, stack, services]);
 
   // Follow the tail unless the reader scrolled up to look at something.
@@ -98,11 +97,8 @@ export function LogDrawer() {
           <div ref={scroller} onScroll={onScroll} className="mono selectable min-h-0 flex-1 overflow-auto px-4 py-3 text-[12px] leading-[1.55]">
             {startError ? <div className="selectable text-critical">The logs could not start: {startError}</div> : null}
             {shown.length === 0 && !startError ? <div className="text-ink-3">waiting for output…</div> : null}
-            {shown.map((line, index) => (
-              <div key={index} className="flex gap-2 whitespace-pre-wrap break-all">
-                {line.container ? <span className="shrink-0 text-accent">{shortName(line.container, stack.name)}</span> : null}
-                <span className={cx(line.stream === "stderr" ? "text-ink" : "text-ink-2")}>{line.text}</span>
-              </div>
+            {shown.map((line) => (
+              <LogRow key={line.seq} entry={line} label={line.container ? shortName(line.container, stack.name) : undefined} />
             ))}
           </div>
         </motion.aside>
