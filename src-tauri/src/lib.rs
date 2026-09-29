@@ -1,11 +1,6 @@
-// Public so `examples/` can drive the backend without the window.
-pub mod commands;
+// Public so `examples/` and main.rs can drive the backend without the window.
 pub mod compose;
-pub mod computer;
-pub mod containers;
 pub mod copy;
-pub mod diagnostics;
-pub mod docker_access;
 pub mod doctor;
 pub mod forward;
 pub mod guide;
@@ -13,15 +8,22 @@ pub mod host;
 pub mod job;
 pub mod machine;
 pub mod pairing;
-pub mod probe;
-pub mod settings;
 pub mod ssh;
 pub mod stack;
 pub mod store;
 pub mod sync;
-pub mod tools;
-pub mod tray;
-pub mod updates;
+
+// Only the app uses these, so the compiler can tell when something in them goes unused.
+mod commands;
+mod computer;
+mod containers;
+mod diagnostics;
+mod docker_access;
+mod probe;
+mod settings;
+mod tools;
+mod tray;
+mod updates;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -37,7 +39,7 @@ use ssh::Ssh;
 use stack::StackStatus;
 use store::Store;
 
-pub struct AppState {
+pub(crate) struct AppState {
     pub store: Store,
     pub ssh: Ssh,
     /// The sharing role, running only while it is on in the settings.
@@ -180,7 +182,7 @@ pub fn run() {
 
 /// What every way out of the app does first, a restart for an update too:
 /// sharing stops, bridges and child processes end, ssh connections close.
-pub fn shut_down(app: &tauri::AppHandle) {
+pub(crate) fn shut_down(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     state.host.stop();
     forward::exit_all(&state.ssh);
@@ -193,7 +195,7 @@ pub fn shut_down(app: &tauri::AppHandle) {
 /// Starts or stops what the settings ask for: the WSL distribution the
 /// tools use, the sharing role and the start-at-login entry. Called at
 /// launch and after every save.
-pub fn apply_settings(app: &tauri::AppHandle) {
+pub(crate) fn apply_settings(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     let Some(settings) = state.store.settings() else { return };
     let distro_changed = tools::configure(&settings.wsl_distro);

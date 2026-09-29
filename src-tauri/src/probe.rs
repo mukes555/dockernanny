@@ -247,20 +247,6 @@ fn now_s() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// `up 9 days, 8:22` style text for a card.
-pub fn uptime_text(seconds: u64) -> String {
-    let days = seconds / 86_400;
-    let hours = (seconds % 86_400) / 3600;
-    let minutes = (seconds % 3600) / 60;
-    if days > 0 {
-        format!("up {days}d {hours}h")
-    } else if hours > 0 {
-        format!("up {hours}h {minutes}m")
-    } else {
-        format!("up {minutes}m")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,12 +368,5 @@ mod tests {
         assert_eq!(probe.docker_version, None);
         assert_eq!(probe.flavor, None);
         assert_eq!(probe.containers_running, 0);
-    }
-
-    #[test]
-    fn uptime_reads_like_a_person_says_it() {
-        assert_eq!(uptime_text(45), "up 0m");
-        assert_eq!(uptime_text(3600 * 7 + 60), "up 7h 1m");
-        assert_eq!(uptime_text(86_400 * 9 + 3600 * 8), "up 9d 8h");
     }
 }

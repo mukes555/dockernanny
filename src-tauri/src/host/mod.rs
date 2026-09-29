@@ -105,10 +105,6 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn is_running(&self) -> bool {
-        self.engine.lock().expect("host lock").is_some()
-    }
-
     /// Starts the role, or restarts it when it runs with other settings.
     pub fn start(&self, app: &AppHandle, config: HostConfig) {
         let mut slot = self.engine.lock().expect("host lock");
