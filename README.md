@@ -56,13 +56,18 @@ this computer (dockerNanny)                        machine (Linux, macOS, or WSL
 3. **Run.** The project folder is mirrored with rsync (minus `.git`,
    `node_modules` and whatever else you exclude), `docker compose up -d --build`
    runs on the machine, and one `ssh -N` per stack forwards every published TCP
-   port back to `localhost`. If the connection drops, the forward reconnects
-   with backoff. The Ports page lists every forwarded port.
+   port back to `localhost`. A port added or dropped changes the running ssh
+   in place; if the connection drops, the forward reconnects with backoff.
+   The Ports page lists every forwarded port.
 
 Everything dockerNanny keeps lives in `~/.dockernanny` on this computer: the
 machine list, the stacks, the settings, one generated ssh config, the pinned
-host keys and the control sockets. On the machine, `~/.dockernanny/<stack>`
-holds the synced project. Nothing else is written on either side.
+host keys, the control sockets and two logs. On the machine,
+`~/.dockernanny/<stack>` holds the synced project, and Docker holds what the
+stack creates. Outside those, dockerNanny writes only what you turn on: a
+Docker context per machine (from the machine's menu), the start-at-login
+entry, and on a computer that shares itself, what Set up lists before it
+runs.
 
 ### Copy a stack between this computer and the machines
 
@@ -82,6 +87,13 @@ processes together. The source can be stopped for a consistent copy and
 started again, left stopped (a move, which frees its ports), or kept running.
 Nothing at the source is ever deleted. Afterwards the destination is checked:
 services up, ports listening.
+
+What a copy leaves at the destination: the project folder
+(`~/.dockernanny/<stack>` on a machine, the folder you picked on this
+computer), the volumes as `<project>_<volume>` (an external volume keeps its
+own name and is added to, not replaced), the images it sent, the containers
+`compose up` created, and the small helper image (`alpine:3` unless Settings
+names another) that reads and writes volumes on both ends.
 
 While it runs, a panel shows every step the copy will take and where it
 stands, the bytes going through the current stream with their speed, and
@@ -115,9 +127,11 @@ Pairing is the one step before ssh exists. The machine shows a six digit
 code; this computer sends the code and its public key to the machine's
 pairing port and gets back the user, the ssh port and the machine's host
 key. The host key is pinned, so later connections trust only that machine.
-Pairing is off on the machine until someone turns it on there, stays on for
-ten minutes, and locks after ten wrong codes. [SECURITY.md](SECURITY.md) has
-the full model and how to report a problem.
+Both screens then show the key's fingerprint, to compare. Pairing is off on
+the machine until someone turns it on there, stays on for ten minutes, and
+locks after ten wrong codes. A paired computer keeps its access while
+sharing is off; Forget on the sharing page takes it away.
+[SECURITY.md](SECURITY.md) has the full model and how to report a problem.
 
 ### Use the same machine from your terminal
 
@@ -134,6 +148,29 @@ machine menu can create for you:
 ```bash
 docker context use dn-<machine name>
 ```
+
+### Logs, update checks and start at login
+
+- **Logs.** `app.log` (the app) and `host.log` (the sharing role) are in
+  `~/.dockernanny`. Each is set aside as `.1` once it passes 5 MB, so there
+  are never more than two of each. "Copy diagnostics" on the Help page
+  copies a report for an issue with the names of this computer, the user,
+  the home folder and every machine replaced, and any other address or email
+  masked.
+- **What goes to the internet.** Besides ssh to your machines and the
+  pairing and setup ports on your network, the app makes one request of its
+  own: the update check, which reads `latest.json` from this repository's
+  latest GitHub release at start and every hour. Nothing about you or your
+  machines is sent with it, and "Check automatically" in Settings, Updates
+  turns it off. An update downloads only when you click Install, and only a build
+  signed with this project's key installs. Docker still pulls images as your
+  compose files ask, and Set up installs packages from the system's own
+  sources.
+- **Start at login** is off until you turn it on in Settings. It is a
+  LaunchAgent in `~/Library/LaunchAgents` on macOS, a Run entry in the
+  current user's registry on Windows and a `.desktop` file in
+  `~/.config/autostart` on Linux, and turning it off removes it. The app then
+  starts hidden in the tray.
 
 ## Run it
 
@@ -165,29 +202,44 @@ DOCKERNANNY_HOME=~/.dockernanny-test cargo run --manifest-path src-tauri/Cargo.t
 DOCKERNANNY_HOME=~/.dockernanny-test cargo run --manifest-path src-tauri/Cargo.toml --example stack -- <user> <host> <port> ~/.ssh/id_ed25519 examples/sample-stack
 ```
 
+Tests: `pnpm test` for the window's logic, `cargo test` in `src-tauri` for
+the backend, and `scripts/smoke-local.sh` for the whole core path against
+this computer's own sshd.
+
 Build the installers with `pnpm tauri build`. CI builds and tests on macOS,
-Linux and Windows for every pull request; a `v*` tag produces a draft release
-with the bundles for all three.
+Linux and Windows for every pull request. The version lives in one place,
+`src-tauri/Cargo.toml`; a `v<version>` tag produces a draft release with the
+bundles for all three.
 
 ## Layout
 
 ```
-src/            React UI: app shell, computer, machines, stacks, guide, settings
-src-tauri/src/  Rust backend
-  commands.rs     what the UI can ask for; commands/{settings,host,copy}.rs
-  machine.rs      machines, stats poll, Docker context; doctor.rs checks them
-  probe.rs        the one shell script that describes a computer, and its parsers
-  stack/          what a stack is (mod), its operations (lifecycle), the ps poll
-  forward.rs      the ssh -N port forwards
-  sync.rs         rsync and the live re-sync watcher
-  copy/           copying a stack between endpoints: endpoint, folder, transfer, discover, check, progress
-  pairing.rs      the pairing exchange and its validators, shared by both roles
-  host/           the sharing role: engine, pairing server, paired.json, one file per OS
-  tray.rs         the tray icon and the close-to-hide behaviour
-  guide.rs        the Windows setup script and its one-file web server
-  ssh.rs          the generated ssh config, control masters, jobs
-  store.rs        machines.json, stacks.json, settings.json
-examples/       sample stacks to try things with
+src/                 React window
+  app/ computer/ machines/ stacks/ host/ guide/ settings/
+                       one folder per part of the window
+  ui/                  shared building blocks: Page, Drawer, StatusDot, useAction, ...
+  lib/                 the backend's types, the one door to it (ipc), formats
+  state/store.ts       the one store
+src-tauri/src/       Rust backend
+  commands.rs          what the window can ask for, one file per part in commands/
+  machine.rs           machines, stats poll, Docker context; doctor.rs checks them
+  probe.rs             the one shell script that describes a computer, and its parsers
+  stack/               what a stack is (mod), its operations (lifecycle), the ps poll
+  forward.rs           the ssh -N port forwards
+  sync.rs              rsync and the live re-sync watcher
+  copy/                copying a stack: mod (the order), look (both ends, for plan and
+                       run alike), carry, report, endpoint, folder, transfer, discover,
+                       pull, check, steps, progress
+  pairing.rs           the pairing exchange and its validators, shared by both roles
+  host/                the sharing role: engine, pairing server, paired.json, one file per OS
+  tray.rs              the tray icon and the close-to-hide behaviour
+  guide.rs             the Windows setup script and its one-file web server
+  ssh.rs               the generated ssh config, control masters, jobs
+  store.rs             machines.json, stacks.json, settings.json, the logs
+  updates.rs           the update check
+scripts/             smoke-local (the core path end to end), check-windows,
+                     release-local and hide-paths (release builds), privacy-audit
+examples/            sample stacks to try things with
 ```
 
 ## Not yet
@@ -195,5 +247,4 @@ examples/       sample stacks to try things with
 Compose profiles, several `-f` files, port ranges, `network_mode: host`, build
 contexts outside the project folder, copying files back from the machine,
 password logins, and finding machines on the network by themselves. The
-forwarder restarts when the port set changes instead of adding forwards live.
-The sharing role runs after login only; it is not a service.
+sharing role runs after login only; it is not a service.
