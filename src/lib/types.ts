@@ -297,6 +297,10 @@ export interface TerminalInfo {
 export interface ServeInfo {
   addresses: string[];
   port: number;
+  /** The line to type on the machine, one per address; it checks the script's SHA-256 before running it. */
+  commands: string[];
+  /** When the script stops being served by itself. */
+  expires_ms: number;
 }
 
 export interface Fetched {

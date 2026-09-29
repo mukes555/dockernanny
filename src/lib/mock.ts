@@ -857,7 +857,11 @@ export const mockApi: Api = {
     `# dockerNanny machine setup (mock)\n$distro = '${request.distro}'\n$port = ${request.port}\n$memory = '${request.memory_gb}GB'\n$pubkey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA alex@studio'\n# ... installs Docker, sshd, rsync, writes .wslconfig, opens the firewall`,
   scriptServe: async () => {
     window.setTimeout(() => handlers?.onScriptFetched({ from: "192.0.2.20", at_ms: Date.now() }), 4000);
-    return { addresses: ["192.0.2.10"], port: 47431 };
+    const command =
+      '$f = "$env:TEMP\\dockernanny-setup.ps1"; iwr http://192.0.2.10:47431/setup-0123456789abcdef.ps1 -OutFile $f -UseBasicParsing; ' +
+      "if ((Get-FileHash $f -Algorithm SHA256).Hash -eq 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad') " +
+      "{ iex (Get-Content -Raw -Encoding UTF8 $f) } else { Write-Host 'The script changed on the way here, so it was not run.' -ForegroundColor Red }";
+    return { addresses: ["192.0.2.10"], port: 47431, commands: [command], expires_ms: Date.now() + 30 * 60_000 };
   },
   scriptStop: async () => {},
 

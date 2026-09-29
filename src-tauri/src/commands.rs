@@ -395,6 +395,9 @@ pub struct ScriptRequest {
 pub struct ServeInfo {
     pub addresses: Vec<String>,
     pub port: u16,
+    /// The line to type on the machine, one per address (`guide::fetch_command`).
+    pub commands: Vec<String>,
+    pub expires_ms: u64,
 }
 
 async fn script_for(request: &ScriptRequest) -> CmdResult<String> {
@@ -438,8 +441,11 @@ pub async fn script_serve(app: AppHandle, state: State<'_, AppState>, request: S
     })
     .await
     .map_err(fail)?;
+    let addresses = guide::lan_addresses().await;
+    let commands = addresses.iter().map(|address| guide::fetch_command(address, server.port, &server.path, &server.sha256)).collect();
+    let expires_ms = server.expires_ms;
     *state.script_server.lock().expect("script server lock") = Some(server);
-    Ok(ServeInfo { addresses: guide::lan_addresses().await, port })
+    Ok(ServeInfo { addresses, port, commands, expires_ms })
 }
 
 #[tauri::command]
