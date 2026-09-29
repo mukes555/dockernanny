@@ -6,7 +6,7 @@ import { STACK_GRID, StackCard } from "../stacks/StackCard";
 import { OsGlyph, StatusDot } from "../ui/Badges";
 import { MachineIcon, TerminalIcon } from "../ui/icons";
 import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
-import { Page, Tabs } from "../ui/Page";
+import { Page } from "../ui/Page";
 import { Button, Card, Chip, EmptyPanel, ErrorLine } from "../ui/primitives";
 import { Fact, ProbeFacts } from "../ui/ProbeFacts";
 import { Term } from "../ui/Term";
@@ -95,17 +95,15 @@ export function MachinePage({ machine }: { machine: Machine }) {
           </Menu>
         </>
       }
-      tabs={
-        <Tabs
-          value={tab}
-          onChange={setTab}
-          tabs={[
-            { id: "stacks", label: "Stacks", count: stacks.length },
-            { id: "containers", label: "Containers" },
-            { id: "details", label: "Details" },
-          ]}
-        />
-      }
+      tabs={{
+        value: tab,
+        onChange: setTab,
+        items: [
+          { id: "stacks", label: "Stacks", count: stacks.length },
+          { id: "containers", label: "Containers" },
+          { id: "details", label: "Details" },
+        ],
+      }}
     >
       <ErrorLine error={removal.error} className="mt-0" />
       {dialog === "remove" ? (

@@ -1,9 +1,10 @@
+import { plural } from "../lib/format";
 import type { ContainerData, VolumePlan } from "../lib/types";
 import { SpinnerIcon } from "../ui/icons";
-import { cx } from "../ui/primitives";
+import { cx, LIST_HEAD } from "../ui/primitives";
 
 /** `service:path`, the key a ticked container path is remembered by. */
-export function selectionKey(service: string, path: string): string {
+function selectionKey(service: string, path: string): string {
   return `${service}:${path}`;
 }
 
@@ -52,7 +53,7 @@ export function CopyData({
   const withData = containers.filter((c) => c.anonymous_volumes.length > 0 || c.changed_paths.length > 0);
   return (
     <div className="rounded-xl border border-line">
-      <div className="border-b border-line bg-surface-2 px-3 py-1.5 text-[10px] uppercase tracking-[0.12em] text-ink-3">Data that travels</div>
+      <div className={cx("border-b border-line", LIST_HEAD)}>Data that travels</div>
       {loading ? (
         <div className="flex items-center gap-2 px-3 py-2 text-[12px] text-ink-3">
           <SpinnerIcon size={12} /> looking at the source
@@ -68,7 +69,7 @@ export function CopyData({
         </div>
       ))}
 
-      <div className="border-t border-line bg-surface-2/60 px-3 py-1.5 text-[10px] uppercase tracking-[0.12em] text-ink-3">Inside the containers</div>
+      <div className={cx("border-t border-line", LIST_HEAD)}>Inside the containers</div>
       {!loading && withData.length === 0 ? <div className="px-3 py-2 text-[12px] text-ink-3">nothing kept outside the named volumes</div> : null}
       {withData.map((container) => (
         <div key={container.service}>
@@ -89,7 +90,7 @@ export function CopyData({
               onChange={(on) => onToggle(selectionKey(container.service, changed.path), on)}
               service={container.service}
               path={changed.path}
-              detail={`changed inside the container, ${changed.entries} ${changed.entries === 1 ? "entry" : "entries"}`}
+              detail={`changed inside the container, ${plural(changed.entries, "entry", "entries")}`}
             />
           ))}
         </div>

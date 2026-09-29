@@ -91,9 +91,8 @@ interface State {
   firstRun: boolean;
   /** The welcome, reopened from Help after the first run. */
   welcomeOpen: boolean;
-  /** A newer release the app's checks found; installing waits for the user. */
-  update: AvailableUpdate | null;
-  /** The last check's answer, for Settings, Updates. */
+  /** The last check's answer, for Settings, Updates. A newer release it
+   * found is `updateStatus.available` (see `availableUpdate`). */
   updateStatus: UpdateStatus | null;
   /** The share of an update downloaded while it installs. */
   updateProgress: number | null;
@@ -172,6 +171,9 @@ interface State {
   appendHostLog: (line: string) => void;
   loadSettings: () => Promise<void>;
   saveSettings: (settings: Settings) => Promise<void>;
+  /** Changes some settings and saves them; each change builds on the latest
+   * settings, even while the one before is still being saved. */
+  changeSettings: (change: Partial<Settings>) => Promise<void>;
   setScriptFetched: (fetched: Fetched | null) => void;
   pushNotice: (text: string, tone?: NoticeTone) => void;
   dismissNotice: (id: number) => void;
@@ -219,7 +221,6 @@ export const useStore = create<State>((set, get) => ({
   settings: null,
   firstRun: false,
   welcomeOpen: false,
-  update: null,
   updateStatus: null,
   updateProgress: null,
   addMachineOpen: false,
@@ -257,7 +258,7 @@ export const useStore = create<State>((set, get) => ({
   openSettings: (settingsSection) => set({ view: "settings", settingsSection }),
   openComputer: (computerTab) => set({ view: "computer", computerTab }),
   setWelcomeOpen: (welcomeOpen) => set({ welcomeOpen }),
-  setUpdateStatus: (updateStatus) => set({ updateStatus, update: updateStatus.available }),
+  setUpdateStatus: (updateStatus) => set({ updateStatus }),
   setUpdateProgress: (updateProgress) => set({ updateProgress }),
   setAddMachineOpen: (addMachineOpen) => set({ addMachineOpen }),
   selectMachine: (selectedMachineId) => set({ selectedMachineId, view: "stacks", machineTab: "stacks", machineDialog: null }),
@@ -311,8 +312,23 @@ export const useStore = create<State>((set, get) => ({
     applyTheme(view.settings.theme);
     set({ settings: view.settings, firstRun: view.first_run, os: view.os });
   },
+  changeSettings: async (change) => {
+    const current = get().settings;
+    if (!current) return;
+    try {
+      await get().saveSettings({ ...current, ...change });
+    } catch (err) {
+      // What the page shows goes back to what is saved.
+      await get()
+        .loadSettings()
+        .catch(() => {});
+      throw err;
+    }
+  },
   saveSettings: async (settings) => {
     const wasSharing = get().settings?.share_this_computer ?? false;
+    // Shown at once, so a second change made while this one is saved builds on it.
+    set({ settings });
     const saved = await api.saveSettings(settings);
     applyTheme(saved.theme);
     set({ settings: saved, firstRun: false });
@@ -411,6 +427,11 @@ export const useStore = create<State>((set, get) => ({
 
 export function onlineCount(machines: Machine[], stats: Record<string, MachineStats>): number {
   return machines.filter((machine) => stats[machine.id]?.online).length;
+}
+
+/** A newer release the app's checks found; installing waits for the user. A selector. */
+export function availableUpdate(state: State): AvailableUpdate | null {
+  return state.updateStatus?.available ?? null;
 }
 
 /** An operation is running on the stack (sync, up, down, a copy). */

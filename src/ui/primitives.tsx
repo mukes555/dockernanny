@@ -106,7 +106,7 @@ export function Card({
   );
 }
 
-export const INPUT =
+const INPUT =
   "rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:border-accent focus:ring-2 focus:ring-accent/25";
 
 /** Full width unless the caller gives a width: two width classes on one
@@ -130,6 +130,37 @@ export function TextInput({ className, ...rest }: InputHTMLAttributes<HTMLInputE
   return <input className={cx(INPUT, widthOf(className), className)} {...rest} />;
 }
 
+/** A text field for a saved setting. It shows the saved value; while it has
+ * the focus it keeps what is typed, and it saves when the user leaves it, so a
+ * half-typed path never lands in the file. `clean` filters each keystroke
+ * (digits only, a length cap). Nothing is saved when nothing changed. */
+export function SaveOnBlurInput({
+  value,
+  onSave,
+  clean = (typed) => typed,
+  className,
+  ...rest
+}: { value: string; onSave: (text: string) => void; clean?: (typed: string) => string } & Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  "value" | "onChange" | "onBlur" | "onFocus"
+>) {
+  const [typed, setTyped] = useState<string | null>(null);
+  const leave = () => {
+    if (typed !== null && typed !== value) onSave(typed);
+    setTyped(null);
+  };
+  return (
+    <input
+      value={typed ?? value}
+      onFocus={() => setTyped(value)}
+      onChange={(e) => setTyped(clean(e.target.value))}
+      onBlur={leave}
+      className={cx(INPUT, widthOf(className), className)}
+      {...rest}
+    />
+  );
+}
+
 export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select className={cx(INPUT, widthOf(className), "py-1.5", className)} {...rest}>
@@ -138,7 +169,20 @@ export function Select({ className, children, ...rest }: SelectHTMLAttributes<HT
   );
 }
 
-export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (checked: boolean) => void; label?: string }) {
+/** An on/off switch. It always has a name: `label` is shown next to it, or
+ * with `hideLabel` only said to screen readers, for a switch whose visible
+ * label sits elsewhere in its row. */
+export function Toggle({
+  checked,
+  onChange,
+  label,
+  hideLabel = false,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  hideLabel?: boolean;
+}) {
   return (
     <button
       type="button"
@@ -150,7 +194,7 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
       <span className={cx("relative h-5 w-9 rounded-full transition", checked ? "bg-accent" : "bg-hairline")}>
         <span className={cx("absolute top-0.5 h-4 w-4 rounded-full bg-white transition", checked ? "left-4.5" : "left-0.5")} />
       </span>
-      {label}
+      <span className={hideLabel ? "sr-only" : undefined}>{label}</span>
     </button>
   );
 }
@@ -167,11 +211,6 @@ export function ErrorLine({ error, className }: { error: string | null | undefin
  * line. `className` is for layout (flex, margins), never padding. */
 export function Inset({ roomy = false, className, children }: { roomy?: boolean; className?: string; children: ReactNode }) {
   return <div className={cx("rounded-xl border border-line bg-surface-2/40", roomy ? "px-4 py-3" : "px-3 py-2.5", className)}>{children}</div>;
-}
-
-/** A small dashed note, for a narrow column or inside a card. */
-export function EmptyState({ children, className }: { children: ReactNode; className?: string }) {
-  return <p className={cx("rounded-xl border border-dashed border-hairline p-4 text-[13px] text-ink-2", className)}>{children}</p>;
 }
 
 /** A roomier empty state for the main area: an optional mark, a line, and a
@@ -199,8 +238,22 @@ export function EmptyPanel({
   );
 }
 
+/** A row of a navigation list (the sidebar, the Settings sections): the
+ * current one stands out; `quiet` rows (add, guide) read fainter than pages. */
+export function navItemLook(active: boolean, quiet = false): string {
+  if (active) return "bg-accent-soft font-medium text-ink";
+  if (quiet) return "text-ink-3 hover:bg-surface-2 hover:text-ink";
+  return "text-ink-2 hover:bg-surface-2 hover:text-ink";
+}
+
+/** Small capitals over a group of fields or facts: "Code", "Up for". */
+export const EYEBROW = "text-[11px] uppercase tracking-[0.14em] text-ink-3";
+
+/** The header row of a bordered list or a table, the same everywhere. */
+export const LIST_HEAD = "bg-surface-2 px-3 py-1.5 text-left text-[11px] font-medium text-ink-3";
+
 export function Eyebrow({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cx("text-[11px] uppercase tracking-[0.14em] text-ink-3", className)}>{children}</div>;
+  return <div className={cx(EYEBROW, className)}>{children}</div>;
 }
 
 /** A command the user is meant to paste into a terminal, with a copy button

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 
-import { api, errorMessage } from "../lib/ipc";
+import { clock } from "../lib/format";
+import { api } from "../lib/ipc";
 import type { HostOs, ScriptRequest, ServeInfo } from "../lib/types";
 import { useStore } from "../state/store";
 import { SpinnerIcon } from "../ui/icons";
-import { Button, Chip, CodeBlock, Field, TextInput } from "../ui/primitives";
+import { Button, Chip, CodeBlock, ErrorLine, Field, TextInput } from "../ui/primitives";
+import { useAction } from "../ui/useAction";
 
 /** What may stand between the machine and the script this computer serves. */
 const FIREWALL_HINT: Record<HostOs, string> = {
@@ -28,11 +30,11 @@ export function SetupScriptCard() {
   const [makePrivate, setMakePrivate] = useState(false);
   const [serving, setServing] = useState<ServeInfo | null>(null);
   const [script, setScript] = useState<string | null>(null);
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Sharing and showing the script both check the same inputs, so they report in one place.
+  const action = useAction("inline");
 
   useEffect(() => {
-    void api.defaultKeyPath().then(setKeyPath).catch(console.warn);
+    api.defaultKeyPath().then(setKeyPath).catch(console.warn);
     return () => {
       void api.scriptStop().catch(() => {});
     };
@@ -47,17 +49,9 @@ export function SetupScriptCard() {
     make_private: makePrivate,
   });
 
-  const serve = async () => {
-    setWorking(true);
-    setError(null);
+  const serve = () => {
     setScriptFetched(null);
-    try {
-      setServing(await api.scriptServe(request()));
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setWorking(false);
-    }
+    void action.run(async () => setServing(await api.scriptServe(request())));
   };
 
   const stop = async () => {
@@ -65,16 +59,12 @@ export function SetupScriptCard() {
     setServing(null);
   };
 
-  const toggleScript = async () => {
+  const toggleScript = () => {
     if (script) {
       setScript(null);
       return;
     }
-    try {
-      setScript(await api.scriptPreview(request()));
-    } catch (err) {
-      setError(errorMessage(err));
-    }
+    void action.run(async () => setScript(await api.scriptPreview(request())));
   };
 
   return (
@@ -142,8 +132,7 @@ export function SetupScriptCard() {
             <div className="text-[11px] text-ink-3">One line per network this computer is on; use the one the machine shares.</div>
           ) : null}
           <div className="text-[11px] text-ink-3">
-            The line runs the script only if it arrives exactly as this computer made it. It is served until{" "}
-            {new Date(serving.expires_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.
+            The line runs the script only if it arrives exactly as this computer made it. It is served until {clock(serving.expires_ms)}.
           </div>
           <div className="flex items-center gap-2 text-[12px]">
             {fetched ? (
@@ -158,16 +147,16 @@ export function SetupScriptCard() {
         </div>
       ) : null}
 
-      {error ? <div className="mt-3 text-[12px] text-critical">{error}</div> : null}
+      <ErrorLine error={action.error} className="mt-3" />
 
       <div className="mt-4 flex items-center justify-between">
-        <Button tone="ghost" size="sm" onClick={() => void toggleScript()}>
+        <Button tone="ghost" size="sm" onClick={toggleScript}>
           {script ? "Hide the script" : "Show the script"}
         </Button>
         {serving ? (
           <Button onClick={() => void stop()}>Stop serving the script</Button>
         ) : (
-          <Button tone="primary" onClick={() => void serve()} busy={working} disabled={!keyPath.trim()}>
+          <Button tone="primary" onClick={serve} busy={action.busy} disabled={!keyPath.trim()}>
             Share the setup script
           </Button>
         )}

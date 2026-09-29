@@ -4,6 +4,7 @@ import { byteSize, memoryGb, plural, span } from "../lib/format";
 import type { Probe } from "../lib/types";
 import { BatteryPill, OsGlyph } from "./Badges";
 import { loadPercent, memoryPercent, Meter } from "./Meter";
+import { EYEBROW } from "./primitives";
 
 /** What the probe found on a computer, laid out the same way for a machine's
  * page and for this computer's page: three gauges, then the facts. */
@@ -48,7 +49,7 @@ export function ProbeFacts({ probe, children }: { probe: Probe; children?: React
 export function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="min-w-0">
-      <dt className="text-[10px] uppercase tracking-[0.12em] text-ink-3">{label}</dt>
+      <dt className={EYEBROW}>{label}</dt>
       <dd className="mt-0.5 flex items-center gap-1.5 text-ink">{children}</dd>
     </div>
   );

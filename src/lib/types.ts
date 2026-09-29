@@ -391,8 +391,10 @@ export interface UpdateStatus {
   available: AvailableUpdate | null;
   /** When the last check ended, in milliseconds since 1970. */
   checked_ms: number | null;
-  /** "up to date", "0.3.3 is available" or why the check failed. */
-  result: string | null;
+  /** What the last check found; null before the first one ends. */
+  outcome: "up_to_date" | "found" | "failed" | null;
+  /** Why the last check failed, when it did. */
+  error: string | null;
   checking: boolean;
 }
 

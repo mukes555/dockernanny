@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 
 import { XIcon } from "./icons";
-import { Button } from "./primitives";
+import { Button, Eyebrow } from "./primitives";
 import { useEscape } from "./useEscape";
 
 /** A panel along the right edge for something that keeps going while the
@@ -65,7 +65,7 @@ export function Drawer({
         >
           <header className="flex items-center gap-2 border-b border-line px-4 py-3">
             <div className="min-w-0 flex-1">
-              <div className="text-[11px] uppercase tracking-[0.14em] text-ink-3">{eyebrow}</div>
+              <Eyebrow>{eyebrow}</Eyebrow>
               <h2 id={titleId} className="truncate text-[14px] font-semibold text-ink">
                 {title}
               </h2>

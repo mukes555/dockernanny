@@ -32,11 +32,11 @@ const PERMISSION: Record<HostOs, string> = {
 export function SharingSections() {
   const host = useStore((state) => state.host);
   const settings = useStore((state) => state.settings);
-  const saveSettings = useStore((state) => state.saveSettings);
+  const changeSettings = useStore((state) => state.changeSettings);
   const switching = useAction("inline");
   const sharing = settings?.share_this_computer ?? false;
   const probed = sharing && Boolean(host?.probed);
-  const setSharing = (on: boolean) => settings && void switching.run(() => saveSettings({ ...settings, share_this_computer: on }));
+  const setSharing = (on: boolean) => settings && void switching.run(() => changeSettings({ share_this_computer: on }));
 
   return (
     <div className="space-y-4">
@@ -88,7 +88,7 @@ export function SharingSections() {
 
 function StatusSection({ host }: { host: HostSnapshot }) {
   const settings = useStore((state) => state.settings);
-  const saveSettings = useStore((state) => state.saveSettings);
+  const changeSettings = useStore((state) => state.changeSettings);
   const os = useStore((state) => state.os);
   const [memory, setMemory] = useState(0);
   const [makePrivate, setMakePrivate] = useState(false);
@@ -108,7 +108,7 @@ function StatusSection({ host }: { host: HostSnapshot }) {
   const saveMemory = () => {
     const unchanged = memory === 0 || memory === settings?.host_memory_gb;
     if (!settings || unchanged) return;
-    void action.run(() => saveSettings({ ...settings, host_memory_gb: memory }));
+    void action.run(() => changeSettings({ host_memory_gb: memory }));
   };
 
   const setup = () =>
@@ -176,11 +176,7 @@ function StatusSection({ host }: { host: HostSnapshot }) {
         </Button>
         {host.setup_running ? <span className="text-[13px] text-ink-2">Working. This can take a few minutes.</span> : null}
         {settings ? (
-          <Toggle
-            checked={settings.start_at_login}
-            onChange={(on) => void action.run(() => saveSettings({ ...settings, start_at_login: on }))}
-            label="Start at login"
-          />
+          <Toggle checked={settings.start_at_login} onChange={(on) => void action.run(() => changeSettings({ start_at_login: on }))} label="Start at login" />
         ) : null}
       </div>
       <ErrorLine error={action.error} className="mt-3" />

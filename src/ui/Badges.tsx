@@ -39,7 +39,7 @@ export function StatusDot({
 }
 
 /** Which family a probe's OS text belongs to, for the glyph. */
-export function osFamily(os: string | null | undefined): "windows" | "macos" | "linux" | "unknown" {
+function osFamily(os: string | null | undefined): "windows" | "macos" | "linux" | "unknown" {
   const text = (os ?? "").toLowerCase();
   if (text.includes("windows")) return "windows";
   if (text.includes("macos") || text.includes("darwin")) return "macos";

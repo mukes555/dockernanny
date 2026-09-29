@@ -5,11 +5,11 @@ import { visibleMachines } from "../lib/machines";
 import type { ForwardState, HostSnapshot, Stack } from "../lib/types";
 import { AddMachineDialog } from "../machines/AddMachineDialog";
 import { MachineRow } from "../machines/MachineRow";
-import { isUp, onlineCount, useStore } from "../state/store";
+import { availableUpdate, isUp, onlineCount, useStore } from "../state/store";
 import type { DotState } from "../ui/Badges";
 import { OsGlyph, StatusDot } from "../ui/Badges";
 import { ActivityIcon, BookIcon, GearIcon, LifebuoyIcon, LogoMark, PlugIcon, PlusIcon, SpinnerIcon, StacksIcon } from "../ui/icons";
-import { cx } from "../ui/primitives";
+import { cx, navItemLook } from "../ui/primitives";
 
 const VERSION = __APP_VERSION__;
 
@@ -28,7 +28,7 @@ export function Sidebar() {
   const forwards = useStore((state) => state.forwards);
   const copies = useStore((state) => state.copies);
   const host = useStore((state) => state.host);
-  const update = useStore((state) => state.update);
+  const update = useStore(availableUpdate);
   const openSettings = useStore((state) => state.openSettings);
   const addMachineOpen = useStore((state) => state.addMachineOpen);
   const setAddMachineOpen = useStore((state) => state.setAddMachineOpen);
@@ -206,13 +206,6 @@ function NavItem({
       {trailing}
     </button>
   );
-}
-
-/** The current page stands out; "quiet" items (add, guide) read fainter than pages. */
-function navItemLook(active: boolean, quiet: boolean): string {
-  if (active) return "bg-accent-soft font-medium text-ink";
-  if (quiet) return "text-ink-3 hover:bg-surface-2 hover:text-ink";
-  return "text-ink-2 hover:bg-surface-2 hover:text-ink";
 }
 
 /** Every distinct localhost port a bridge that is up hands to a machine. */

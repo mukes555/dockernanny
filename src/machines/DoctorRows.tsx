@@ -5,7 +5,7 @@ import { CheckIcon, SpinnerIcon, XIcon } from "../ui/icons";
 import { CodeBlock, Inset } from "../ui/primitives";
 
 /** The five things a machine needs, in the order the doctor checks them. */
-export const CHECKS: Array<{ key: string; label: string }> = [
+const CHECKS: Array<{ key: string; label: string }> = [
   { key: "ssh", label: "SSH" },
   { key: "docker", label: "Docker" },
   { key: "compose", label: "Compose" },

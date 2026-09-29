@@ -8,7 +8,7 @@ import type { LocalProject } from "../lib/types";
 import { useStore } from "../state/store";
 import { OsGlyph } from "../ui/Badges";
 import { ExternalIcon, RefreshIcon, SpinnerIcon } from "../ui/icons";
-import { Page, Tabs } from "../ui/Page";
+import { Page } from "../ui/Page";
 import { Button, Card, Chip, ErrorLine, Inset } from "../ui/primitives";
 import { ProbeFacts } from "../ui/ProbeFacts";
 import { useLoaded } from "../ui/useLoaded";
@@ -49,17 +49,15 @@ export function ComputerPage() {
           {roles ? ` · ${roles}` : ""}
         </>
       }
-      tabs={
-        <Tabs
-          value={tab}
-          onChange={openComputer}
-          tabs={[
-            { id: "overview", label: "Overview" },
-            { id: "docker", label: "Docker here" },
-            { id: "sharing", label: "Sharing" },
-          ]}
-        />
-      }
+      tabs={{
+        value: tab,
+        onChange: openComputer,
+        items: [
+          { id: "overview", label: "Overview" },
+          { id: "docker", label: "Docker here" },
+          { id: "sharing", label: "Sharing" },
+        ],
+      }}
     >
       {tab === "overview" ? (
         <>

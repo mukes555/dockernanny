@@ -52,7 +52,7 @@ const MOCK_OS: HostOs = ((): HostOs => {
 const mockUpdateStatus = (): UpdateStatus => {
   const offered = new URLSearchParams(window.location.search).get("update") === "1";
   const available = offered ? { version: "0.3.3", notes: "What is new in 0.3.3:\n- A made-up fix, to show the notes.\n- Another one." } : null;
-  return { available, checked_ms: Date.now(), result: available ? "0.3.3 is available" : "up to date", checking: false };
+  return { available, checked_ms: Date.now(), outcome: available ? "found" : "up_to_date", error: null, checking: false };
 };
 
 // `?restart=1`: Docker is installed and only a restart of the computer is left.

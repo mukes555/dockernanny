@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from "react";
 
-import { api, errorMessage } from "../lib/ipc";
+import { api } from "../lib/ipc";
 import { useStore } from "../state/store";
 import { BookIcon, ExternalIcon, FolderIcon, LogsIcon } from "../ui/icons";
 import { Page } from "../ui/Page";
-import { Button, Card } from "../ui/primitives";
+import { Button, Card, ErrorLine } from "../ui/primitives";
 import { GLOSSARY } from "../ui/Term";
+import { useAction } from "../ui/useAction";
 
 const VERSION = __APP_VERSION__;
 const REPO = "https://github.com/mukes555/dockernanny";
@@ -26,10 +27,11 @@ export function HelpPage() {
   const setView = useStore((state) => state.setView);
   const setWelcomeOpen = useStore((state) => state.setWelcomeOpen);
   const os = useStore((state) => state.os);
-  const [error, setError] = useState<string | null>(null);
+  // Opening a link or a folder has no room of its own for a failure.
+  const opening = useAction("notice");
 
-  const open = (url: string) => void api.openLink(url).catch((err) => setError(errorMessage(err)));
-  const reveal = (which: "folder" | "log") => void api.revealAppFile(which).catch((err) => setError(errorMessage(err)));
+  const open = (url: string) => void opening.run(() => api.openLink(url), "Could not open the link");
+  const reveal = (which: "folder" | "log") => void opening.run(() => api.revealAppFile(which), "Could not open it");
 
   return (
     <Page
@@ -37,8 +39,6 @@ export function HelpPage() {
       summary={`dockerNanny ${VERSION} for ${OS_NAMES[os]}: run Docker Compose stacks on other computers and use them on localhost here`}
       width="max-w-3xl"
     >
-      {error ? <div className="text-[12px] text-critical">{error}</div> : null}
-
       <Card title="Getting started" description="The three-step welcome, and how to get a machine ready by hand.">
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => setWelcomeOpen(true)}>Show the welcome again</Button>
@@ -86,22 +86,14 @@ export function HelpPage() {
  * adds its own buttons after the two here. */
 function Diagnostics({ onOpenIssue, children }: { onOpenIssue: () => void; children?: ReactNode }) {
   const [report, setReport] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const copying = useAction("inline");
 
-  const copy = async () => {
-    setBusy(true);
-    setError(null);
-    try {
+  const copy = () =>
+    copying.run(async () => {
       const text = await api.diagnostics();
       await api.copyText(text);
       setReport(text);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   return (
     <Card
@@ -109,7 +101,7 @@ function Diagnostics({ onOpenIssue, children }: { onOpenIssue: () => void; child
       description="Copy a report to paste into an issue. Names, addresses, users and paths are replaced with placeholders before it is copied."
     >
       <div className="flex flex-wrap gap-2">
-        <Button tone="primary" onClick={() => void copy()} busy={busy}>
+        <Button tone="primary" onClick={() => void copy()} busy={copying.busy}>
           Copy diagnostics
         </Button>
         <Button onClick={onOpenIssue}>
@@ -117,7 +109,7 @@ function Diagnostics({ onOpenIssue, children }: { onOpenIssue: () => void; child
         </Button>
         {children}
       </div>
-      {error ? <div className="mt-3 text-[12px] text-critical">{error}</div> : null}
+      <ErrorLine error={copying.error} className="mt-3" />
       {report ? (
         <div className="mt-3">
           <div className="text-[12px] text-good">Copied. This is exactly what is on the clipboard:</div>

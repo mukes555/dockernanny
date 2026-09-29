@@ -139,7 +139,7 @@ export function PortsPage() {
                       </button>
                     </td>
                     <td className="mono px-2 py-2.5 text-ink-2">
-                      {row.machine?.name ?? "?"}:{row.remote}
+                      {row.machine?.name ?? "a removed machine"}:{row.remote}
                     </td>
                     <td className="px-2 py-2.5 text-ink-2">
                       {row.stack.name}

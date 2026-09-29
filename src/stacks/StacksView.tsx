@@ -1,10 +1,13 @@
+import { plural } from "../lib/format";
 import { visibleMachines } from "../lib/machines";
 import type { Machine, Stack } from "../lib/types";
 import { MachinePage } from "../machines/MachinePage";
 import { isUp, useStore } from "../state/store";
+import { StatusDot } from "../ui/Badges";
 import { ChevronRightIcon } from "../ui/icons";
 import { Page } from "../ui/Page";
-import { Button, cx, EmptyPanel } from "../ui/primitives";
+import { Button, EmptyPanel } from "../ui/primitives";
+import { useAction } from "../ui/useAction";
 import { DropErrorLine, DropHero, NewStackButton } from "./DropZone";
 import { STACK_GRID, StackCard } from "./StackCard";
 
@@ -18,8 +21,9 @@ export function StacksView() {
   const selectedMachineId = useStore((state) => state.selectedMachineId);
   const setCopyOpen = useStore((state) => state.setCopyOpen);
   const settings = useStore((state) => state.settings);
-  const saveSettings = useStore((state) => state.saveSettings);
+  const changeSettings = useStore((state) => state.changeSettings);
   const showSharing = useStore((state) => state.showSharing);
+  const turningOn = useAction("notice");
   // Records that point back at this computer are not machines; their stacks
   // stay out of sight too (Settings lists the records for removal).
   const machines = visibleMachines(allMachines, computerInfo);
@@ -43,7 +47,9 @@ export function StacksView() {
               <Button tone="primary" onClick={showSharing}>
                 Open sharing
               </Button>
-              <Button onClick={() => void saveSettings({ ...settings, use_machines: true })}>Turn it on</Button>
+              <Button onClick={() => void turningOn.run(() => changeSettings({ use_machines: true }))} busy={turningOn.busy}>
+                Turn it on
+              </Button>
             </div>
           }
         >
@@ -68,7 +74,7 @@ export function StacksView() {
   const summary =
     stacks.length === 0
       ? "Compose projects running on your machines, reachable here on localhost"
-      : `${running} of ${stacks.length} running, on ${groups.length} ${groups.length === 1 ? "machine" : "machines"}`;
+      : `${running} of ${stacks.length} running, on ${plural(groups.length, "machine")}`;
 
   return (
     <Page
@@ -113,11 +119,9 @@ function MachineGroup({ machine, stacks }: { machine: Machine; stacks: Stack[] }
         className="group inline-flex items-center gap-2 text-[13px] font-semibold text-ink"
         title={`Open ${machine.name}'s page`}
       >
-        <span className={cx("h-2 w-2 rounded-full", online ? "bg-good" : "bg-hairline")} />
+        <StatusDot state={online ? "good" : "idle"} label={online ? "online" : "offline"} />
         <span className="group-hover:text-accent">{machine.name}</span>
-        <span className="font-normal text-ink-3">
-          · {stacks.length} {stacks.length === 1 ? "stack" : "stacks"}
-        </span>
+        <span className="font-normal text-ink-3">· {plural(stacks.length, "stack")}</span>
         <ChevronRightIcon size={13} className="text-ink-3 group-hover:text-accent" />
       </button>
       <div className={STACK_GRID}>

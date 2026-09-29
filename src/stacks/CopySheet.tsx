@@ -1,210 +1,177 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
-import { api, errorMessage } from "../lib/ipc";
+import { api } from "../lib/ipc";
 import { visibleMachines } from "../lib/machines";
-import type { CopyPlan, CopyRequest, EndpointRef, LocalProject } from "../lib/types";
+import type { CopyRequest, EndpointRef, LocalProject, Machine, Stack } from "../lib/types";
+import type { CopyIntent } from "../state/store";
 import { useStore } from "../state/store";
 import { Dialog, DialogActions } from "../ui/Dialog";
-import { ArrowLeftIcon, SpinnerIcon } from "../ui/icons";
-import { Button, Chip, cx, Field, TextInput, Toggle } from "../ui/primitives";
-import { CopyData, defaultSelection, keepOffered, splitSelectionKey } from "./CopyData";
+import { ArrowLeftIcon } from "../ui/icons";
+import { Button, Chip, cx, Eyebrow, Field, Inset, LIST_HEAD, TextInput, Toggle } from "../ui/primitives";
+import { useAction } from "../ui/useAction";
+import { useLoaded } from "../ui/useLoaded";
+import { CopyData, splitSelectionKey } from "./CopyData";
+import { EndpointPills, Section, SourceModeRadio, SourcePicker } from "./CopyPickers";
+import type { SourceMode } from "./CopyPickers";
+import { LocalPortField, usePortOverrides } from "./PortOverrides";
+import { useCopyPlan } from "./useCopyPlan";
 
-type SourceMode = "keep" | "stop" | "leave";
-
-const sameEndpoint = (a: EndpointRef, b: EndpointRef) => a.kind === b.kind && (a.kind !== "machine" || b.kind !== "machine" || a.machine_id === b.machine_id);
+const THIS_COMPUTER: EndpointRef = { kind: "this_computer" };
+const onMachine = (machine_id: string): EndpointRef => ({ kind: "machine", machine_id });
 
 /** One flow for moving a stack's config and data between this computer and
  * the machines, in either direction. The backend plans first (what travels,
- * what gets replaced) and the sheet shows that before anything happens. */
+ * what gets replaced) and the sheet shows that before anything happens.
+ * The form mounts with the sheet, so every opening starts from what it was
+ * opened for. */
 export function CopySheet() {
   const intent = useStore((state) => state.copy);
-  const close = () => useStore.getState().setCopyOpen({ open: false });
+  const setCopyOpen = useStore((state) => state.setCopyOpen);
+  const close = () => setCopyOpen({ open: false });
+  return (
+    <Dialog open={intent.open} onClose={close} eyebrow="Copy" title="Copy a stack" width={720} closeOnBackdrop={false}>
+      <CopyForm intent={intent} onClose={close} />
+    </Dialog>
+  );
+}
+
+interface Start {
+  source: EndpointRef;
+  stackId: string | null;
+  name: string;
+  folder: string;
+  destination: EndpointRef | null;
+}
+
+/** Where the sheet starts: a stack card preselects its stack, a machine page
+ * its machine as the destination, this computer's page a way back here. */
+function startFrom(intent: CopyIntent, stacks: Stack[], machines: Machine[], online: (id: string) => boolean): Start {
+  const sourceStack = stacks.find((s) => s.id === intent.sourceStackId);
+  const askedDestination = intent.destinationMachineId ? onMachine(intent.destinationMachineId) : null;
+  if (sourceStack) {
+    return {
+      source: onMachine(sourceStack.machine_id),
+      stackId: sourceStack.id,
+      name: sourceStack.name,
+      folder: sourceStack.project_dir,
+      destination: askedDestination ?? THIS_COMPUTER,
+    };
+  }
+  if (intent.toThisComputer) {
+    const firstOnline = machines.find((m) => online(m.id)) ?? machines[0];
+    return { source: firstOnline ? onMachine(firstOnline.id) : THIS_COMPUTER, stackId: null, name: "", folder: "", destination: THIS_COMPUTER };
+  }
+  const firstMachine = machines[0] ? onMachine(machines[0].id) : null;
+  return { source: THIS_COMPUTER, stackId: null, name: "", folder: "", destination: askedDestination ?? firstMachine };
+}
+
+function CopyForm({ intent, onClose }: { intent: CopyIntent; onClose: () => void }) {
   const allMachines = useStore((state) => state.machines);
   const computerInfo = useStore((state) => state.computerInfo);
-  const machines = visibleMachines(allMachines, computerInfo);
   const stats = useStore((state) => state.stats);
-  const isOnline = (id: string) => stats[id]?.online ?? false;
   const stacks = useStore((state) => state.stacks);
   const setStacks = useStore((state) => state.setStacks);
   const clearOutput = useStore((state) => state.clearOutput);
   const openProgress = useStore((state) => state.openProgress);
+  const machines = visibleMachines(allMachines, computerInfo);
+  const isOnline = (id: string) => stats[id]?.online ?? false;
 
-  const [projects, setProjects] = useState<LocalProject[] | null>(null);
-  const [source, setSource] = useState<EndpointRef>({ kind: "this_computer" });
+  const [start] = useState(() => startFrom(intent, stacks, machines, isOnline));
+  const [source, setSource] = useState(start.source);
+  const [stackId, setStackId] = useState(start.stackId);
   const [project, setProject] = useState<LocalProject | null>(null);
-  const [stackId, setStackId] = useState<string | null>(null);
-  const [destination, setDestination] = useState<EndpointRef | null>(null);
-  const [name, setName] = useState("");
-  const [folder, setFolder] = useState("");
+  const [destination, setDestination] = useState(start.destination);
+  const [name, setName] = useState(start.name);
+  const [folder, setFolder] = useState(start.folder);
   const [config, setConfig] = useState(true);
   const [data, setData] = useState(true);
   const [mode, setMode] = useState<SourceMode>("stop");
-  const [plan, setPlan] = useState<CopyPlan | null>(null);
-  const [planning, setPlanning] = useState(false);
-  const [ticked, setTicked] = useState<Set<string>>(new Set());
-  // Which source and destination the ticks were made for.
-  const ticksFor = useRef<string | null>(null);
-  const [overrides, setOverrides] = useState<Record<number, number>>({});
-  const [busy, setBusy] = useState<number[]>([]);
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const local = useLoaded(api.localProjects);
+  const copying = useAction("inline");
 
-  // A fresh sheet every time, preselecting what it was opened for.
-  useEffect(() => {
-    if (!intent.open) return;
-    setError(null);
-    setPlan(null);
-    setOverrides({});
-    setConfig(true);
-    setData(true);
-    setMode("stop");
-    const sourceStack = stacks.find((s) => s.id === intent.sourceStackId);
-    if (sourceStack) {
-      setSource({ kind: "machine", machine_id: sourceStack.machine_id });
-      setStackId(sourceStack.id);
-      setProject(null);
-      setName(sourceStack.name);
-      setFolder(sourceStack.project_dir);
-      setDestination(intent.destinationMachineId ? { kind: "machine", machine_id: intent.destinationMachineId } : { kind: "this_computer" });
-    } else if (intent.toThisComputer) {
-      const firstOnline = machines.find((m) => stats[m.id]?.online) ?? machines[0];
-      setSource(firstOnline ? { kind: "machine", machine_id: firstOnline.id } : { kind: "this_computer" });
-      setStackId(null);
-      setProject(null);
-      setName("");
-      setFolder("");
-      setDestination({ kind: "this_computer" });
-    } else {
-      setSource({ kind: "this_computer" });
-      setStackId(null);
-      setProject(null);
-      setName("");
-      setFolder("");
-      setDestination(
-        intent.destinationMachineId
-          ? { kind: "machine", machine_id: intent.destinationMachineId }
-          : machines[0]
-            ? { kind: "machine", machine_id: machines[0].id }
-            : null,
-      );
+  // Opened from one of this computer's projects: pick it once the list is read.
+  const [presetDone, setPresetDone] = useState(!intent.sourceProject);
+  if (!presetDone && local.data) {
+    setPresetDone(true);
+    const preset = local.data.find((p) => p.name === intent.sourceProject);
+    if (preset) {
+      setProject(preset);
+      setName(preset.name);
     }
-    setProjects(null);
-    api
-      .localProjects()
-      .then((found) => {
-        setProjects(found);
-        const preset = found.find((p) => p.name === intent.sourceProject);
-        if (preset) {
-          setProject(preset);
-          setName(preset.name);
-        }
-      })
-      .catch((err) => setError(errorMessage(err)));
-    // The machine list is derived per render; the intent is what changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [intent, stacks]);
+  }
 
   const sourceStack = stacks.find((s) => s.id === stackId) ?? null;
   const sourceChosen = source.kind === "this_computer" ? project !== null : sourceStack !== null;
-  const request = (): CopyRequest | null => {
-    if (!destination || !sourceChosen || !name.trim()) return null;
-    return {
-      source,
-      project: source.kind === "this_computer" ? (project ?? undefined) : undefined,
-      stack_id: source.kind === "machine" ? (stackId ?? undefined) : undefined,
-      destination,
-      folder: destination.kind === "this_computer" ? folder : "",
-      name: name.trim(),
-      config,
-      data,
-      data_selection: [...ticked].map(splitSelectionKey),
-      stop_source: mode !== "keep",
-      keep_source_stopped: mode === "leave",
-      port_overrides: mode === "leave" ? {} : Object.fromEntries(Object.entries(overrides).map(([k, v]) => [String(k), v])),
-      excludes: [],
-      forward_ports: true,
-    };
-  };
-
-  // The plan follows the choices, a moment after they settle.
-  const planKey = JSON.stringify({ source, project: project?.name, stackId, destination, name, folder, data });
-  // What is copied from where to where; the name and the folder are not part of it.
-  const whatKey = JSON.stringify({ source, project: project?.name, stackId, destination });
-  useEffect(() => {
-    if (!intent.open) return;
-    const wanted = request();
-    if (!wanted) {
-      setPlan(null);
-      setPlanning(false);
-      return;
-    }
-    let current = true;
-    setPlanning(true);
-    const timer = window.setTimeout(() => {
-      api
-        .copyPlan(wanted)
-        .then((found) => {
-          if (!current) return;
-          setPlan(found);
-          // Only another source or destination brings the defaults back: a
-          // renamed destination must not re-tick data the user left out.
-          const sameWhat = ticksFor.current === whatKey;
-          ticksFor.current = whatKey;
-          setTicked((previous) => (sameWhat ? keepOffered(previous, found.containers) : defaultSelection(found.containers)));
-          setError(null);
-          void api.busyPorts(found.ports).then((ports) => current && setBusy(ports));
-        })
-        .catch((err) => {
-          if (!current) return;
-          // No plan, no Copy: an old plan must not stand in for one that failed.
-          setPlan(null);
-          setError(errorMessage(err));
-        })
-        .finally(() => current && setPlanning(false));
-    }, 400);
-    return () => {
-      current = false;
-      window.clearTimeout(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planKey, intent.open]);
-
-  if (!intent.open) return null;
-
-  const localFor = (port: number) => overrides[port] ?? port;
+  const leaving = mode === "leave";
+  // What the plan is asked for; the ticks and the ports are added once it answers.
+  const planned: CopyRequest | null =
+    destination && sourceChosen && name.trim()
+      ? {
+          source,
+          project: source.kind === "this_computer" ? (project ?? undefined) : undefined,
+          stack_id: source.kind === "machine" ? (stackId ?? undefined) : undefined,
+          destination,
+          folder: destination.kind === "this_computer" ? folder : "",
+          name: name.trim(),
+          config,
+          data,
+          data_selection: [],
+          stop_source: mode !== "keep",
+          keep_source_stopped: leaving,
+          port_overrides: {},
+          excludes: [],
+          forward_ports: true,
+        }
+      : null;
+  const { plan, planning, error: planError, ticked, setTicked } = useCopyPlan(planned);
   const toMachine = destination?.kind === "machine";
-  const conflicts = toMachine && plan ? plan.ports.filter((port) => busy.includes(localFor(port))) : [];
-  const blocked = mode !== "leave" && conflicts.length > 0;
+  const ports = usePortOverrides(toMachine && plan ? plan.ports : []);
+  // A move frees the source's ports, so nothing here can be in their way.
+  const blocked = !leaving && ports.conflicts.length > 0;
+  const request: CopyRequest | null = planned
+    ? { ...planned, data_selection: [...ticked].map(splitSelectionKey), port_overrides: leaving ? {} : ports.forRequest }
+    : null;
+
   const machineName = (ref: EndpointRef) => (ref.kind === "machine" ? (machines.find((m) => m.id === ref.machine_id)?.name ?? "machine") : "this computer");
+  const sourceName = source.kind === "this_computer" ? project?.name : sourceStack?.name;
+  const canCopy = request !== null && plan !== null && !planning && !blocked && (config || data);
 
   const copy = async () => {
-    const wanted = request();
-    if (!wanted) return;
-    setWorking(true);
-    setError(null);
-    try {
-      const started = await api.copyStack(wanted);
-      for (const stack of started.stacks) clearOutput(stack.id);
+    if (!request) return;
+    await copying.run(async () => {
+      const started = await api.copyStack(request);
+      // The card the copy lands on starts with an empty output; the other cards keep theirs.
+      clearOutput(started.card_id);
       setStacks(started.stacks);
-      close();
+      onClose();
       openProgress(started.card_id);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setWorking(false);
-    }
+    });
   };
 
-  const sourceName = source.kind === "this_computer" ? project?.name : sourceStack?.name;
+  const pickSource = (ref: EndpointRef) => {
+    setSource(ref);
+    setProject(null);
+    setStackId(null);
+  };
+  const pickProject = (picked: LocalProject) => {
+    setProject(picked);
+    // A name the user typed stays; one that only followed the last pick follows this one.
+    if (!name || name === project?.name) setName(picked.name);
+  };
+  const pickStack = (picked: Stack) => {
+    setStackId(picked.id);
+    if (!name || name === sourceStack?.name) setName(picked.name);
+    setFolder(picked.project_dir);
+  };
 
   return (
-    <Dialog open onClose={close} eyebrow="Copy" title="Copy a stack" width={720} closeOnBackdrop={false}>
+    <>
       <p className="mt-1 text-[13px] text-ink-2">
         Config is the project folder; data is the volumes and what the containers keep inside. Nothing at the source is deleted.
       </p>
 
       {sourceName && destination ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface-2/50 px-3 py-2 text-[12px]">
+        <Inset className="mt-3 flex flex-wrap items-center gap-2 text-[12px]">
           <span className="text-ink-3">{machineName(source)}</span>
           <span className="font-medium text-ink">{sourceName}</span>
           <ArrowLeftIcon size={13} className="rotate-180 text-ink-3" />
@@ -213,85 +180,18 @@ export function CopySheet() {
           <span className="ml-auto flex gap-1.5">
             {config ? <Chip tone="accent">config</Chip> : null}
             {data ? <Chip tone="accent">data</Chip> : null}
-            {mode === "leave" ? <Chip tone="warning">move</Chip> : null}
+            {leaving ? <Chip tone="warning">move</Chip> : null}
           </span>
-        </div>
+        </Inset>
       ) : null}
 
       <Section step="1" title="From">
-        <EndpointPills
-          chosen={source}
-          machines={machines}
-          online={isOnline}
-          exclude={null}
-          onPick={(ref) => {
-            setSource(ref);
-            setProject(null);
-            setStackId(null);
-            setPlan(null);
-          }}
-        />
-        {source.kind === "this_computer" ? (
-          projects === null ? (
-            <div className="mt-2 flex items-center gap-2 text-[12px] text-ink-3">
-              <SpinnerIcon size={12} /> reading this computer's Docker
-            </div>
-          ) : projects.length === 0 ? (
-            <div className="mt-2 text-[12px] text-ink-3">Docker on this computer has no compose projects right now.</div>
-          ) : (
-            <div className="mt-2 space-y-1.5">
-              {projects.map((p) => (
-                <PickRow
-                  key={p.name}
-                  selected={project?.name === p.name}
-                  onClick={() => {
-                    setProject(p);
-                    if (!name || name === project?.name) setName(p.name);
-                  }}
-                  title={p.name}
-                  subtitle={p.project_dir}
-                  chip={p.status}
-                  good={p.status.startsWith("running")}
-                  extra={`${p.volumes.length === 1 ? "1 volume" : `${p.volumes.length} volumes`} · ${p.ports.length === 1 ? "1 port" : `${p.ports.length} ports`}`}
-                />
-              ))}
-            </div>
-          )
-        ) : (
-          <div className="mt-2 space-y-1.5">
-            {stacks
-              .filter((s) => source.kind === "machine" && s.machine_id === source.machine_id)
-              .map((s) => (
-                <PickRow
-                  key={s.id}
-                  selected={stackId === s.id}
-                  onClick={() => {
-                    setStackId(s.id);
-                    if (!name || name === sourceStack?.name) setName(s.name);
-                    setFolder(s.project_dir);
-                  }}
-                  title={s.name}
-                  subtitle={s.project_dir}
-                />
-              ))}
-            {stacks.every((s) => source.kind !== "machine" || s.machine_id !== source.machine_id) ? (
-              <div className="text-[12px] text-ink-3">No stacks on that machine yet.</div>
-            ) : null}
-          </div>
-        )}
+        <EndpointPills chosen={source} machines={machines} online={isOnline} exclude={null} onPick={pickSource} />
+        <SourcePicker source={source} projects={local.data} stacks={stacks} project={project} stackId={stackId} onProject={pickProject} onStack={pickStack} />
       </Section>
 
       <Section step="2" title="To">
-        <EndpointPills
-          chosen={destination}
-          machines={machines}
-          online={isOnline}
-          exclude={source}
-          onPick={(ref) => {
-            setDestination(ref);
-            setPlan(null);
-          }}
-        />
+        <EndpointPills chosen={destination} machines={machines} online={isOnline} exclude={source} onPick={setDestination} />
         <div className="mt-3 grid grid-cols-2 gap-3">
           <Field label="Name at the destination">
             <TextInput value={name} onChange={(e) => setName(e.target.value)} />
@@ -302,16 +202,16 @@ export function CopySheet() {
             </Field>
           ) : null}
         </div>
-        {plan?.destination_exists ? (
+        {plan?.destination_exists && destination ? (
           <div className="mt-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] leading-relaxed text-warning">
-            {destination?.kind === "this_computer" ? (
+            {destination.kind === "this_computer" ? (
               <>
-                <span className="mono">{folder}</span> already has this project. Its files are replaced by the ones from {machineName(source!)}, files that
-                exist only here are deleted (excluded folders like .git and node_modules stay), and its data is replaced. Choose another folder to keep both.
+                <span className="mono">{folder}</span> already has this project. Its files are replaced by the ones from {machineName(source)}, files that exist
+                only here are deleted (excluded folders like .git and node_modules stay), and its data is replaced. Choose another folder to keep both.
               </>
             ) : (
               <>
-                {machineName(destination!)} already has {name}: its folder becomes an exact copy (files only there are deleted) and its data is replaced.
+                {machineName(destination)} already has {name}: its folder becomes an exact copy (files only there are deleted) and its data is replaced.
               </>
             )}
           </div>
@@ -328,7 +228,7 @@ export function CopySheet() {
             <CopyData
               volumes={plan?.volumes ?? []}
               containers={plan?.containers ?? []}
-              loading={planning || (!plan && sourceChosen && destination !== null)}
+              loading={planning}
               selected={ticked}
               onToggle={(key, on) =>
                 setTicked((current) => {
@@ -346,48 +246,39 @@ export function CopySheet() {
         ) : null}
 
         <div className="mt-3 space-y-1 text-[12px]">
-          <div className="text-[10px] uppercase tracking-[0.12em] text-ink-3">The source during the copy</div>
-          <Radio
+          <Eyebrow>The source during the copy</Eyebrow>
+          <SourceModeRadio
             value="stop"
             mode={mode}
             onChange={setMode}
             label={`Stop it for the data copy, then start it again${plan && !plan.source_running ? " (it is not running now)" : ""}`}
           />
-          <Radio value="leave" mode={mode} onChange={setMode} label="Stop it and leave it stopped: a move, which also frees its ports" />
-          <Radio value="keep" mode={mode} onChange={setMode} label="Keep it running: fast, but a database copied while it writes may be inconsistent" />
+          <SourceModeRadio value="leave" mode={mode} onChange={setMode} label="Stop it and leave it stopped: a move, which also frees its ports" />
+          <SourceModeRadio
+            value="keep"
+            mode={mode}
+            onChange={setMode}
+            label="Keep it running: fast, but a database copied while it writes may be inconsistent"
+          />
         </div>
 
         {toMachine && plan && plan.ports.length > 0 ? (
           <div className="mt-3 rounded-xl border border-line">
-            <div className="border-b border-line bg-surface-2 px-3 py-1.5 text-[10px] uppercase tracking-[0.12em] text-ink-3">
-              Ports on this computer afterwards
-            </div>
-            {plan.ports.map((port) => {
-              const local = localFor(port);
-              const taken = mode !== "leave" && busy.includes(local);
-              return (
-                <div key={port} className="flex items-center gap-2 px-3 py-1.5 text-[12px]">
-                  <span className="tabular w-16 text-ink-2">:{port}</span>
-                  <span className="text-ink-3">becomes localhost:</span>
-                  <input
-                    aria-label={`Port on this computer for ${port}`}
-                    className="tabular w-16 rounded-md border border-line bg-surface-2 px-1.5 py-0.5 text-[12px] text-ink outline-none focus:border-accent disabled:opacity-50"
-                    value={mode === "leave" ? port : local}
-                    disabled={mode === "leave"}
-                    onChange={(e) => setOverrides({ ...overrides, [port]: Number(e.target.value.replace(/\D/g, "")) || port })}
-                  />
-                  {taken ? (
-                    <button
-                      type="button"
-                      className="whitespace-nowrap text-[11px] text-warning underline-offset-2 hover:underline"
-                      onClick={() => setOverrides({ ...overrides, [port]: port + 1000 })}
-                    >
-                      in use on this computer, try {port + 1000}
-                    </button>
-                  ) : null}
-                </div>
-              );
-            })}
+            <div className={cx("border-b border-line", LIST_HEAD)}>Ports on this computer afterwards</div>
+            {plan.ports.map((port) => (
+              <div key={port} className="flex items-center gap-2 px-3 py-1.5 text-[12px]">
+                <span className="tabular w-16 text-ink-2">:{port}</span>
+                <span className="text-ink-3">becomes localhost:</span>
+                <LocalPortField
+                  port={port}
+                  local={leaving ? port : ports.localFor(port)}
+                  taken={!leaving && ports.isTaken(port)}
+                  disabled={leaving}
+                  label={`Port on this computer for ${port}`}
+                  onChange={(value) => ports.setLocal(port, value)}
+                />
+              </div>
+            ))}
           </div>
         ) : null}
 
@@ -400,126 +291,20 @@ export function CopySheet() {
         {plan?.notes.length ? <div className="mt-2 text-[11px] text-ink-3">{plan.notes.join(" · ")}</div> : null}
       </Section>
 
-      <DialogActions error={error}>
-        <Button tone="ghost" onClick={close}>
+      <DialogActions error={copying.error ?? planError ?? local.error}>
+        <Button tone="ghost" onClick={onClose}>
           Cancel
         </Button>
         <Button
           tone="primary"
           onClick={() => void copy()}
-          busy={working}
-          disabled={planning || !plan || !request() || blocked || (!config && !data)}
+          busy={copying.busy}
+          disabled={!canCopy}
           title={blocked ? "Pick other local ports or leave the source stopped" : undefined}
         >
           Copy to {destination ? machineName(destination) : "…"}
         </Button>
       </DialogActions>
-    </Dialog>
-  );
-}
-
-function Section({ step, title, children }: { step: string; title: string; children: React.ReactNode }) {
-  return (
-    <section className="mt-5">
-      <div className="flex items-baseline gap-2">
-        <span className="tabular text-[11px] font-semibold text-accent">{step}</span>
-        <h3 className="text-[13px] font-semibold text-ink">{title}</h3>
-      </div>
-      <div className="mt-2">{children}</div>
-    </section>
-  );
-}
-
-/** This computer and every machine; an offline machine is shown but cannot
- * be picked, so it does not look forgotten. */
-function EndpointPills({
-  chosen,
-  machines,
-  online,
-  exclude,
-  onPick,
-}: {
-  chosen: EndpointRef | null;
-  machines: Array<{ id: string; name: string }>;
-  online: (id: string) => boolean;
-  exclude: EndpointRef | null;
-  onPick: (ref: EndpointRef) => void;
-}) {
-  const options: Array<{ ref: EndpointRef; label: string; offline: boolean }> = [
-    { ref: { kind: "this_computer" }, label: "This computer", offline: false },
-    ...machines.map((m) => ({ ref: { kind: "machine", machine_id: m.id } as EndpointRef, label: m.name, offline: !online(m.id) })),
-  ];
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {options.map((option) => {
-        const excluded = exclude !== null && sameEndpoint(option.ref, exclude);
-        const selected = chosen !== null && sameEndpoint(option.ref, chosen);
-        const unavailable = excluded || option.offline;
-        return (
-          <button
-            key={option.label}
-            type="button"
-            disabled={unavailable}
-            onClick={() => onPick(option.ref)}
-            title={option.offline ? `${option.label} does not answer right now` : undefined}
-            className={cx(
-              "rounded-full border px-3 py-1 text-[12px] transition",
-              selected ? "border-accent bg-accent-soft text-ink" : "border-line text-ink-2 hover:text-ink",
-              unavailable && "opacity-40",
-            )}
-          >
-            {option.label}
-            {option.offline ? " (offline)" : ""}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function PickRow({
-  selected,
-  onClick,
-  title,
-  subtitle,
-  chip,
-  good,
-  extra,
-}: {
-  selected: boolean;
-  onClick: () => void;
-  title: string;
-  subtitle: string;
-  chip?: string;
-  good?: boolean;
-  extra?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cx(
-        "flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition",
-        selected ? "border-accent bg-accent-soft" : "border-line hover:bg-surface-2",
-      )}
-    >
-      <div className="min-w-0">
-        <div className="text-[13px] font-medium text-ink">{title}</div>
-        <div className="mono truncate text-[11px] text-ink-3">{subtitle}</div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2 text-[11px] text-ink-3">
-        {extra ? <span>{extra}</span> : null}
-        {chip ? <Chip tone={good ? "good" : "neutral"}>{chip}</Chip> : null}
-      </div>
-    </button>
-  );
-}
-
-function Radio({ value, mode, onChange, label }: { value: SourceMode; mode: SourceMode; onChange: (mode: SourceMode) => void; label: string }) {
-  return (
-    <label className="flex cursor-pointer items-start gap-2 text-ink-2">
-      <input type="radio" name="source-mode" checked={mode === value} onChange={() => onChange(value)} className="mt-0.5 accent-accent" />
-      <span>{label}</span>
-    </label>
+    </>
   );
 }

@@ -2,7 +2,7 @@ import type { ComputerInfo, Machine, MachineStats } from "./types";
 
 /** A record that points back at this computer: a test leftover, or a stack
  * someone runs "remotely" on their own Docker. Not a machine to list. */
-export function pointsAtThisComputer(machine: Machine, info: ComputerInfo | null): boolean {
+function pointsAtThisComputer(machine: Machine, info: ComputerInfo | null): boolean {
   const host = machine.host.trim().toLowerCase();
   if (["localhost", "127.0.0.1", "::1", "0.0.0.0"].includes(host)) return true;
   const own = info?.probe.hostname?.toLowerCase() ?? "";
