@@ -62,8 +62,8 @@ pub async fn model(ssh: &Ssh, site: &Site) -> anyhow::Result<Value> {
     serde_json::from_str(&out.stdout).map_err(|err| anyhow::anyhow!("unreadable compose model from {}: {err}", site.label))
 }
 
-pub async fn named_volumes(ssh: &Ssh, site: &Site, model: &Value) -> Vec<NamedVolume> {
-    let sizes = volume_sizes(ssh, &site.endpoint).await;
+/// The volumes the compose model names, with their sizes from `volume_sizes`.
+pub fn named_volumes(model: &Value, sizes: &HashMap<String, String>) -> Vec<NamedVolume> {
     compose::parse_volumes(model)
         .into_iter()
         .map(|def| NamedVolume {
@@ -76,6 +76,8 @@ pub async fn named_volumes(ssh: &Ssh, site: &Site, model: &Value) -> Vec<NamedVo
 }
 
 /// `docker system df -v` is the only place the engine reports volume sizes.
+/// It measures every volume on the engine, which takes seconds on a big one,
+/// so a caller asks once and hands the answer on.
 pub async fn volume_sizes(ssh: &Ssh, endpoint: &Endpoint) -> HashMap<String, String> {
     let Ok(out) = endpoint.docker_output(ssh, &["system", "df", "-v", "--format", "json"]).await else { return HashMap::new() };
     let value: Value = serde_json::from_str(&out.stdout).unwrap_or_default();
@@ -88,22 +90,34 @@ pub async fn volume_sizes(ssh: &Ssh, endpoint: &Endpoint) -> HashMap<String, Str
         .collect()
 }
 
-/// One entry per service that has a container, in service order.
-pub async fn container_data(ssh: &Ssh, site: &Site) -> anyhow::Result<Vec<ContainerData>> {
+/// One entry per service that has a container, in service order. The mounts
+/// and the layer sizes of all of them come from one `docker inspect` and one
+/// `docker ps -s`; only a container whose own layer holds something is
+/// asked for its `docker diff`.
+pub async fn container_data(ssh: &Ssh, site: &Site, sizes: &HashMap<String, String>) -> anyhow::Result<Vec<ContainerData>> {
     let services = site.services(ssh).await?;
-    let sizes = volume_sizes(ssh, &site.endpoint).await;
+    let with_container: Vec<_> = services.iter().filter(|s| !s.container.is_empty()).collect();
+    if with_container.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut inspect = vec!["inspect", "-f", "{{.Name}}|{{json .Mounts}}"];
+    inspect.extend(with_container.iter().map(|s| s.container.as_str()));
+    // A container removed meanwhile makes inspect fail for it alone; the others still answer.
+    let mounts_by_name = by_container(&site.endpoint.docker_output(ssh, &inspect).await?.stdout);
+    let project = format!("label=com.docker.compose.project={}", site.name);
+    let layers = site.endpoint.docker_output(ssh, &["ps", "-a", "-s", "--format", "{{.Names}}|{{.Size}}", "--filter", &project]).await?;
+    let layer_by_name = by_container(&layers.stdout);
 
     let mut result = Vec::new();
-    for service in services.iter().filter(|s| !s.container.is_empty()) {
-        let mounts = site.endpoint.docker_output(ssh, &["inspect", "-f", "{{json .Mounts}}", &service.container]).await?;
-        let (mut anonymous, destinations) = parse_mounts(&mounts.stdout);
+    for service in with_container {
+        let mounts = mounts_by_name.get(&service.container).map(String::as_str).unwrap_or("[]");
+        let (mut anonymous, destinations) = parse_mounts(mounts);
         for volume in &mut anonymous {
             volume.size = sizes.get(&volume.name).cloned().unwrap_or_else(|| "?".into());
         }
 
-        let filter = format!("name=^{}$", service.container);
-        let size = site.endpoint.docker_output(ssh, &["ps", "-a", "-s", "--format", "{{.Size}}", "--filter", &filter]).await?;
-        let layer_bytes = parse_rw_bytes(size.stdout.trim());
+        let layer_bytes = parse_rw_bytes(layer_by_name.get(&service.container).map(String::as_str).unwrap_or(""));
         let (changed_paths, note) = if layer_bytes < DIFF_THRESHOLD_BYTES {
             (Vec::new(), Some("nothing written inside the container".to_string()))
         } else {
@@ -208,6 +222,15 @@ fn registry_images(model: &Value) -> Vec<Download> {
     wanted
 }
 
+/// `name|rest` lines, one per container, keyed by the name. `docker inspect`
+/// writes the name with a leading slash; container names never hold a `|`.
+fn by_container(text: &str) -> HashMap<String, String> {
+    text.lines()
+        .filter_map(|line| line.split_once('|'))
+        .map(|(name, rest)| (name.trim().trim_start_matches('/').to_string(), rest.trim().to_string()))
+        .collect()
+}
+
 /// Anonymous volumes (a 64 hex name) and the destination of every mount, so
 /// the diff can ignore what lives in a mount.
 pub fn parse_mounts(json: &str) -> (Vec<AnonymousVolume>, Vec<String>) {
@@ -304,6 +327,19 @@ fn looks_like_data(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_inspect_and_one_ps_answer_for_every_container() {
+        let inspect =
+            "/shop-db-1|[{\"Type\":\"volume\",\"Name\":\"shop_data\",\"Destination\":\"/var/lib/postgresql/data\"}]\n/shop-web-1|[]\n";
+        let mounts = by_container(inspect);
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(parse_mounts(&mounts["shop-db-1"]).1, vec!["/var/lib/postgresql/data"]);
+        let ps = "shop-db-1|180MB (virtual 657MB)\nshop-web-1|0B (virtual 12MB)\n";
+        let layers = by_container(ps);
+        assert_eq!(parse_rw_bytes(&layers["shop-db-1"]), 180_000_000);
+        assert_eq!(parse_rw_bytes(&layers["shop-web-1"]), 0);
+    }
 
     const KEYCLOAK_DIFF: &str = "C /tmp\nA /tmp/hsperfdata_keycloak\nA /tmp/vertx-cache/-1082421131219886147\nC /opt\nC /opt/keycloak\nC /opt/keycloak/data\nA /opt/keycloak/data/h2\nA /opt/keycloak/data/h2/keycloakdb.mv.db\nA /opt/keycloak/data/import\nA /opt/keycloak/data/transaction-logs\nA /opt/keycloak/data/transaction-logs/ShadowNoFileLockStore\nC /opt/keycloak/lib\nC /opt/keycloak/lib/quarkus\nC /opt/keycloak/lib/quarkus/build-system.properties\nA /opt/keycloak/.keycloak\nA /opt/keycloak/.keycloak/kcadm.config\n";
 
