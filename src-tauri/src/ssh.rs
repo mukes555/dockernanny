@@ -139,7 +139,7 @@ impl Ssh {
         let script = ends_with_the_connection(script);
         match tokio::time::timeout(limit, job::run_with_stdin(self.command(alias), &script)).await {
             Ok(result) => result,
-            Err(_) => anyhow::bail!("the machine did not answer within {} s", limit.as_secs()),
+            Err(_) => Err(TimedOut(limit).into()),
         }
     }
 
@@ -172,6 +172,19 @@ impl Ssh {
         let _ = cmd.args(["-O", command, alias]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
     }
 }
+
+/// A remote command given up on at its time limit, so a caller can tell
+/// "no answer" apart from an answer that was an error.
+#[derive(Debug)]
+pub struct TimedOut(pub Duration);
+
+impl std::fmt::Display for TimedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the machine did not answer within {} s", self.0.as_secs())
+    }
+}
+
+impl std::error::Error for TimedOut {}
 
 /// Without a terminal, sshd does not end a command when the connection goes:
 /// a killed ssh here left `compose logs -f` running there for good, and a

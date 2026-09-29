@@ -12,19 +12,24 @@ use serde::Serialize;
 // The script's sections. Each survives its tools being absent: Linux, macOS
 // and Ubuntu inside WSL2 all fill what they can. Inside WSL the Windows side
 // answers too (its version and the laptop's battery) through the interop
-// socket, which an ssh session has to pick up by hand.
+// socket, which an ssh session has to pick up by hand. Load and memory come
+// from /proc on Linux, which no language setting changes; `LOCALE` keeps
+// the labels of the other tools (lscpu, df) in English for the parsers.
+const LOCALE: &str = "export LC_ALL=C";
 const HOST: &str = r#"echo HOST; hostname; uname -sr; if [ -r /etc/os-release ]; then . /etc/os-release; echo "$PRETTY_NAME"; elif command -v sw_vers >/dev/null 2>&1; then echo "macOS $(sw_vers -productVersion)"; fi"#;
 const CPU: &str = r#"echo CPU; if command -v lscpu >/dev/null 2>&1; then lscpu | sed -n 's/^Model name:[ ]*//p' | head -1; else sysctl -n machdep.cpu.brand_string 2>/dev/null; fi; nproc 2>/dev/null || sysctl -n hw.ncpu"#;
-const LOAD: &str = "echo LOAD; uptime";
+const LOAD: &str = "echo LOAD; cat /proc/loadavg 2>/dev/null || sysctl -n vm.loadavg";
 const UPTIME: &str = "echo UPTIME; cut -d' ' -f1 /proc/uptime 2>/dev/null || sysctl -n kern.boottime 2>/dev/null";
-const MEM: &str = "echo MEM; free -m 2>/dev/null || { sysctl -n hw.memsize; vm_stat; }";
-// One `docker info` answers DISK and DOCKER both; DOCKER reads `$di` again.
-const DISK: &str = r#"echo DISK; di=$(docker info --format '{{.DockerRootDir}}|{{.OperatingSystem}}' 2>/dev/null); d=${di%%|*}; [ -d "$d" ] || d=$HOME; df -Pk "$d" 2>/dev/null | tail -1"#;
+const MEM: &str =
+    "echo MEM; if [ -r /proc/meminfo ]; then grep -E '^(MemTotal|MemAvailable):' /proc/meminfo; else sysctl -n hw.memsize; vm_stat; fi";
+// One `docker info` answers DISK and DOCKER both, a single call to the
+// daemon per reading; DOCKER takes its fields apart from `$di`.
+const DISK: &str = r#"echo DISK; di=$(docker info --format '{{.DockerRootDir}}|{{.ServerVersion}}|{{.ContainersRunning}}|{{.OperatingSystem}}' 2>/dev/null); d=${di%%|*}; [ -d "$d" ] || d=$HOME; df -Pk "$d" 2>/dev/null | tail -1"#;
 const BATTERY: &str = r#"echo BATTERY; if command -v pmset >/dev/null 2>&1; then pmset -g batt; else for b in /sys/class/power_supply/BAT*; do [ -r "$b/capacity" ] && echo "$(cat "$b/capacity") $(cat "$b/status")"; done; fi"#;
 const WINDOWS: &str = r#"echo WINDOWS; if grep -qi microsoft /proc/version 2>/dev/null; then [ -z "$WSL_INTEROP" ] && WSL_INTEROP=$(ls -t /run/WSL/*_interop 2>/dev/null | head -1) && export WSL_INTEROP; timeout 8 /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -NonInteractive -Command '$o = Get-CimInstance Win32_OperatingSystem; "$($o.Caption) $($o.Version)"; $b = Get-CimInstance Win32_Battery | Select-Object -First 1; if ($b) { "battery $($b.EstimatedChargeRemaining) $($b.BatteryStatus)" }' 2>/dev/null | tr -d '\r'; fi"#;
-// Always three lines (version, what it runs on, containers), even with no
-// Docker at all: the parse is positional.
-const DOCKER: &str = r#"echo DOCKER; v=$(docker version --format '{{.Server.Version}}' 2>/dev/null); echo "$v"; echo "${di#*|}"; docker ps -q 2>/dev/null | wc -l"#;
+// Always three lines (version, what it runs on, running containers), even
+// with no Docker at all: the parse is positional.
+const DOCKER: &str = r#"echo DOCKER; rest=${di#*|}; echo "${rest%%|*}"; rest=${rest#*|}; echo "${rest#*|}"; n=${rest%%|*}; echo "${n:-0}""#;
 
 /// What never changes on a computer. WINDOWS also carries a WSL machine's
 /// battery, which only Windows reports; a full reading every minute or so
@@ -37,7 +42,7 @@ const CHANGING: [&str; 6] = [LOAD, UPTIME, MEM, DISK, BATTERY, DOCKER];
 /// facts cost a PowerShell start on a Windows machine and several processes
 /// everywhere, every ten seconds, for answers that do not change.
 pub fn script(full: bool) -> String {
-    let mut sections: Vec<&str> = Vec::new();
+    let mut sections: Vec<&str> = vec![LOCALE];
     if full {
         sections.extend(FIXED);
     }
@@ -162,12 +167,10 @@ fn describe_os(pretty: Option<&str>, windows: Option<&str>) -> Option<String> {
     Some(text)
 }
 
-/// Linux says `load average: 0.52, 0.58, 0.59`, macOS says `load averages: 2.11 2.35 2.40`.
-fn parse_load(uptime_line: &str) -> Option<f32> {
-    let index = uptime_line.find("load average")?;
-    let after = &uptime_line[index..];
-    let numbers = after.split_once(':')?.1;
-    numbers.split([' ', ',']).find_map(|token| token.parse().ok())
+/// The first number of `/proc/loadavg` (`0.52 0.58 0.59 1/234 5678`) or of
+/// macOS's `vm.loadavg` (`{ 1.50 1.20 1.00 }`).
+fn parse_load(line: &str) -> Option<f32> {
+    line.split_whitespace().find_map(|token| token.parse().ok())
 }
 
 /// `/proc/uptime` gives seconds; macOS `kern.boottime` gives the boot epoch.
@@ -180,15 +183,16 @@ fn parse_uptime(line: &str, now_s: u64) -> u64 {
     boot.map(|b| now_s.saturating_sub(b)).unwrap_or(0)
 }
 
-/// `free -m` on Linux (total then used on the `Mem:` line); on macOS the
-/// total in bytes followed by `vm_stat`, where used is the active, wired
-/// and compressed pages.
+/// Total and used megabytes. Linux gives `/proc/meminfo`'s `MemTotal` and
+/// `MemAvailable` in kB, and used is what is not available, as `free` counts
+/// it. macOS gives the total in bytes followed by `vm_stat`, where used is
+/// the active, wired and compressed pages.
 fn parse_memory(lines: &[String]) -> (u64, u64) {
-    if let Some(mem) = lines.iter().find(|l| l.starts_with("Mem:")) {
-        let mut fields = mem.split_whitespace().skip(1);
-        let total = fields.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-        let used = fields.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-        return (total, used);
+    let meminfo_kb =
+        |label: &str| -> Option<u64> { lines.iter().find_map(|l| l.strip_prefix(label)?.split_whitespace().next()?.parse().ok()) };
+    if let Some(total_kb) = meminfo_kb("MemTotal:") {
+        let available_kb = meminfo_kb("MemAvailable:").unwrap_or(total_kb);
+        return (total_kb / 1024, total_kb.saturating_sub(available_kb) / 1024);
     }
     let Some(total_bytes) = lines.first().and_then(|l| l.parse::<u64>().ok()) else { return (0, 0) };
     let page_size: u64 = lines
@@ -263,9 +267,9 @@ mod tests {
 
     // Made-up samples in the exact formats the tools print; round numbers so
     // the expected values below can be checked by eye.
-    const MAC: &str = "HOST\nstudio\nDarwin 24.1.0\nmacOS 15.1\nCPU\nApple M2\n8\nLOAD\n10:00  up 3 days,  2:00, 2 users, load averages: 1.50 1.20 1.00\nUPTIME\n{ sec = 1700000000, usec = 0 } Tue Nov 14 22:13:20 2023\nMEM\n17179869184\nMach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                    50000.\nPages active:                                 200000.\nPages inactive:                               100000.\nPages wired down:                              80000.\nPages occupied by compressor:                  40000.\nDISK\n/dev/disk3s5   500000000 300000000 200000000    60%    /System/Volumes/Data\nBATTERY\nNow drawing from 'AC Power'\n -InternalBattery-0 (id=1234567)\t100%; charged; 0:00 remaining present: true\nWINDOWS\nDOCKER\n27.3.1\nDocker Desktop\n      5\n";
+    const MAC: &str = "HOST\nstudio\nDarwin 24.1.0\nmacOS 15.1\nCPU\nApple M2\n8\nLOAD\n{ 1.50 1.20 1.00 }\nUPTIME\n{ sec = 1700000000, usec = 0 } Tue Nov 14 22:13:20 2023\nMEM\n17179869184\nMach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                    50000.\nPages active:                                 200000.\nPages inactive:                               100000.\nPages wired down:                              80000.\nPages occupied by compressor:                  40000.\nDISK\n/dev/disk3s5   500000000 300000000 200000000    60%    /System/Volumes/Data\nBATTERY\nNow drawing from 'AC Power'\n -InternalBattery-0 (id=1234567)\t100%; charged; 0:00 remaining present: true\nWINDOWS\nDOCKER\n27.3.1\nDocker Desktop\n      5\n";
 
-    const WSL: &str = "HOST\nworkshop\nLinux 5.15.167.4-microsoft-standard-WSL2\nUbuntu 24.04.1 LTS\nCPU\nExample 8-Core Processor\n8\nLOAD\n 10:00:00 up  5:00,  1 user,  load average: 0.10, 0.20, 0.30\nUPTIME\n18000.00\nMEM\n               total        used        free      shared  buff/cache   available\nMem:           16000        4000       12000           0         500       11500\nSwap:           4096           0        4096\nDISK\n/dev/sdd        1000000000 100000000 900000000      10% /var/lib/docker\nBATTERY\nWINDOWS\nMicrosoft Windows 11 Pro 10.0.22631\nbattery 80 1\nDOCKER\n27.3.1\nUbuntu 24.04.1 LTS\n2\n";
+    const WSL: &str = "HOST\nworkshop\nLinux 5.15.167.4-microsoft-standard-WSL2\nUbuntu 24.04.1 LTS\nCPU\nExample 8-Core Processor\n8\nLOAD\n0.10 0.20 0.30 1/200 3000\nUPTIME\n18000.00\nMEM\nMemTotal:       16384000 kB\nMemAvailable:   12288000 kB\nDISK\n/dev/sdd        1000000000 100000000 900000000      10% /var/lib/docker\nBATTERY\nWINDOWS\nMicrosoft Windows 11 Pro 10.0.22631\nbattery 80 1\nDOCKER\n27.3.1\nUbuntu 24.04.1 LTS\n2\n";
 
     #[test]
     fn a_mac_is_described_with_its_battery_and_memory() {
@@ -304,7 +308,7 @@ mod tests {
 
     #[test]
     fn linux_battery_and_missing_tools_are_tolerated() {
-        let text = "HOST\nbox\nLinux 6.8\nDebian GNU/Linux 12 (bookworm)\nCPU\n4\nLOAD\nload average: 1.00, 0.9, 0.8\nUPTIME\nMEM\nDISK\nBATTERY\n42 Discharging\nWINDOWS\nDOCKER\n\n\n0\n";
+        let text = "HOST\nbox\nLinux 6.8\nDebian GNU/Linux 12 (bookworm)\nCPU\n4\nLOAD\n1.00 0.90 0.80 1/100 200\nUPTIME\nMEM\nDISK\nBATTERY\n42 Discharging\nWINDOWS\nDOCKER\n\n\n0\n";
         let probe = parse(text);
         assert_eq!(probe.cpu_model, None);
         assert_eq!(probe.cpus, 4);
@@ -319,7 +323,7 @@ mod tests {
     #[test]
     fn a_light_reading_keeps_the_fixed_facts_of_the_full_one() {
         let full = parse(WSL);
-        let light_text = "LOAD\n load average: 2.50, 0.20, 0.30\nUPTIME\n18060.00\nMEM\nMem:           16000        6000       10000           0         500       9500\nDISK\n/dev/sdd        1000000000 200000000 800000000      20% /var/lib/docker\nBATTERY\nDOCKER\n27.3.1\nUbuntu 24.04.1 LTS\n3\n";
+        let light_text = "LOAD\n2.50 0.20 0.30 1/200 3000\nUPTIME\n18060.00\nMEM\nMemTotal:       16384000 kB\nMemAvailable:   10240000 kB\nDISK\n/dev/sdd        1000000000 200000000 800000000      20% /var/lib/docker\nBATTERY\nDOCKER\n27.3.1\nUbuntu 24.04.1 LTS\n3\n";
         let light = with_fixed_facts(parse(light_text), &full);
         assert_eq!(light.hostname.as_deref(), Some("workshop"));
         assert_eq!(light.os, full.os);
@@ -333,13 +337,42 @@ mod tests {
     }
 
     #[test]
-    fn the_light_script_skips_the_fixed_sections_and_asks_docker_info_once() {
+    fn the_light_script_skips_the_fixed_sections_and_asks_the_daemon_once() {
         let full = script(true);
         let light = script(false);
+        assert!(full.starts_with("export LC_ALL=C\n") && light.starts_with("export LC_ALL=C\n"), "labels in English everywhere");
         assert!(full.contains("echo HOST") && full.contains("echo WINDOWS"));
         assert!(!light.contains("echo HOST") && !light.contains("echo CPU") && !light.contains("powershell"));
-        assert_eq!(light.matches("docker info").count(), 1);
+        assert_eq!(light.matches("docker ").count(), 1, "one docker info, no docker version or docker ps");
         assert!(light.find("echo DISK").unwrap() < light.find("echo DOCKER").unwrap(), "DOCKER reads what DISK asked");
+    }
+
+    /// The DOCKER section run by a real `sh`, with and without an answer from the daemon.
+    #[cfg(unix)]
+    #[test]
+    fn docker_info_s_fields_come_apart_in_the_shell() {
+        let run = |di: &str| {
+            let script = format!("di='{di}'\n{DOCKER}");
+            let out = std::process::Command::new("sh").arg("-c").arg(script).output().unwrap();
+            parse(&String::from_utf8_lossy(&out.stdout))
+        };
+        let answered = run("/var/lib/docker|27.3.1|4|Ubuntu 24.04.1 LTS");
+        assert_eq!(answered.docker_version.as_deref(), Some("27.3.1"));
+        assert_eq!(answered.flavor.as_deref(), Some("Ubuntu 24.04.1 LTS"));
+        assert_eq!(answered.containers_running, 4);
+        let silent = run("");
+        assert_eq!((silent.docker_version, silent.flavor, silent.containers_running), (None, None, 0));
+    }
+
+    /// The whole script on the computer running the tests (macOS and Linux in CI).
+    #[cfg(unix)]
+    #[test]
+    fn the_probe_reads_the_computer_it_runs_on() {
+        let out = std::process::Command::new("sh").arg("-c").arg(script(true)).output().unwrap();
+        let probe = parse(&String::from_utf8_lossy(&out.stdout));
+        assert!(probe.hostname.is_some() && probe.os.is_some(), "{probe:?}");
+        assert!(probe.cpus > 0 && probe.mem_total_mb > 0 && probe.mem_used_mb <= probe.mem_total_mb, "{probe:?}");
+        assert!(probe.uptime_s > 0 && probe.disk_total_bytes > 0, "{probe:?}");
     }
 
     #[test]
