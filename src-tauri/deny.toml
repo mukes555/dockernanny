@@ -1,0 +1,6 @@
+# `cargo deny check advisories` in CI. Every security advisory fails the
+# build. "Unmaintained" notices count only for the crates this app depends
+# on directly: the ones deep inside Tauri's own tree are Tauri's to replace.
+[advisories]
+unmaintained = "workspace"
+yanked = "deny"

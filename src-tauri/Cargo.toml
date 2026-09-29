@@ -25,8 +25,9 @@ uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # GUI apps on macOS do not inherit the shell PATH, so Homebrew's docker, ssh
-# and rsync would be invisible when launched from Finder.
-fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
+# and rsync would be invisible when launched from Finder. Pinned to a commit:
+# it is not on crates.io, and it runs a login shell at every start.
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d503ea115a839aae718d02f79e7c7f0f673" }
 notify = "8.2.0"
 tauri-plugin-clipboard-manager = "2.3.3"
 # The sharing role: one instance, a tray icon, start at login, a random pairing code.

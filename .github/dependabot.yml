@@ -1,0 +1,25 @@
+# Weekly pull requests for new versions: the pinned action commits, the
+# Rust crates and the npm packages. Grouped so one week is one or two PRs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+    groups:
+      crates:
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      packages:
+        update-types: [minor, patch]
