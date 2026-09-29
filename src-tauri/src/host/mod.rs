@@ -180,11 +180,12 @@ fn real_platform(_config: &HostConfig) -> Arc<dyn Platform> {
 }
 
 /// One append-only file, `~/.dockernanny/host.log`, for what the sharing
-/// role did while nobody was looking.
+/// role did while nobody was looking; kept to a few megabytes.
 pub fn log_to_file(message: &str) {
     use std::io::Write;
     let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let path = crate::store::home_dir().join("host.log");
+    crate::store::keep_log_small(&path);
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "{seconds} {message}");
     }

@@ -3,7 +3,6 @@
 //! cancelled; `Output` is what a command left behind once it finished.
 
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -60,27 +59,25 @@ pub fn reads_like_error(text: &str) -> bool {
 /// second, and a message per line kept the window busy drawing.
 const BATCH_EVERY: Duration = Duration::from_millis(100);
 
-/// A sink that hands `send` what arrived every 100 ms while lines come, and
-/// the rest once the sink is dropped, which is when its job has ended.
+/// A sink that hands `send` its lines in batches: a line starts a batch,
+/// and everything that arrives in the next 100 ms goes with it. While no
+/// line comes the task sleeps, so a quiet log stream costs nothing. Lines
+/// sent before the sink is dropped (when its job ends) still go out.
 pub fn batched(mut send: impl FnMut(Vec<Line>) + Send + 'static) -> impl FnMut(Line) + Send + 'static {
-    let buffer: Arc<Mutex<Vec<Line>>> = Arc::default();
-    let flusher = buffer.clone();
+    let (lines, mut arriving) = tokio::sync::mpsc::unbounded_channel::<Line>();
     tokio::spawn(async move {
-        loop {
+        while let Some(first) = arriving.recv().await {
             tokio::time::sleep(BATCH_EVERY).await;
-            // Looked at before taking, so a line pushed just before the sink
-            // went is in this batch or the next, never lost.
-            let sink_gone = Arc::strong_count(&flusher) == 1;
-            let lines = std::mem::take(&mut *flusher.lock().expect("batch lock"));
-            if !lines.is_empty() {
-                send(lines);
+            let mut batch = vec![first];
+            while let Ok(line) = arriving.try_recv() {
+                batch.push(line);
             }
-            if sink_gone {
-                return;
-            }
+            send(batch);
         }
     });
-    move |line| buffer.lock().expect("batch lock").push(line)
+    move |line| {
+        let _ = lines.send(line);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -354,6 +351,25 @@ mod tests {
             received.extend(batch);
         }
         assert_eq!(received, (0..5).map(|n| format!("line {n}")).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn lines_close_together_travel_as_one_batch_and_later_ones_as_another() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<usize>();
+        let mut sink = batched(move |lines| {
+            let _ = tx.send(lines.len());
+        });
+        let line = || Line { stream: Stream::Stdout, text: "x".into() };
+        sink(line());
+        sink(line());
+        sink(line());
+        assert_eq!(rx.recv().await, Some(3), "one batch for a burst");
+        tokio::time::sleep(BATCH_EVERY * 2).await;
+        assert!(rx.try_recv().is_err(), "nothing is sent while nothing arrives");
+        sink(line());
+        drop(sink);
+        assert_eq!(rx.recv().await, Some(1));
+        assert_eq!(rx.recv().await, None, "the task ends with its sink");
     }
 
     #[test]
