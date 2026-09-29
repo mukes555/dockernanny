@@ -226,7 +226,8 @@ pub async fn plan(ssh: &Ssh, sides: &Sides, request: &CopyRequest) -> anyhow::Re
     ports.dedup();
 
     let (volumes, containers, images, needed) = if request.data {
-        let named = discover::named_volumes(ssh, from, &model).await;
+        let sizes = discover::volume_sizes(ssh, &from.endpoint).await;
+        let named = discover::named_volumes(&model, &sizes);
         let needed: u64 = named.iter().map(|v| check::parse_human_size(&v.size)).sum();
         let volumes = named
             .iter()
@@ -241,7 +242,7 @@ pub async fn plan(ssh: &Ssh, sides: &Sides, request: &CopyRequest) -> anyhow::Re
         if named.iter().any(|v| v.external) {
             warnings.push("External volumes keep their own name and are added to, not replaced.".into());
         }
-        let containers = discover::container_data(ssh, from).await?;
+        let containers = discover::container_data(ssh, from, &sizes).await?;
         let images = if from.is_local() { discover::images_to_carry(ssh, from, to, &model).await } else { Vec::new() };
         (volumes, containers, images, needed)
     } else {
@@ -373,7 +374,7 @@ pub(crate) struct Inventory {
 
 impl Inventory {
     async fn at(ssh: &Ssh, from: &Site, to: &Site, model: &Value) -> Self {
-        let volumes = discover::named_volumes(ssh, from, model).await;
+        let volumes = discover::named_volumes(model, &discover::volume_sizes(ssh, &from.endpoint).await);
         let images = if from.is_local() { discover::images_to_carry(ssh, from, to, model).await } else { Vec::new() };
         Self { volumes, images }
     }
@@ -431,7 +432,10 @@ async fn carry(
 
     report.step(Phase::Starting, &names::start(&to.name, &to.label));
     let (sink, reason) = report.sink_keeping_error();
-    let code = to.compose_job(ssh, "up -d --build --remove-orphans", sink)?.wait().await?;
+    // After a data copy, `create --build` above has built the images, so up
+    // starts what is there; a config-only copy builds here, once.
+    let built_already = inventory.is_some();
+    let code = to.compose_job(ssh, crate::stack::up_args(!built_already), sink)?.wait().await?;
     anyhow::ensure!(code == Some(0), "compose up on {} failed: {}", to.label, why_it_failed(code, &reason));
     Ok(mirrored)
 }

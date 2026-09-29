@@ -320,6 +320,13 @@ export function parseLogLine(raw: string): LogLine {
   return { container: raw.slice(0, separator).trim(), text: raw.slice(separator + 3) };
 }
 
+/** A line in a log drawer, parsed once when it arrived. `seq` only grows,
+ * so it keys the row for React however the list is trimmed. */
+export interface LogEntry extends LogLine {
+  seq: number;
+  stream: OutputLine["stream"];
+}
+
 export interface ForwardPort {
   local: number;
   remote: number;

@@ -27,6 +27,8 @@ const PROBE_EVERY_HIDDEN: Duration = Duration::from_secs(60);
 const PEERS_EVERY: Duration = Duration::from_secs(5);
 const PEERS_EVERY_HIDDEN: Duration = Duration::from_secs(60);
 const MAX_LOG_LINES: usize = 600;
+/// A probe slower than this is logged even when nothing else changed.
+const SLOW_PROBE: Duration = Duration::from_secs(15);
 
 fn env_flag(name: &str) -> bool {
     std::env::var(name).map(|v| v == "1").unwrap_or(false)
@@ -92,6 +94,8 @@ pub fn start(app: AppHandle, platform: Arc<dyn Platform>, pairing_port: u16) -> 
                 probed: false,
                 addresses: Vec::new(),
                 listening: false,
+                bind_failure: None,
+                last_missing: None,
                 stop_listener,
                 pairing_events: None,
                 pairing_note: None,
@@ -125,6 +129,10 @@ struct Loop {
     probed: bool,
     addresses: Vec<String>,
     listening: bool,
+    /// The last reason the pairing port could not open, so it is logged once.
+    bind_failure: Option<String>,
+    /// What the last probe found missing, so an unchanged reading is not logged.
+    last_missing: Option<String>,
     stop_listener: Arc<AtomicBool>,
     pairing_events: Option<Receiver<Event>>,
     pairing_note: Option<String>,
@@ -184,11 +192,15 @@ impl Loop {
         self.probed = true;
         self.last_probe = Some(Instant::now());
         let missing: Vec<&str> = self.picture.rows.iter().filter(|r| r.state == super::platform::State::Missing).map(|r| r.name).collect();
-        super::log_to_file(&format!(
-            "probe took {:?}; missing: {}",
-            started.elapsed(),
-            if missing.is_empty() { "nothing".to_string() } else { missing.join(", ") }
-        ));
+        let missing = if missing.is_empty() { "nothing".to_string() } else { missing.join(", ") };
+        // A reading every ten seconds would fill the log with the same line;
+        // what changed, and a probe slow enough to be a problem, are worth one.
+        let changed = self.last_missing.as_deref() != Some(missing.as_str());
+        let slow = started.elapsed() > SLOW_PROBE;
+        if changed || slow {
+            super::log_to_file(&format!("probe took {:?}; missing: {missing}", started.elapsed()));
+        }
+        self.last_missing = Some(missing);
     }
 
     /// The port opens only once the platform says the firewall allows it.
@@ -210,7 +222,14 @@ impl Loop {
                     self.arm_pairing();
                 }
             }
-            Err(err) => self.say(&format!("pairing port {} could not open: {err}", self.pairing_port)),
+            Err(err) => {
+                // Tried again every second; said once, and again only if the reason changes.
+                let why = format!("pairing port {} could not open: {err}", self.pairing_port);
+                if self.bind_failure.as_deref() != Some(why.as_str()) {
+                    self.say(&why);
+                    self.bind_failure = Some(why);
+                }
+            }
         }
     }
 

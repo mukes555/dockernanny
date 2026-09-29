@@ -10,6 +10,7 @@ import type {
   ForwardState,
   HostOs,
   HostSnapshot,
+  LogEntry,
   Machine,
   MachineStats,
   OutputLine,
@@ -20,6 +21,7 @@ import type {
   Theme,
   UpdateStatus,
 } from "../lib/types";
+import { parseLogLine } from "../lib/types";
 
 /** The pages the sidebar leads to. A machine's page is "stacks" with a machine selected. */
 export type View = "stacks" | "ports" | "activity" | "computer" | "guide" | "settings" | "help";
@@ -64,6 +66,23 @@ const MAX_HOST_LOG_LINES = 600;
 const MAX_OUTPUT_LINES = 400;
 const MAX_LOG_LINES = 2000;
 
+let nextLogSeq = 0;
+
+/** Log lines as the drawers keep them: numbered, and split into container
+ * and text once. `compose logs` prefixes every line with its container;
+ * `docker logs` of one container does not, so its text is kept whole. */
+function logEntries(lines: OutputLine[], prefixed: boolean): LogEntry[] {
+  return lines.map((line) => {
+    const parsed = prefixed ? parseLogLine(line.text) : { container: "", text: line.text };
+    nextLogSeq += 1;
+    return { seq: nextLogSeq, stream: line.stream, ...parsed };
+  });
+}
+
+function lastLogLines(entries: LogEntry[]): LogEntry[] {
+  return entries.length > MAX_LOG_LINES ? entries.slice(entries.length - MAX_LOG_LINES) : entries;
+}
+
 interface State {
   view: View;
   /** Kept in the store because the sidebar, the tray and other pages open these parts directly. */
@@ -100,10 +119,10 @@ interface State {
   forwards: Record<string, ForwardState>;
   output: Record<string, OutputLine[]>;
   /** Streamed `compose logs` for the stack whose drawer is open. */
-  logs: OutputLine[];
+  logs: LogEntry[];
   logsFor: string | null;
   /** Streamed `docker logs` for one container on a machine, over its context. */
-  containerLog: OutputLine[];
+  containerLog: LogEntry[];
   containerLogsFor: ContainerTarget | null;
   /** A file is being dragged over the window. */
   dragging: boolean;
@@ -340,8 +359,7 @@ export const useStore = create<State>((set, get) => ({
     set((state) => {
       // A late line from a drawer that was already closed is dropped.
       if (state.logsFor !== stackId) return {};
-      const lines = [...state.logs, ...added];
-      return { logs: lines.length > MAX_LOG_LINES ? lines.slice(lines.length - MAX_LOG_LINES) : lines };
+      return { logs: lastLogLines([...state.logs, ...logEntries(added, true)]) };
     }),
   clearLogs: () => set({ logs: [] }),
   openLogs: (stackId) => set(stackId ? { logsFor: stackId, logs: [], progressFor: null, containerLogsFor: null } : { logsFor: null, logs: [] }),
@@ -349,8 +367,7 @@ export const useStore = create<State>((set, get) => ({
     set((state) => {
       // A late line from a container whose drawer already closed is dropped.
       if (state.containerLogsFor?.id !== id) return {};
-      const lines = [...state.containerLog, ...added];
-      return { containerLog: lines.length > MAX_LOG_LINES ? lines.slice(lines.length - MAX_LOG_LINES) : lines };
+      return { containerLog: lastLogLines([...state.containerLog, ...logEntries(added, false)]) };
     }),
   openContainerLogs: (containerLogsFor) =>
     set(containerLogsFor ? { containerLogsFor, containerLog: [], logsFor: null, progressFor: null } : { containerLogsFor: null, containerLog: [] }),

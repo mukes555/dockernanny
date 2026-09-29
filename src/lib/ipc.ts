@@ -187,4 +187,7 @@ const tauriApi = {
 };
 
 export type Api = typeof tauriApi;
-export const api: Api = isTauri ? tauriApi : mockApi;
+// The pretend backend is for `pnpm dev` only: a release build turns
+// `import.meta.env.DEV` into false, so mock.ts is left out of the bundle.
+const usePretendBackend = import.meta.env.DEV && !isTauri;
+export const api: Api = usePretendBackend ? mockApi : tauriApi;

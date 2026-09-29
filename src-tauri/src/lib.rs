@@ -246,6 +246,9 @@ fn boot() -> anyhow::Result<AppState> {
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let path = store::home_dir().join("app.log");
+    // The file stays open while the app runs, so it is set aside at start;
+    // what the app logs in one run is small once nothing repeats.
+    store::keep_log_small(&path);
     let file = std::fs::create_dir_all(store::home_dir()).and_then(|_| std::fs::OpenOptions::new().create(true).append(true).open(&path));
     match file {
         Ok(file) if !std::io::IsTerminal::is_terminal(&std::io::stderr()) => {

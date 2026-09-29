@@ -4,7 +4,8 @@ import { AnimatePresence, motion } from "motion/react";
 import { api, errorMessage } from "../lib/ipc";
 import { useStore } from "../state/store";
 import { XIcon } from "../ui/icons";
-import { Button, cx } from "../ui/primitives";
+import { LogRow } from "../ui/LogRow";
+import { Button } from "../ui/primitives";
 import { useEscape } from "../ui/useEscape";
 
 /** `docker logs -f` for one container on a machine, streamed over the same
@@ -63,10 +64,8 @@ export function ContainerLogsDrawer() {
           <div ref={scroller} onScroll={onScroll} className="mono selectable min-h-0 flex-1 overflow-auto px-4 py-3 text-[12px] leading-[1.55]">
             {startError ? <div className="selectable text-critical">The logs could not start: {startError}</div> : null}
             {lines.length === 0 && !startError ? <div className="text-ink-3">waiting for output…</div> : null}
-            {lines.map((line, index) => (
-              <div key={index} className={cx("whitespace-pre-wrap break-all", line.stream === "stderr" ? "text-ink" : "text-ink-2")}>
-                {line.text}
-              </div>
+            {lines.map((line) => (
+              <LogRow key={line.seq} entry={line} />
             ))}
           </div>
         </motion.aside>

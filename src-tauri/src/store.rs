@@ -27,6 +27,21 @@ pub fn home_dir() -> PathBuf {
     user_home().join(".dockernanny")
 }
 
+/// How big a log may grow before it is set aside.
+const LOG_LIMIT_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Keeps a log from growing without end: past LOG_LIMIT_BYTES it becomes
+/// `<name>.1` (replacing the one before) and a new one starts. Two files at
+/// most, and the last lines before the switch are still there to read.
+pub fn keep_log_small(path: &Path) {
+    let too_big = fs::metadata(path).map(|m| m.len() > LOG_LIMIT_BYTES).unwrap_or(false);
+    if too_big {
+        let mut previous = path.as_os_str().to_owned();
+        previous.push(".1");
+        let _ = fs::rename(path, previous);
+    }
+}
+
 /// The user's own home folder. Windows sets `USERPROFILE`, not `HOME`; without
 /// it the app would keep its files wherever it happened to be started from.
 pub fn user_home() -> PathBuf {
@@ -134,6 +149,23 @@ pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_big_log_is_set_aside_and_a_small_one_stays() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(".tmp").join(format!("log-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("host.log");
+        fs::write(&log, "small\n").unwrap();
+        keep_log_small(&log);
+        assert!(log.exists(), "a small log stays where it is");
+
+        fs::write(&log, vec![b'x'; LOG_LIMIT_BYTES as usize + 1]).unwrap();
+        keep_log_small(&log);
+        assert!(!log.exists());
+        assert!(dir.join("host.log.1").exists(), "the big one is kept as .1");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_corrupt_file_is_kept_aside_before_the_default_is_used() {
