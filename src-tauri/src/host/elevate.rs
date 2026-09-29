@@ -81,8 +81,10 @@ pub fn run_task(_task: &Task, _log: &Path) -> i32 {
 #[cfg(windows)]
 pub fn run_elevated(task: &Task) -> Result<i32, String> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject, INFINITE};
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+    // The batch is a few firewall and power commands, a minute at most each.
+    const ELEVATED_LIMIT_MS: u32 = 10 * 60 * 1000;
     use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
 
     let log = log_path();
@@ -113,7 +115,10 @@ pub fn run_elevated(task: &Task) -> Result<i32, String> {
         if ShellExecuteExW(&mut info) == 0 || info.hProcess.is_null() {
             return Err("the administrator prompt was refused or failed".into());
         }
-        WaitForSingleObject(info.hProcess, INFINITE);
+        if WaitForSingleObject(info.hProcess, ELEVATED_LIMIT_MS) != WAIT_OBJECT_0 {
+            CloseHandle(info.hProcess);
+            return Err("the administrator step did not finish within 10 minutes".into());
+        }
         let mut code: u32 = 1;
         GetExitCodeProcess(info.hProcess, &mut code);
         CloseHandle(info.hProcess);

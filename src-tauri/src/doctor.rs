@@ -4,7 +4,6 @@
 use std::time::Duration;
 
 use serde::Serialize;
-use tokio::time::timeout;
 
 use crate::job::Output;
 use crate::machine::{first_line, Machine};
@@ -50,11 +49,7 @@ pub async fn doctor(ssh: &Ssh, machine: &Machine, mut report: impl FnMut(&Doctor
 }
 
 async fn check(ssh: &Ssh, machine: &Machine, script: &str) -> Result<Output, String> {
-    match timeout(CHECK_TIMEOUT, ssh.run(&machine.alias(), script)).await {
-        Ok(Ok(out)) => Ok(out),
-        Ok(Err(err)) => Err(format!("{err:#}")),
-        Err(_) => Err("timed out".into()),
-    }
+    ssh.run_within(&machine.alias(), script, CHECK_TIMEOUT).await.map_err(|err| format!("{err:#}"))
 }
 
 fn row(key: &'static str, label: &'static str, ok: bool, detail: impl Into<String>, fix: Option<String>) -> DoctorRow {

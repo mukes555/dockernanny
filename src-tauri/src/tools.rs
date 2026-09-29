@@ -156,9 +156,13 @@ pub fn make_private_dirs(app_home: &Path, names: &[&str]) -> anyhow::Result<()> 
 /// into the app folder, owner-only, and on Windows mirrors it into the
 /// tools' home. The app folder copy is the one the app reads back.
 pub fn write_file(app_home: &Path, name: &str, contents: &str) -> anyhow::Result<()> {
+    // Written beside and renamed into place: ssh starts every few seconds
+    // and must never read a half-written config.
     let local = app_home.join(name);
-    std::fs::write(&local, contents).with_context(|| format!("write {}", local.display()))?;
-    restrict_to_owner(&local, 0o600);
+    let temp = app_home.join(format!("{name}.tmp"));
+    std::fs::write(&temp, contents).with_context(|| format!("write {}", temp.display()))?;
+    restrict_to_owner(&temp, 0o600);
+    std::fs::rename(&temp, &local).with_context(|| format!("replace {}", local.display()))?;
     #[cfg(windows)]
     wsl::put_file(&format!("{}/{name}", home(app_home)), contents.as_bytes())?;
     Ok(())
@@ -206,22 +210,39 @@ fn restrict_to_owner(_path: &Path, _mode: u32) {}
 #[cfg(not(windows))]
 static CHILDREN: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
 
-pub fn track(child: &tokio::process::Child) {
-    #[cfg(windows)]
-    job::adopt(child);
+/// A child the app ends if it quits while the child still runs. Keep it next
+/// to the child: dropping it forgets the pid, because once a child is gone
+/// the system may give its pid to someone else's program, and quitting must
+/// never send that program a signal.
+#[must_use = "the child is forgotten as soon as this is dropped"]
+pub struct Tracked {
     #[cfg(not(windows))]
-    if let Some(pid) = child.id() {
-        CHILDREN.lock().expect("children lock").push(pid);
+    pid: Option<u32>,
+}
+
+pub fn track(child: &tokio::process::Child) -> Tracked {
+    #[cfg(windows)]
+    {
+        job::adopt(child);
+        Tracked {}
+    }
+    #[cfg(not(windows))]
+    {
+        let pid = child.id();
+        if let Some(pid) = pid {
+            CHILDREN.lock().expect("children lock").push(pid);
+        }
+        Tracked { pid }
     }
 }
 
-pub fn untrack(pid: Option<u32>) {
-    #[cfg(not(windows))]
-    if let Some(pid) = pid {
-        CHILDREN.lock().expect("children lock").retain(|p| *p != pid);
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        #[cfg(not(windows))]
+        if let Some(pid) = self.pid {
+            CHILDREN.lock().expect("children lock").retain(|p| *p != pid);
+        }
     }
-    #[cfg(windows)]
-    let _ = pid;
 }
 
 /// Ends every tracked child. Called once, at exit. On Windows the job
@@ -334,7 +355,12 @@ mod wsl {
 
     /// Writes bytes to a path inside the distribution, owner-only, creating the folder.
     pub fn put_file(path: &str, contents: &[u8]) -> anyhow::Result<()> {
-        sh("umask 077 && mkdir -p \"$(dirname \"$1\")\" && cat > \"$1\"", &[path.to_string()], Some(contents))
+        // Beside, then renamed into place, so ssh never reads half a file.
+        sh(
+            "umask 077 && mkdir -p \"$(dirname \"$1\")\" && cat > \"$1.tmp\" && mv -f \"$1.tmp\" \"$1\"",
+            &[path.to_string()],
+            Some(contents),
+        )
     }
 }
 
@@ -409,5 +435,17 @@ mod tests {
         assert_eq!(home(Path::new("/home/alex/.dockernanny")), "/home/alex/.dockernanny");
         assert_eq!(path(Path::new("/home/alex/shop")), "/home/alex/shop");
         assert_eq!(key_for_tools(Path::new("/h"), "m1", "/home/alex/.ssh/id_ed25519").unwrap(), "/home/alex/.ssh/id_ed25519");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn a_child_is_forgotten_when_its_guard_drops() {
+        let mut child = tokio::process::Command::new("sleep").arg("5").kill_on_drop(true).spawn().unwrap();
+        let pid = child.id().unwrap();
+        let tracked = track(&child);
+        assert!(CHILDREN.lock().unwrap().contains(&pid));
+        let _ = child.kill().await;
+        drop(tracked);
+        assert!(!CHILDREN.lock().unwrap().contains(&pid), "a dead child's pid must not be killed at quit");
     }
 }

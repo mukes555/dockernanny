@@ -8,7 +8,12 @@
 //! Docker Desktop, rootless, Podman) is reported in Docker's own words and
 //! left as it is.
 
-use crate::host::platform::run;
+use crate::host::platform::{self, CHECK_LIMIT};
+
+/// Every question here is quick; a wedged Docker must not stall the probe.
+fn run(program: &str, args: &[&str], stdin: Option<&str>, env: &[(&str, &str)]) -> platform::Output {
+    platform::run(program, args, stdin, env, CHECK_LIMIT)
+}
 
 const STANDARD_SOCKET: &str = "/var/run/docker.sock";
 

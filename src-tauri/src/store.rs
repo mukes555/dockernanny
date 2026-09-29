@@ -95,17 +95,63 @@ impl Store {
 }
 
 /// A missing or corrupt file comes back as the default: the app must never
-/// refuse to start over one bad json file.
-fn read_json<T: DeserializeOwned + Default>(path: &Path) -> T {
-    fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+/// refuse to start over one bad json file. A corrupt one is first moved
+/// aside as `<name>.json.corrupt-<unix time>`, because the next save would
+/// otherwise overwrite it, and every machine or stack in it with it.
+pub(crate) fn read_json<T: DeserializeOwned + Default>(path: &Path) -> T {
+    let Ok(text) = fs::read_to_string(path) else { return T::default() };
+    if text.trim().is_empty() {
+        return T::default();
+    }
+    match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(err) => {
+            let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let aside = path.with_extension(format!("json.corrupt-{seconds}"));
+            match fs::rename(path, &aside) {
+                Ok(()) => tracing::warn!(
+                    "{} could not be read ({err}); it was kept as {} and an empty one is used",
+                    path.display(),
+                    aside.display()
+                ),
+                Err(move_err) => tracing::warn!("{} could not be read ({err}) nor moved aside ({move_err})", path.display()),
+            }
+            T::default()
+        }
+    }
 }
 
 /// Written to a sibling temp file and renamed into place, so a crash mid-write
 /// cannot leave a half file behind.
-fn write_json<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
+pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
     let text = serde_json::to_string_pretty(value)?;
     let temp = path.with_extension("json.tmp");
     fs::write(&temp, text).with_context(|| format!("write {}", temp.display()))?;
     fs::rename(&temp, path).with_context(|| format!("replace {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_corrupt_file_is_kept_aside_before_the_default_is_used() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(".tmp").join(format!("store-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(MACHINES_FILE);
+        fs::write(&path, "[{\"id\": \"m1\", \"name\": ").unwrap();
+
+        let machines: Vec<Machine> = read_json(&path);
+        assert!(machines.is_empty());
+        assert!(!path.exists(), "the damaged file must not stay where the next save writes");
+        let kept: Vec<_> =
+            fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(kept.iter().any(|name| name.starts_with("machines.json.corrupt-")), "{kept:?}");
+
+        let missing: Vec<Machine> = read_json(&dir.join("nothing.json"));
+        assert!(missing.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

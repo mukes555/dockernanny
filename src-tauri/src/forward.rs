@@ -167,8 +167,8 @@ async fn run(
         attempts += 1;
         // A start that fails (WSL not up yet, ssh missing for a moment) is
         // retried like a bridge that died; only a cancel ends the loop.
-        let mut child = match spawn_ssh(&ssh, &alias, &socket, &ports) {
-            Ok(child) => child,
+        let (mut child, _tracked) = match spawn_ssh(&ssh, &alias, &socket, &ports) {
+            Ok(spawned) => spawned,
             Err(err) => {
                 publish(
                     &app,
@@ -232,7 +232,7 @@ async fn wait_before_retry(attempts: u32, cancelled: &mut watch::Receiver<bool>)
     }
 }
 
-fn spawn_ssh(ssh: &Ssh, alias: &str, socket: &str, ports: &[ForwardPort]) -> anyhow::Result<Child> {
+fn spawn_ssh(ssh: &Ssh, alias: &str, socket: &str, ports: &[ForwardPort]) -> anyhow::Result<(Child, tools::Tracked)> {
     let mut cmd = tools::unix("ssh");
     cmd.arg("-F").arg(ssh.config_path());
     // -N: no remote command. -M/-S: be a control master on our own socket so a
@@ -247,8 +247,8 @@ fn spawn_ssh(ssh: &Ssh, alias: &str, socket: &str, ports: &[ForwardPort]) -> any
     }
     cmd.arg(alias).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
     let child = cmd.spawn()?;
-    tools::track(&child);
-    Ok(child)
+    let tracked = tools::track(&child);
+    Ok((child, tracked))
 }
 
 /// True once the first local port accepts a connection, which only happens

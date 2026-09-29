@@ -3,9 +3,19 @@
 //! where another computer's key goes. The engine, the pairing server and
 //! the page are the same on every platform.
 
+use std::io::Read;
 use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
+
+/// How long one of the probe's commands may take. Probes, pairing and Quit
+/// all wait on the sharing role's one thread, so a stuck wsl.exe, PowerShell
+/// or `docker version` (a wedged Docker Desktop) must not hold it forever.
+pub const CHECK_LIMIT: Duration = Duration::from_secs(60);
+/// Set up installs WSL, packages and Docker, and can wait for the user's
+/// password prompt: minutes, but still not forever.
+pub const SETUP_LIMIT: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Default)]
 pub struct Output {
@@ -132,7 +142,10 @@ pub trait Platform: Send + Sync {
 
 /// Runs a program to completion with optional stdin. Never shows a console
 /// window on Windows.
-pub fn run(program: &str, args: &[&str], stdin: Option<&str>, env: &[(&str, &str)]) -> Output {
+/// Runs a command to its end, or until `limit` has passed; then it is killed
+/// and the answer says so. Both streams are read on their own threads, so a
+/// chatty command cannot block on a full pipe while this waits.
+pub fn run(program: &str, args: &[&str], stdin: Option<&str>, env: &[(&str, &str)], limit: Duration) -> Output {
     use std::io::Write;
     let mut cmd = Command::new(program);
     cmd.args(args);
@@ -152,10 +165,36 @@ pub fn run(program: &str, args: &[&str], stdin: Option<&str>, env: &[(&str, &str
     if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
         let _ = pipe.write_all(text.as_bytes());
     }
-    match child.wait_with_output() {
-        Ok(out) => Output { ok: out.status.success(), stdout: decode(&out.stdout), stderr: decode(&out.stderr) },
-        Err(err) => Output::failed(err.to_string()),
-    }
+    let stdout = read_on_a_thread(child.stdout.take());
+    let stderr = read_on_a_thread(child.stderr.take());
+
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // The readers are left behind: a grandchild may still hold the pipes.
+                return Output::failed(format!("{program} did not finish within {} s", limit.as_secs()));
+            }
+            Err(err) => return Output::failed(err.to_string()),
+        }
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
+    Output { ok: status.success(), stdout: decode(&stdout), stderr: decode(&stderr) }
+}
+
+fn read_on_a_thread(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        bytes
+    })
 }
 
 /// wsl.exe answers in UTF-8 with WSL_UTF8=1, but older builds ignore it and
@@ -167,6 +206,16 @@ pub fn decode(bytes: &[u8]) -> String {
         return String::from_utf16_lossy(&units).replace('\0', "");
     }
     String::from_utf8_lossy(bytes).replace('\0', "")
+}
+
+/// The account a paired key goes to, checked with the rule the other computer
+/// applies to the answer, before anything is written: a name it would refuse
+/// must not leave a key behind.
+pub fn checked_user(user: String) -> Result<String, String> {
+    if crate::pairing::valid_user(&user) {
+        return Ok(user);
+    }
+    Err(format!("the account name {user:?} cannot be used for ssh by dockerNanny"))
 }
 
 /// Appends a key to an authorized_keys file, creating the folder with the
@@ -292,6 +341,20 @@ pub fn lan_addresses() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_command_that_runs_too_long_is_ended_and_says_so() {
+        let started = Instant::now();
+        let out = run("sleep", &["30"], None, &[], Duration::from_millis(300));
+        assert!(!out.ok);
+        assert!(out.stderr.contains("did not finish"), "{}", out.stderr);
+        assert!(started.elapsed() < Duration::from_secs(5), "it must not wait for the command");
+
+        let quick = run("sh", &["-c", "echo hi; echo there >&2"], None, &[], CHECK_LIMIT);
+        assert!(quick.ok);
+        assert_eq!((quick.text(), quick.stderr.trim()), ("hi".to_string(), "there"));
+    }
 
     #[test]
     fn firewall_rules_read_from_one_query() {

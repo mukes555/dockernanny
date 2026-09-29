@@ -34,6 +34,7 @@ use steps::names;
 
 use crate::compose;
 use crate::job::{LastError, Line, Stream};
+use crate::machine::first_line;
 use crate::ssh::Ssh;
 use crate::stack::Phase;
 
@@ -311,8 +312,16 @@ async fn run_steps(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest,
     pull::run(ssh, sides, &downloads, report).await?;
 
     if request.data && destination_exists {
+        // Its volumes are about to be replaced: never under a running database.
         report.step(Phase::Migrating, &names::stop(&to.name, &to.label));
-        let _ = to.compose_output(ssh, "stop").await;
+        let stopped = to.compose_output(ssh, "stop").await?;
+        anyhow::ensure!(
+            stopped.ok(),
+            "could not stop {} on {} before replacing its data: {}",
+            to.name,
+            to.label,
+            first_line(&stopped.stderr)
+        );
     }
     let stopped_source = (request.stop_source || request.keep_source_stopped) && source_running;
     if stopped_source {
@@ -331,9 +340,22 @@ async fn run_steps(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest,
     }
     if stopped_source && !request.keep_source_stopped {
         report.step(Phase::Starting, &names::restart(&from.name, &from.label));
-        let _ = from.compose_output(ssh, "start").await;
-        if carried.is_err() {
-            report.progress.lock().expect("progress lock").done_step();
+        let restarted = from.compose_output(ssh, "start").await;
+        let restart_failure = match &restarted {
+            Ok(out) if out.ok() => None,
+            Ok(out) => Some(first_line(&out.stderr)),
+            Err(err) => Some(format!("{err:#}")),
+        };
+        let mut progress = report.progress.lock().expect("progress lock");
+        if restart_failure.is_some() {
+            progress.fail_step();
+        } else if carried.is_err() {
+            progress.done_step();
+        }
+        drop(progress);
+        // A source left stopped is worth an error even when the copy itself went well.
+        if let (Ok(_), Some(why)) = (&carried, restart_failure) {
+            anyhow::bail!("the copy is done, but {} could not be started again on {}: {why}", from.name, from.label);
         }
     }
     let mirrored = carried?;
@@ -444,13 +466,23 @@ async fn copy_container_data(
         let pause = !source_stopped && source.state == "running";
         if pause {
             report.say(&format!("    stopping {} for a consistent copy", source.container));
-            let _ = from.endpoint.docker_output(ssh, &["stop", &source.container]).await;
+            let stopped = from.endpoint.docker_output(ssh, &["stop", &source.container]).await?;
+            anyhow::ensure!(
+                stopped.ok(),
+                "could not stop {} on {} for a consistent copy: {}",
+                source.container,
+                from.label,
+                first_line(&stopped.stderr)
+            );
         }
         report.transfer(&format!("{} from {}", selection.path, selection.service), None);
         let copied = transfer::copy_path(ssh, from, to, &source.container, &selection.path, &destination.container, report).await;
         report.transferred();
         if pause {
-            let _ = from.endpoint.docker_output(ssh, &["start", &source.container]).await;
+            // Checked before the copy's own result: a service left stopped is the more urgent news.
+            let started = from.endpoint.docker_output(ssh, &["start", &source.container]).await;
+            let started_again = matches!(&started, Ok(out) if out.ok());
+            anyhow::ensure!(started_again, "{} on {} could not be started again after its copy", source.container, from.label);
         }
         copied.with_context(|| format!("{}:{}", selection.service, selection.path))?;
     }

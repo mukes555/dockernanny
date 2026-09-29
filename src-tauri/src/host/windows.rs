@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use super::platform::{
     host_key_from_pub, parse_ipconfig, parse_rule, row, run, FirewallRules, Installed, NetworkProfile, Outcome, Output, Picture, Platform,
-    Row, Rule, Say, SetupOptions, State,
+    Row, Rule, Say, SetupOptions, State, CHECK_LIMIT, SETUP_LIMIT,
 };
 use super::{windows_steps, MIN_WINDOWS_BUILD};
 
@@ -25,6 +25,9 @@ pub struct Windows {
     pub distro: String,
     /// Where sshd inside it listens.
     pub ssh_port: u16,
+    /// How long one wsl.exe or PowerShell call may take: short for probes,
+    /// long for Set up, which installs WSL, packages and Docker.
+    limit: Duration,
     steady: Mutex<Option<Steady>>,
     network: Mutex<Option<Network>>,
 }
@@ -66,7 +69,12 @@ fn network_worth_keeping(rules: &FirewallRules, profile: Option<&NetworkProfile>
 
 impl Windows {
     pub fn new(distro: String, ssh_port: u16) -> Self {
-        Self { distro, ssh_port, steady: Mutex::new(None), network: Mutex::new(None) }
+        Self { distro, ssh_port, limit: CHECK_LIMIT, steady: Mutex::new(None), network: Mutex::new(None) }
+    }
+
+    /// The same computer, patient enough for Set up's installs.
+    pub fn for_setup(distro: String, ssh_port: u16) -> Self {
+        Self { limit: SETUP_LIMIT, ..Self::new(distro, ssh_port) }
     }
 
     fn steady(&self) -> Steady {
@@ -141,17 +149,17 @@ impl Windows {
     }
 
     pub fn wsl(&self, args: &[&str]) -> Output {
-        run("wsl.exe", args, None, &[("WSL_UTF8", "1")])
+        run("wsl.exe", args, None, &[("WSL_UTF8", "1")], self.limit)
     }
 
     /// A POSIX shell script inside the distro as root, delivered on stdin.
     pub fn in_distro_as_root(&self, script: &str) -> Output {
-        run("wsl.exe", &["-d", &self.distro, "-u", "root", "--", "sh"], Some(script), &[("WSL_UTF8", "1")])
+        run("wsl.exe", &["-d", &self.distro, "-u", "root", "--", "sh"], Some(script), &[("WSL_UTF8", "1")], self.limit)
     }
 
     /// The same as the distro's default user, with a login shell for PATH.
     pub fn in_distro(&self, script: &str) -> Output {
-        run("wsl.exe", &["-d", &self.distro, "--", "sh", "-l"], Some(script), &[("WSL_UTF8", "1")])
+        run("wsl.exe", &["-d", &self.distro, "--", "sh", "-l"], Some(script), &[("WSL_UTF8", "1")], self.limit)
     }
 
     /// Whether `wsl -l -q` lists the chosen distribution.
@@ -161,7 +169,7 @@ impl Windows {
     }
 
     pub fn powershell(&self, script: &str) -> Output {
-        run("powershell.exe", &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], None, &[])
+        run("powershell.exe", &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], None, &[], self.limit)
     }
 
     pub fn windows_build(&self) -> u32 {
@@ -178,7 +186,7 @@ impl Windows {
     }
 
     pub fn firewall_rule_exists(&self, name: &str) -> bool {
-        run("netsh", &["advfirewall", "firewall", "show", "rule", &format!("name={name}")], None, &[]).ok
+        run("netsh", &["advfirewall", "firewall", "show", "rule", &format!("name={name}")], None, &[], self.limit).ok
     }
 
     /// This app's two firewall rules, read in one PowerShell call without
@@ -280,7 +288,8 @@ impl Platform for Windows {
     }
 
     fn setup(&self, options: &SetupOptions, say: &mut Say) -> Vec<(&'static str, Outcome)> {
-        let results = windows_steps::run_all(self, options, say);
+        let patient = Windows::for_setup(self.distro.clone(), self.ssh_port);
+        let results = windows_steps::run_all(&patient, options, say);
         self.forget_what_was_read();
         results
     }
@@ -291,6 +300,7 @@ impl Platform for Windows {
 
     fn install_key(&self, key: &str) -> Result<Installed, String> {
         let user = self.distro_user().ok_or_else(|| format!("{} has no user yet; run Set up first", self.distro))?;
+        let user = super::platform::checked_user(user)?;
         let out = self.in_distro_as_root(&super::platform::authorized_keys_script(&user, key));
         if !out.ok || !out.stdout.contains("dockernanny-key-ok") {
             return Err(format!("could not write authorized_keys: {}", out.stderr.trim()));
@@ -317,7 +327,7 @@ impl Platform for Windows {
     }
 
     fn lan_ipv4(&self) -> Vec<String> {
-        parse_ipconfig(&run("ipconfig", &[], None, &[]).stdout)
+        parse_ipconfig(&run("ipconfig", &[], None, &[], self.limit).stdout)
     }
 
     fn hostname(&self) -> String {

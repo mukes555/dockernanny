@@ -61,7 +61,11 @@ export function StackCard({ stack }: { stack: Stack }) {
     if (removing === "ask") removeStrip.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [removing]);
 
-  const call = (action: Promise<unknown>) => action.catch((err) => setError(errorMessage(err)));
+  // A new action clears the last one's error, so a failure does not outlive the next success.
+  const call = (action: Promise<unknown>) => {
+    setError(null);
+    return action.catch((err) => setError(errorMessage(err)));
+  };
   const toggleBridge = () => void call(api.setForwardPorts(stack.id, !stack.forward_ports).then(setStacks));
   const remove = async () => {
     setRemoving("working");

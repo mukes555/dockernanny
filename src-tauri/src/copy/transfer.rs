@@ -209,7 +209,7 @@ pub fn names_below_top(reader: impl std::io::Read) -> std::io::Result<Vec<String
 /// Runs `reader` with its stdout relayed into `writer`'s stdin, a chunk at a
 /// time, counting the bytes for the progress panel. Nothing is buffered
 /// beyond one chunk. Both children are tracked so quitting the app ends
-/// them. Returns the bytes that went through.
+/// them, and a copy given up on ends them too. Returns the bytes that went through.
 pub async fn pipe(
     from: &Site,
     to: &Site,
@@ -221,20 +221,25 @@ pub async fn pipe(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
+        .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("start the stream on {}", from.label))?;
-    tools::track(&reader);
-    let mut stdout = reader.stdout.take().context("no stdout")?;
+    let _reader_tracked = tools::track(&reader);
     let mut writer = writer
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("start the stream on {}", to.label))?;
-    tools::track(&writer);
+    let _writer_tracked = tools::track(&writer);
+    let mut stdout = reader.stdout.take().context("no stdout")?;
     let mut stdin = writer.stdin.take().context("no stdin")?;
 
-    let relay = async {
+    // The relay owns both pipe ends, so they close the moment it ends. When
+    // the writer dies early, the reader then gets a broken pipe and stops
+    // too, instead of blocking forever on a pipe nobody reads.
+    let relay = async move {
         let mut buffer = vec![0u8; CHUNK];
         let mut total = 0u64;
         loop {
@@ -248,7 +253,6 @@ pub async fn pipe(
         }
         // Closing the writer's stdin is what tells it the stream is over.
         stdin.shutdown().await?;
-        drop(stdin);
         Ok::<u64, std::io::Error>(total)
     };
     let (relayed, read, written) = tokio::join!(relay, reader.wait_with_output(), writer.wait_with_output());
@@ -258,6 +262,12 @@ pub async fn pipe(
         for l in text.lines().filter(|l| !l.trim().is_empty()).take(20) {
             report.say(&format!("    | {l}"));
         }
+    }
+    // Blame the side that stopped first: a writer that died makes the reader
+    // fail on the broken pipe, and a reader that died cuts the writer's input.
+    let writer_died_first = matches!(&relayed, Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe);
+    if writer_died_first {
+        anyhow::ensure!(written.status.success(), "writing on {} failed", to.label);
     }
     anyhow::ensure!(read.status.success(), "reading on {} failed", from.label);
     anyhow::ensure!(written.status.success(), "writing on {} failed", to.label);
@@ -396,5 +406,22 @@ mod tests {
         writer.args(["-c", "cat >/dev/null; exit 3"]);
         let err = pipe(&from, &to, reader, writer, &report).await.unwrap_err();
         assert!(err.to_string().starts_with("writing on"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_writer_that_dies_at_once_does_not_hang_the_copy() {
+        let from = Site::local("a", "/tmp/a", "x.yml");
+        let to = Site::local("b", "/tmp/b", "x.yml");
+        let make_sink = || -> Sink { Box::new(|_| {}) };
+        let status = |_: Phase, _: &str| {};
+        let report = report_for_test(&make_sink, &status, Arc::new(Mutex::new(Vec::new())));
+        // Far more than a pipe buffer, from a reader that would block on a full pipe.
+        let mut reader = tokio::process::Command::new("head");
+        reader.args(["-c", "10485760", "/dev/zero"]);
+        let mut writer = tokio::process::Command::new("sh");
+        writer.args(["-c", "exit 3"]);
+        let finished = tokio::time::timeout(std::time::Duration::from_secs(10), pipe(&from, &to, reader, writer, &report)).await;
+        let err = finished.expect("the copy must end, not hang").unwrap_err();
+        assert!(err.to_string().starts_with("writing on"), "the writer stopped first: {err}");
     }
 }

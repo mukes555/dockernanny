@@ -63,6 +63,15 @@ export function PortsPage() {
   }
   rows.sort((a, b) => a.local - b.local);
   const connectedCount = rows.filter((row) => row.bridge.state === "connected").length;
+  // The switch acts on the whole stack, so only a stack's first row carries
+  // it, wherever its other ports land in the order.
+  const rowsWithSwitch = new Set<number>();
+  const stacksSeen = new Set<string>();
+  rows.forEach((row, index) => {
+    if (stacksSeen.has(row.stack.id)) return;
+    stacksSeen.add(row.stack.id);
+    rowsWithSwitch.add(index);
+  });
 
   const flip = async (stack: Stack) => {
     setWorking(stack.id);
@@ -126,8 +135,7 @@ export function PortsPage() {
             <tbody>
               {rows.map((row, index) => {
                 const connected = row.bridge.state === "connected";
-                // The switch acts on the whole stack, so it sits on the stack's first row only.
-                const firstOfStack = index === 0 || rows[index - 1].stack.id !== row.stack.id;
+                const firstOfStack = rowsWithSwitch.has(index);
                 return (
                   <tr key={`${row.stack.id}-${row.local}`} className="border-t border-line">
                     <td className="px-4 py-2.5">

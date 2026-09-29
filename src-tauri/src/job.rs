@@ -125,18 +125,17 @@ impl Job {
         let stdin_mode = if stdin.is_some() { Stdio::piped() } else { Stdio::null() };
         cmd.stdin(stdin_mode).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         let child = cmd.spawn().context("spawn process")?;
-        tools::track(&child);
+        let tracked = tools::track(&child);
         let (cancel, cancelled) = watch::channel(false);
         let done = tokio::spawn(async move {
             let mut child = child;
-            let pid = child.id();
             let script_pipe = match stdin {
-                Some(script) => Some(feed_stdin(&mut child, &script).await?),
+                Some(script) => feed_stdin(&mut child, &script).await?,
                 None => None,
             };
             let result = drive(child, cancelled, on_line).await;
             drop(script_pipe);
-            tools::untrack(pid);
+            drop(tracked);
             result
         });
         Ok(Self { cancel, done })
@@ -170,11 +169,20 @@ pub async fn run_with_stdin(mut cmd: Command, script: &str) -> anyhow::Result<Ou
 /// Writes the script and hands back the open pipe. It stays open until the
 /// process is done or given up on: a remote script ends when its stdin
 /// does (`ssh::ends_with_the_connection`), so closing early would end it.
-async fn feed_stdin(child: &mut Child, script: &str) -> anyhow::Result<ChildStdin> {
+/// A process that ended before reading its script (ssh refused, a bad
+/// config) gives a broken pipe here; that is not the error to report, so
+/// the caller goes on to collect the process's own output and exit code.
+async fn feed_stdin(child: &mut Child, script: &str) -> anyhow::Result<Option<ChildStdin>> {
     let mut stdin = child.stdin.take().context("child has no stdin")?;
-    stdin.write_all(script.as_bytes()).await.context("write script")?;
-    stdin.flush().await.context("write script")?;
-    Ok(stdin)
+    let written = match stdin.write_all(script.as_bytes()).await {
+        Ok(()) => stdin.flush().await,
+        Err(err) => Err(err),
+    };
+    match written {
+        Ok(()) => Ok(Some(stdin)),
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(None),
+        Err(err) => Err(err).context("write script"),
+    }
 }
 
 /// A line as the pump found it: `redraw` when `\r` ended it, the way progress
@@ -294,6 +302,18 @@ async fn send(tx: &mpsc::Sender<Read>, stream: Stream, text: String, redraw: boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_process_that_ends_before_its_script_reports_its_own_error() {
+        // More than a pipe buffer, so writing fails once the process is gone.
+        let script = "x".repeat(1 << 20);
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo refused >&2; exit 255"]);
+        let out = run_with_stdin(cmd, &script).await.expect("the exit code and stderr, not a broken pipe");
+        assert_eq!(out.code, Some(255));
+        assert_eq!(out.stderr, "refused");
+    }
 
     async fn pumped(bytes: &'static [u8]) -> Vec<(String, bool)> {
         let (tx, mut rx) = mpsc::channel::<Read>(64);
