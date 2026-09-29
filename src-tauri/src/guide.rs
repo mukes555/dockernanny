@@ -2,12 +2,19 @@
 //! machine fetches it from this computer with one PowerShell line, so nothing
 //! has to be copied by hand before SSH exists. The script carries this
 //! computer's public key, which is not a secret.
+//!
+//! The script runs as Administrator and travels as plain HTTP, so the line
+//! the user types checks it: the path has a random part nobody on the
+//! network can guess, the line compares the file's SHA-256 with the one this
+//! computer shows before running it, and the server stops by itself.
 
 use std::net::SocketAddr;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Context;
 use serde::Serialize;
+use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -15,6 +22,8 @@ use tokio::sync::watch;
 const TEMPLATE: &str = include_str!("setup.ps1");
 pub const SERVE_PORT: u16 = 47431;
 pub const FETCHED_EVENT: &str = "guide:fetched";
+/// Long enough to walk to the machine and type one line; not left open on the network.
+pub const SERVE_FOR: Duration = Duration::from_secs(30 * 60);
 
 pub struct ScriptOptions {
     pub public_key: String,
@@ -79,6 +88,12 @@ pub struct ScriptServer {
     stop: watch::Sender<bool>,
     /// The port actually bound: the one asked for, or a free one when 0 was asked.
     pub port: u16,
+    /// `/setup-<random>.ps1`, the only path answered.
+    pub path: String,
+    /// Lowercase hex SHA-256 of the script, which the fetch line checks.
+    pub sha256: String,
+    /// When it stops by itself.
+    pub expires_ms: u64,
 }
 
 impl Drop for ScriptServer {
@@ -92,35 +107,59 @@ pub async fn serve(port: u16, script: String, on_fetch: impl Fn(Fetched) + Send 
     let bound = listener.local_addr()?.port();
     let (stop, mut stopped) = watch::channel(false);
     let on_fetch = std::sync::Arc::new(on_fetch);
+    let path = format!("/setup-{}.ps1", &uuid::Uuid::new_v4().simple().to_string()[..16]);
+    let sha256 = sha256_hex(script.as_bytes());
+    let served_path = path.clone();
     tokio::spawn(async move {
+        let expired = tokio::time::sleep(SERVE_FOR);
+        tokio::pin!(expired);
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
                     let Ok((socket, peer)) = accepted else { continue };
                     let body = script.clone();
+                    let path = served_path.clone();
                     let on_fetch = on_fetch.clone();
                     tokio::spawn(async move {
-                        if let Ok(socket) = answer(socket, &body).await {
+                        if let Ok(socket) = answer(socket, &path, &body).await {
                             on_fetch(Fetched { from: peer.ip().to_string(), at_ms: now_ms() });
                             finish(socket).await;
                         }
                     });
                 }
                 _ = stopped.changed() => break,
+                _ = &mut expired => break,
             }
         }
     });
-    Ok(ScriptServer { stop, port: bound })
+    Ok(ScriptServer { stop, port: bound, path, sha256, expires_ms: now_ms() + SERVE_FOR.as_millis() as u64 })
 }
 
-/// Answers `GET /setup.ps1` with the script and everything else with a 404,
-/// so a port scanner does not count as "the machine fetched it". Hands the
-/// socket back on a fetch, so the caller can report it before the close.
-async fn answer(mut socket: tokio::net::TcpStream, body: &str) -> anyhow::Result<tokio::net::TcpStream> {
+fn sha256_hex(bytes: &[u8]) -> String {
+    sha2::Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The line typed on the machine, in PowerShell as Administrator. It saves
+/// the script to a file, compares the file's SHA-256 with the one this
+/// computer made, and runs it only when they match: a script changed on the
+/// way (plain HTTP on a shared network) is never run.
+pub fn fetch_command(address: &str, port: u16, path: &str, sha256: &str) -> String {
+    format!(
+        "$f = \"$env:TEMP\\dockernanny-setup.ps1\"; iwr http://{address}:{port}{path} -OutFile $f -UseBasicParsing; \
+         if ((Get-FileHash $f -Algorithm SHA256).Hash -eq '{sha256}') {{ iex (Get-Content -Raw -Encoding UTF8 $f) }} \
+         else {{ Write-Host 'The script changed on the way here, so it was not run.' -ForegroundColor Red }}"
+    )
+}
+
+/// Answers `GET <path>` with the script and everything else with a 404, so
+/// neither a port scanner nor a guessed path counts as "the machine fetched
+/// it". Hands the socket back on a fetch, so the caller can report it
+/// before the close.
+async fn answer(mut socket: tokio::net::TcpStream, path: &str, body: &str) -> anyhow::Result<tokio::net::TcpStream> {
     let mut request = [0u8; 2048];
     let read = tokio::time::timeout(std::time::Duration::from_secs(5), socket.read(&mut request)).await.context("request timed out")??;
     let first_line = String::from_utf8_lossy(&request[..read]).lines().next().unwrap_or("").to_string();
-    if !is_script_request(&first_line) {
+    if !is_script_request(&first_line, path) {
         let _ = socket.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
         finish(socket).await;
         anyhow::bail!("not a script request");
@@ -150,9 +189,9 @@ async fn finish(mut socket: tokio::net::TcpStream) {
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), drained).await;
 }
 
-fn is_script_request(first_line: &str) -> bool {
+fn is_script_request(first_line: &str, path: &str) -> bool {
     let mut parts = first_line.split_whitespace();
-    parts.next() == Some("GET") && parts.next() == Some("/setup.ps1")
+    parts.next() == Some("GET") && parts.next() == Some(path)
 }
 
 fn now_ms() -> u64 {
@@ -204,10 +243,24 @@ mod tests {
 
     #[test]
     fn only_the_script_path_counts_as_a_fetch() {
-        assert!(is_script_request("GET /setup.ps1 HTTP/1.1"));
-        assert!(!is_script_request("GET / HTTP/1.1"));
-        assert!(!is_script_request("POST /setup.ps1 HTTP/1.1"));
-        assert!(!is_script_request(""));
+        let path = "/setup-0123456789abcdef.ps1";
+        assert!(is_script_request("GET /setup-0123456789abcdef.ps1 HTTP/1.1", path));
+        assert!(!is_script_request("GET /setup.ps1 HTTP/1.1", path), "a guessed path is not the script");
+        assert!(!is_script_request("GET / HTTP/1.1", path));
+        assert!(!is_script_request("POST /setup-0123456789abcdef.ps1 HTTP/1.1", path));
+        assert!(!is_script_request("", path));
+    }
+
+    #[test]
+    fn the_fetch_line_runs_the_script_only_when_its_hash_matches() {
+        assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        let line = fetch_command("192.0.2.10", 47431, "/setup-0123456789abcdef.ps1", "ba78");
+        assert!(line.contains("iwr http://192.0.2.10:47431/setup-0123456789abcdef.ps1 -OutFile $f -UseBasicParsing"), "{line}");
+        assert!(
+            line.contains("if ((Get-FileHash $f -Algorithm SHA256).Hash -eq 'ba78') { iex (Get-Content -Raw -Encoding UTF8 $f) }"),
+            "{line}"
+        );
+        assert!(line.contains("else { Write-Host"), "a mismatch is said, never run");
     }
 
     #[tokio::test]
@@ -225,17 +278,24 @@ mod tests {
         assert_eq!(*fetched.lock().unwrap(), 0);
     }
 
+    async fn get(port: u16, path: &str) -> String {
+        let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        client.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes()).await.unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).await.unwrap();
+        response
+    }
+
     #[tokio::test]
-    async fn server_answers_with_the_script() {
+    async fn server_answers_with_the_script_on_its_own_path_only() {
         let fetched = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = fetched.clone();
         let server = serve(0, "Write-Host hi".into(), move |f| seen.lock().unwrap().push(f.from)).await.unwrap();
-        let port = server.port;
+        assert!(server.path.starts_with("/setup-") && server.path.len() == "/setup-.ps1".len() + 16, "{}", server.path);
+        assert_eq!(server.sha256, sha256_hex(b"Write-Host hi"));
 
-        let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-        client.write_all(b"GET /setup.ps1 HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
-        let mut response = String::new();
-        client.read_to_string(&mut response).await.unwrap();
+        assert!(get(server.port, "/setup.ps1").await.starts_with("HTTP/1.1 404"), "the old fixed path no longer works");
+        let response = get(server.port, &server.path).await;
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.ends_with("Write-Host hi"));
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -244,7 +304,7 @@ mod tests {
 
     #[tokio::test]
     async fn public_key_comes_from_the_pub_file() {
-        let dir = std::env::temp_dir().join(format!("dockernanny-key-test-{}", std::process::id()));
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(".tmp").join(format!("key-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let key = dir.join("id_test");
         std::fs::write(&key, "private").unwrap();

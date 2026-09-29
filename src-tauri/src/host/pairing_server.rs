@@ -22,6 +22,12 @@ const ROTATE_AFTER_WRONG: u32 = 3;
 const LOCK_AFTER_WRONG: u32 = 10;
 const WRONG_GUESS_DELAY: Duration = Duration::from_secs(1);
 const MAX_REQUEST_BYTES: u64 = 4096;
+/// One small line on a local network arrives at once. Requests are served
+/// one at a time, so a client that connects and stays silent may hold the
+/// port no longer than this.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+/// The other computer's name is shown on the page and kept in paired.json.
+const MAX_NAME_CHARS: usize = 64;
 
 #[derive(Debug, Deserialize)]
 struct Request {
@@ -44,9 +50,21 @@ struct Answer {
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    Paired { name: String, from: String, key_type: String },
-    WrongCode { from: String, remaining: u32 },
-    Locked { from: String },
+    /// `mark` is the comment its key got in authorized_keys.
+    Paired {
+        name: String,
+        from: String,
+        key_type: String,
+        mark: String,
+        fingerprint: String,
+    },
+    WrongCode {
+        from: String,
+        remaining: u32,
+    },
+    Locked {
+        from: String,
+    },
     Failed(String),
 }
 
@@ -125,12 +143,13 @@ fn same_code(given: &str, expected: &str) -> bool {
 }
 
 /// Listens on a thread until `stop` is set; the code decides whether a
-/// request is honoured. `install` puts a validated key in place and says
-/// which user and port to use; errors go back as text.
+/// request is honoured. `install` puts a validated key in place with the
+/// given mark as its comment and says which user and port to use; errors go
+/// back as text.
 pub fn serve(
     port: u16,
     code: Arc<Mutex<Code>>,
-    install: impl Fn(&str) -> Result<Installed, String> + Send + Sync + 'static,
+    install: impl Fn(&str, &str) -> Result<Installed, String> + Send + Sync + 'static,
     events: Sender<Event>,
     stop: Arc<AtomicBool>,
 ) -> std::io::Result<u16> {
@@ -145,15 +164,18 @@ pub fn serve(
         if stop.load(Ordering::SeqCst) {
             return;
         }
+        // Nothing waiting, or an error such as too many open files: either
+        // way the next try comes after a pause, never in a busy loop.
         let (stream, peer) = match listener.accept() {
             Ok(accepted) => accepted,
-            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(_) => {
                 std::thread::sleep(Duration::from_millis(200));
                 continue;
             }
-            Err(_) => continue,
         };
         let _ = stream.set_nonblocking(false);
+        let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
+        let _ = stream.set_write_timeout(Some(REQUEST_TIMEOUT));
         let answer = handle(&stream, &code, install.as_ref(), &events, &peer.ip().to_string());
         let _ = write_answer(stream, &answer);
     });
@@ -163,7 +185,7 @@ pub fn serve(
 fn handle(
     stream: &TcpStream,
     code: &Mutex<Code>,
-    install: &(impl Fn(&str) -> Result<Installed, String> + ?Sized),
+    install: &(impl Fn(&str, &str) -> Result<Installed, String> + ?Sized),
     events: &Sender<Event>,
     from: &str,
 ) -> Answer {
@@ -206,12 +228,15 @@ fn handle(
     current.disarm();
     current.rotate();
     drop(current);
-    match install(&key) {
+    let mark = super::paired::new_mark();
+    match install(&key, &mark) {
         Ok(installed) => {
             let _ = events.send(Event::Paired {
-                name: request.from.clone(),
+                name: shown_name(&request.from),
                 from: from.into(),
                 key_type: key.split_whitespace().next().unwrap_or_default().to_string(),
+                mark,
+                fingerprint: crate::pairing::fingerprint(&key).unwrap_or_default(),
             });
             Answer {
                 ok: true,
@@ -229,8 +254,13 @@ fn handle(
     }
 }
 
+/// The name the other computer sent, as it may be shown and stored: no
+/// control characters, at most MAX_NAME_CHARS.
+fn shown_name(sent: &str) -> String {
+    sent.chars().filter(|c| !c.is_control()).take(MAX_NAME_CHARS).collect::<String>().trim().to_string()
+}
+
 fn read_request(stream: &TcpStream) -> Result<Request, String> {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let mut line = String::new();
     let mut reader = BufReader::new(stream.take(MAX_REQUEST_BYTES));
     reader.read_line(&mut line).map_err(|e| format!("read failed: {e}"))?;
@@ -276,7 +306,7 @@ mod tests {
         serde_json::from_str(&reply).unwrap()
     }
 
-    fn installer(_key: &str) -> Result<Installed, String> {
+    fn installer(_key: &str, _mark: &str) -> Result<Installed, String> {
         Ok(Installed { user: "alex".into(), port: 2222, hostname: "studio".into(), host_key: "ssh-ed25519 AAAAhost".into() })
     }
 
@@ -308,7 +338,33 @@ mod tests {
         assert_eq!(answer["host_key"], "ssh-ed25519 AAAAhost");
         assert!(!code.lock().unwrap().is_armed());
         assert_eq!(talk(port, &digits, KEY)["ok"], false);
-        assert!(rx.try_iter().any(|e| matches!(e, Event::Paired { .. })));
+        let paired = rx.try_iter().find_map(|e| match e {
+            Event::Paired { mark, name, .. } => Some((mark, name)),
+            _ => None,
+        });
+        let (mark, name) = paired.expect("a Paired event");
+        assert!(mark.starts_with("dockernanny:"));
+        assert_eq!(name, "desk");
+    }
+
+    #[test]
+    fn a_silent_client_holds_the_port_only_briefly() {
+        let code = Arc::new(Mutex::new(Code::new()));
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let port = serve(0, code, installer, tx, Arc::new(AtomicBool::new(false))).unwrap();
+        let _silent = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let started = Instant::now();
+        let answer = talk(port, "000000", KEY);
+        assert!(answer["error"].as_str().unwrap().contains("off"));
+        assert!(started.elapsed() < REQUEST_TIMEOUT + Duration::from_secs(2), "the next request waited {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn names_are_cut_to_something_a_page_can_show() {
+        assert_eq!(shown_name("desk\u{1b}[31m\n"), "desk[31m");
+        assert_eq!(shown_name(&"x".repeat(500)).len(), MAX_NAME_CHARS);
+        assert_eq!(shown_name("  studio  "), "studio");
     }
 
     #[test]

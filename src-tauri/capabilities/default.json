@@ -1,13 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "What the main window's page may ask of the app: its own commands, events, dragging the window, one file dialog, opening web links and copying text. Nothing else (no tray, menus, paths or other windows).",
   "windows": ["main"],
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
     "dialog:allow-open",
-    "opener:default",
+    "opener:allow-open-url",
+    "opener:allow-default-urls",
     "clipboard-manager:allow-write-text"
   ]
 }

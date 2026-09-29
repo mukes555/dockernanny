@@ -152,6 +152,15 @@ pub async fn poll_machine(app: AppHandle, state: State<'_, AppState>, id: String
     Ok(stats)
 }
 
+/// A machine saved by pairing, with the fingerprints the machine's screen
+/// shows too: the host key pinned here, and this computer's key it installed.
+#[derive(Serialize)]
+pub struct PairedMachine {
+    pub machine: Machine,
+    pub host_fingerprint: Option<String>,
+    pub key_fingerprint: Option<String>,
+}
+
 /// Pairs with a machine that shows a pairing code and saves it. The doctor
 /// runs from the UI afterwards, like a manual add.
 #[tauri::command]
@@ -162,7 +171,7 @@ pub async fn pair_machine(
     code: String,
     key_path: String,
     name: String,
-) -> CmdResult<Machine> {
+) -> CmdResult<PairedMachine> {
     let address = address.trim().to_string();
     let code: String = code.chars().filter(|c| c.is_ascii_digit()).collect();
     if address.is_empty() || address.contains(char::is_whitespace) {
@@ -214,7 +223,8 @@ pub async fn pair_machine(
         let stats = machine::poll(&ssh, &polled).await;
         machine::publish(&app, polled.id, stats);
     });
-    Ok(machine)
+    let host_fingerprint = host_key.and_then(|(key_type, blob)| pairing::fingerprint(&format!("{key_type} {blob}")));
+    Ok(PairedMachine { machine, host_fingerprint, key_fingerprint: pairing::fingerprint(&pubkey) })
 }
 
 #[tauri::command]
@@ -385,6 +395,9 @@ pub struct ScriptRequest {
 pub struct ServeInfo {
     pub addresses: Vec<String>,
     pub port: u16,
+    /// The line to type on the machine, one per address (`guide::fetch_command`).
+    pub commands: Vec<String>,
+    pub expires_ms: u64,
 }
 
 async fn script_for(request: &ScriptRequest) -> CmdResult<String> {
@@ -428,8 +441,11 @@ pub async fn script_serve(app: AppHandle, state: State<'_, AppState>, request: S
     })
     .await
     .map_err(fail)?;
+    let addresses = guide::lan_addresses().await;
+    let commands = addresses.iter().map(|address| guide::fetch_command(address, server.port, &server.path, &server.sha256)).collect();
+    let expires_ms = server.expires_ms;
     *state.script_server.lock().expect("script server lock") = Some(server);
-    Ok(ServeInfo { addresses: guide::lan_addresses().await, port })
+    Ok(ServeInfo { addresses, port, commands, expires_ms })
 }
 
 #[tauri::command]

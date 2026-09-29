@@ -135,12 +135,16 @@ export function SetupScriptCard() {
       {serving ? (
         <div className="mt-4 space-y-2">
           <div className="text-[12px] text-ink-2">On the machine, in PowerShell as Administrator:</div>
-          {serving.addresses.map((address) => (
-            <CodeBlock key={address} code={`irm http://${address}:${serving.port}/setup.ps1 | iex`} />
+          {serving.commands.map((command) => (
+            <CodeBlock key={command} code={command} />
           ))}
-          {serving.addresses.length > 1 ? (
+          {serving.commands.length > 1 ? (
             <div className="text-[11px] text-ink-3">One line per network this computer is on; use the one the machine shares.</div>
           ) : null}
+          <div className="text-[11px] text-ink-3">
+            The line runs the script only if it arrives exactly as this computer made it. It is served until{" "}
+            {new Date(serving.expires_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.
+          </div>
           <div className="flex items-center gap-2 text-[12px]">
             {fetched ? (
               <Chip tone="good">fetched by {fetched.from}</Chip>

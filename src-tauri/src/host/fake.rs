@@ -87,7 +87,7 @@ impl Platform for Fake {
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeHostKeyFakeHostKeyFakeHostKeyFakeHo".into()
     }
 
-    fn install_key(&self, key: &str) -> Result<Installed, String> {
+    fn install_key(&self, key: &str, mark: &str) -> Result<Installed, String> {
         let path = crate::store::home_dir().join("fake-authorized_keys");
         std::fs::OpenOptions::new()
             .create(true)
@@ -95,10 +95,17 @@ impl Platform for Fake {
             .open(&path)
             .and_then(|mut f| {
                 use std::io::Write;
-                writeln!(f, "{key}")
+                writeln!(f, "{key} {mark}")
             })
             .map_err(|e| e.to_string())?;
         Ok(Installed { user: "alex".into(), port: 2222, hostname: "fake-machine".into(), host_key: self.host_key() })
+    }
+
+    fn remove_key(&self, mark: &str) -> Result<(), String> {
+        let path = crate::store::home_dir().join("fake-authorized_keys");
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let kept: Vec<&str> = text.lines().filter(|line| !line.ends_with(&format!(" {mark}"))).collect();
+        std::fs::write(&path, kept.iter().map(|line| format!("{line}\n")).collect::<String>()).map_err(|e| e.to_string())
     }
 
     fn spawn_keepalive(&self) -> Result<Option<Child>, String> {

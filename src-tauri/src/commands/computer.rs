@@ -95,14 +95,12 @@ pub async fn diagnostics(state: State<'_, AppState>) -> CmdResult<String> {
     if let Some(host) = computer::version_line(tools::native("hostname")).await {
         private.push((host, "<this-computer>".into()));
     }
-    for (index, machine) in machines.iter().enumerate() {
-        let n = index + 1;
-        private.push((machine.name.clone(), format!("machine-{n}")));
-        private.push((machine.host.clone(), format!("host-{n}")));
-        private.push((machine.user.clone(), format!("user-{n}")));
-    }
-
     let home = state.store.home();
+    let paired = crate::host::paired::load(home);
+    // On Windows the account other computers log in as is the WSL user, which the sharing role knows.
+    let sharing_user = state.host.snapshot().and_then(|snapshot| snapshot.user);
+    private.extend(diagnostics::names_the_app_holds(&machines, &state.store.stacks(), &paired, sharing_user.as_deref()));
+
     Ok(diagnostics::report(&facts, &home.join("app.log"), &home.join("host.log"), &private))
 }
 

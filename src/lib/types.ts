@@ -297,6 +297,10 @@ export interface TerminalInfo {
 export interface ServeInfo {
   addresses: string[];
   port: number;
+  /** The line to type on the machine, one per address; it checks the script's SHA-256 before running it. */
+  commands: string[];
+  /** When the script stops being served by itself. */
+  expires_ms: number;
 }
 
 export interface Fetched {
@@ -457,6 +461,8 @@ export interface HostSnapshot {
   notice: HostNotice | null;
   pairing: HostPairing;
   paired: PairedComputer[];
+  /** `SHA256:...` of this computer's ssh host key, once pairing was on. */
+  host_fingerprint: string | null;
   connected: ConnectedComputer[];
 }
 
@@ -465,6 +471,17 @@ export interface PairedComputer {
   address: string;
   key_type: string;
   paired_at_ms: number;
+  /** Its key's comment in authorized_keys; empty when paired before keys were marked. */
+  mark: string;
+  /** `SHA256:...` of its key; empty when paired before fingerprints were kept. */
+  fingerprint: string;
+}
+
+/** A machine saved by pairing, with the fingerprints its screen shows too. */
+export interface PairedMachine {
+  machine: Machine;
+  host_fingerprint: string | null;
+  key_fingerprint: string | null;
 }
 
 /** A computer with an ssh session open on the sharing port right now. */

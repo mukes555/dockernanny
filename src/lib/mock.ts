@@ -11,6 +11,7 @@ import type {
   HostSnapshot,
   Machine,
   MachineStats,
+  PairedComputer,
   Preview,
   ServiceState,
   Settings,
@@ -460,15 +461,24 @@ const hostSnapshot = (): HostSnapshot => {
     setup_running: false,
     notice: null,
     pairing: { listening: hostReady, armed: remaining > 0, locked: false, code: remaining > 0 ? "481 923" : null, remaining_s: remaining, note: null },
-    paired: hostReady
-      ? [
-          { name: "desk", address: "192.0.2.20", key_type: "ssh-ed25519", paired_at_ms: Date.now() - 3 * 86400_000 },
-          { name: "", address: "192.0.2.21", key_type: "ssh-rsa", paired_at_ms: Date.now() - 3600_000 },
-        ]
-      : [],
+    paired: hostReady ? pairedComputers.filter((computer) => !forgotten.includes(computer.address)) : [],
+    host_fingerprint: hostReady ? "SHA256:TxEHBXXWzSnbkxqbV6FxMRokiF0jHb/hTzN/O0wkqU8" : null,
     connected: hostReady ? [{ address: "192.0.2.20", name: "desk", since_ms: Date.now() - 25 * 60_000 }] : [],
   };
 };
+const pairedComputers: PairedComputer[] = [
+  {
+    name: "desk",
+    address: "192.0.2.20",
+    key_type: "ssh-ed25519",
+    paired_at_ms: Date.now() - 3 * 86400_000,
+    mark: "dockernanny:4f1c2a9e7b30",
+    fingerprint: "SHA256:q3Vd8yJmXbC1sR0fT6uWkN2pL9eHgA4zYxO7iUcMvE5",
+  },
+  // Paired by an older version: no mark and no fingerprint.
+  { name: "", address: "192.0.2.21", key_type: "ssh-rsa", paired_at_ms: Date.now() - 3600_000, mark: "", fingerprint: "" },
+];
+const forgotten: string[] = [];
 const publishHost = () => hostHandlers?.onHostSnapshot(hostSnapshot());
 const hostSay = (line: string) => hostHandlers?.onHostLog({ line });
 
@@ -613,7 +623,11 @@ export const mockApi: Api = {
       battery: { percent: 91, charging: true },
       os: "Windows 11 (build 22631) · Ubuntu 24.04 LTS in WSL2",
     });
-    return machine;
+    return {
+      machine,
+      host_fingerprint: "SHA256:TxEHBXXWzSnbkxqbV6FxMRokiF0jHb/hTzN/O0wkqU8",
+      key_fingerprint: "SHA256:8mKwq2Lr5nYcB0dFvT3hJxP7sUe1aGzR6oQiN4lWkC9",
+    };
   },
   setDockerContext: async (id, enabled) => {
     const machine = machines.find((m) => m.id === id);
@@ -843,7 +857,11 @@ export const mockApi: Api = {
     `# dockerNanny machine setup (mock)\n$distro = '${request.distro}'\n$port = ${request.port}\n$memory = '${request.memory_gb}GB'\n$pubkey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA alex@studio'\n# ... installs Docker, sshd, rsync, writes .wslconfig, opens the firewall`,
   scriptServe: async () => {
     window.setTimeout(() => handlers?.onScriptFetched({ from: "192.0.2.20", at_ms: Date.now() }), 4000);
-    return { addresses: ["192.0.2.10"], port: 47431 };
+    const command =
+      '$f = "$env:TEMP\\dockernanny-setup.ps1"; iwr http://192.0.2.10:47431/setup-0123456789abcdef.ps1 -OutFile $f -UseBasicParsing; ' +
+      "if ((Get-FileHash $f -Algorithm SHA256).Hash -eq 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad') " +
+      "{ iex (Get-Content -Raw -Encoding UTF8 $f) } else { Write-Host 'The script changed on the way here, so it was not run.' -ForegroundColor Red }";
+    return { addresses: ["192.0.2.10"], port: 47431, commands: [command], expires_ms: Date.now() + 30 * 60_000 };
   },
   scriptStop: async () => {},
 
@@ -877,6 +895,12 @@ export const mockApi: Api = {
     publishHost();
   },
   hostProbe: async () => publishHost(),
+  hostForget: async (address) => {
+    await wait(400);
+    forgotten.push(address);
+    hostSay(`forgot ${address}`);
+    publishHost();
+  },
 
   copyText: async (text) => {
     await navigator.clipboard.writeText(text).catch(() => {});

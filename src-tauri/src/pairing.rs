@@ -126,6 +126,19 @@ pub fn valid_public_key(text: &str) -> Result<String, String> {
     Ok(format!("{key_type} {blob}"))
 }
 
+/// A key's fingerprint the way `ssh-keygen -l` prints it: `SHA256:` and the
+/// unpadded base64 of the hash. Both screens show it after pairing, so
+/// people can compare them; a key swapped on the way would differ. None for
+/// a line that is not `type base64`.
+pub fn fingerprint(key: &str) -> Option<String> {
+    use base64::Engine;
+    use sha2::Digest;
+    let blob = key.split_whitespace().nth(1)?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(blob).ok()?;
+    let digest = sha2::Sha256::digest(&bytes);
+    Some(format!("SHA256:{}", base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest)))
+}
+
 /// This computer's name, as the machine shows it after pairing.
 pub async fn computer_name() -> String {
     let name = if cfg!(target_os = "macos") {
@@ -189,5 +202,14 @@ mod tests {
         assert!(valid_public_key("ssh-ed25519 AAAA\nssh-ed25519 BBBB").is_err());
         assert!(valid_public_key("command=\"rm -rf /\" ssh-ed25519 AAAA").is_err());
         assert!(valid_public_key(&format!("ssh-ed25519 {}", "A".repeat(2000))).is_err());
+    }
+
+    #[test]
+    fn fingerprints_match_ssh_keygen() {
+        // A throwaway key; `ssh-keygen -lf` printed this fingerprint for it.
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG+dazxQtDeYmpmJw5f8QrXiTcPkEF9k95hWRAYN7Q20 test";
+        assert_eq!(fingerprint(key).as_deref(), Some("SHA256:TxEHBXXWzSnbkxqbV6FxMRokiF0jHb/hTzN/O0wkqU8"));
+        assert_eq!(fingerprint("ssh-ed25519 not*base64"), None);
+        assert_eq!(fingerprint(""), None);
     }
 }

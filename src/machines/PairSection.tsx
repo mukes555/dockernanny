@@ -1,12 +1,12 @@
 import { useState } from "react";
 
 import { api, errorMessage } from "../lib/ipc";
-import type { Machine } from "../lib/types";
+import type { PairedMachine } from "../lib/types";
 import { useStore } from "../state/store";
 import { Button, Field, TextInput } from "../ui/primitives";
 
 /** The machine shows a pairing code (dockerNanny with sharing on): type what its screen shows, done. */
-export function PairSection({ keyPath, onPaired }: { keyPath: string; onPaired: (machine: Machine) => void }) {
+export function PairSection({ keyPath, onPaired }: { keyPath: string; onPaired: (paired: PairedMachine) => void }) {
   const [address, setAddress] = useState("");
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
@@ -32,9 +32,9 @@ export function PairSection({ keyPath, onPaired }: { keyPath: string; onPaired: 
     setWorking(true);
     setError(null);
     try {
-      const machine = await api.pairMachine(address, code, keyPath, name);
+      const paired = await api.pairMachine(address, code, keyPath, name);
       setMachines(await api.listMachines());
-      onPaired(machine);
+      onPaired(paired);
     } catch (err) {
       setError(errorMessage(err));
     } finally {

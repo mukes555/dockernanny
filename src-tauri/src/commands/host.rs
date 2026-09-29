@@ -38,3 +38,9 @@ pub fn host_disarm_pairing(state: State<'_, AppState>) -> Result<(), String> {
 pub fn host_probe(state: State<'_, AppState>) -> Result<(), String> {
     state.host.send(ToEngine::Probe)
 }
+
+/// Takes a paired computer's access away (its key and its entry).
+#[tauri::command]
+pub fn host_forget(state: State<'_, AppState>, address: String) -> Result<(), String> {
+    state.host.send(ToEngine::Forget(address))
+}

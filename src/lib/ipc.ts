@@ -20,6 +20,7 @@ import type {
   LocalProject,
   Machine,
   MachineStats,
+  PairedMachine,
   ComputerInfo,
   CopyPlan,
   CopyProgress,
@@ -108,7 +109,7 @@ const tauriApi = {
   containerAction: (machineId: string, id: string, action: ContainerAction) => invoke<void>("container_action", { machineId, id, action }),
   startContainerLogs: (machineId: string, id: string) => invoke<void>("start_container_logs", { machineId, id }),
   stopContainerLogs: (id: string) => invoke<void>("stop_container_logs", { id }),
-  pairMachine: (address: string, code: string, keyPath: string, name: string) => invoke<Machine>("pair_machine", { address, code, keyPath, name }),
+  pairMachine: (address: string, code: string, keyPath: string, name: string) => invoke<PairedMachine>("pair_machine", { address, code, keyPath, name }),
 
   previewCompose: (path: string) => invoke<Preview>("preview_compose", { path }),
   defaultExcludes: () => invoke<string[]>("default_excludes"),
@@ -148,6 +149,7 @@ const tauriApi = {
   hostArmPairing: () => invoke<void>("host_arm_pairing"),
   hostDisarmPairing: () => invoke<void>("host_disarm_pairing"),
   hostProbe: () => invoke<void>("host_probe"),
+  hostForget: (address: string) => invoke<void>("host_forget", { address }),
 
   copyText: (text: string) => writeText(text),
   openLocal: (port: number) => openUrl(`http://localhost:${port}`),
