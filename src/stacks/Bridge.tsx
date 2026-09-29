@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
-
-import { api, errorMessage } from "../lib/ipc";
+import { clock, plural, span } from "../lib/format";
+import { api } from "../lib/ipc";
 import type { ForwardState, Stack, StackStatus } from "../lib/types";
 import { isUp, useStore } from "../state/store";
-import { Button, cx } from "../ui/primitives";
+import type { DotState } from "../ui/Badges";
+import { StatusDot } from "../ui/Badges";
+import { Button, cx, ErrorLine } from "../ui/primitives";
 import type { ChipTone } from "../ui/primitives";
+import { useAction } from "../ui/useAction";
+import { useNow } from "../ui/useNow";
 
 /** The bridge: this computer's localhost ports handed to the machine over
  * ssh. One of four states, in the order a user would ask about them. */
@@ -20,9 +23,8 @@ export interface Bridge {
 export function bridgeOf(stack: Stack, status: StackStatus | undefined, forward: ForwardState | undefined, now: number): Bridge {
   if (!stack.forward_ports) return { state: "off", text: "bridge off", tone: "neutral" };
   if (forward?.up) {
-    const ports = forward.ports.length === 1 ? "1 port" : `${forward.ports.length} ports`;
-    const since = forward.since_ms ? ` · since ${clock(forward.since_ms)}${ago(now - forward.since_ms)}` : "";
-    return { state: "connected", text: `bridge connected · ${ports}${since}`, tone: "good" };
+    const since = forward.since_ms ? ` · since ${clock(forward.since_ms)}${upFor(now - forward.since_ms)}` : "";
+    return { state: "connected", text: `bridge connected · ${plural(forward.ports.length, "port")}${since}`, tone: "good" };
   }
   if (forward && forward.ports.length > 0) {
     const attempt = forward.attempts > 0 ? `, attempt ${forward.attempts}` : "";
@@ -38,62 +40,41 @@ export function BridgeControl({ stack }: { stack: Stack }) {
   const forward = useStore((state) => state.forwards[stack.id]);
   const setStacks = useStore((state) => state.setStacks);
   const now = useNow(1000);
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const flip = useAction("inline");
   const bridge = bridgeOf(stack, status, forward, now);
-
-  const flip = async () => {
-    setWorking(true);
-    setError(null);
-    try {
-      setStacks(await api.setForwardPorts(stack.id, !stack.forward_ports));
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setWorking(false);
-    }
-  };
+  const dot = BRIDGE_DOT[bridge.state];
 
   return (
-    <div className="flex items-center gap-2 text-[11px]">
-      <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", DOT[bridge.state])} />
-      <span className={cx("truncate", bridge.state === "connecting" ? "text-warning" : "text-ink-3")} title={bridge.text}>
-        {bridge.text}
-      </span>
-      <Button
-        size="sm"
-        tone="ghost"
-        onClick={() => void flip()}
-        busy={working}
-        title={stack.forward_ports ? "Drop the localhost ports for this stack" : "Hand this stack's ports to localhost again"}
-      >
-        {stack.forward_ports ? "Stop bridge" : "Start bridge"}
-      </Button>
-      {error ? <span className="text-critical">{error}</span> : null}
+    <div>
+      <div className="flex items-center gap-2 text-[11px]">
+        <StatusDot state={dot.state} pulse={dot.pulse} label={bridge.text} size="sm" />
+        <span className={cx("truncate", bridge.state === "connecting" ? "text-warning" : "text-ink-3")} title={bridge.text}>
+          {bridge.text}
+        </span>
+        <Button
+          size="sm"
+          tone="ghost"
+          onClick={() => void flip.run(async () => setStacks(await api.setForwardPorts(stack.id, !stack.forward_ports)))}
+          busy={flip.busy}
+          title={stack.forward_ports ? "Drop the localhost ports for this stack" : "Hand this stack's ports to localhost again"}
+        >
+          {stack.forward_ports ? "Stop bridge" : "Start bridge"}
+        </Button>
+      </div>
+      <ErrorLine error={flip.error} className="mt-1" />
     </div>
   );
 }
 
-const DOT: Record<BridgeState, string> = { off: "bg-hairline", waiting: "border border-ink-3", connecting: "bg-warning pulse", connected: "bg-good pulse" };
-
-export function clock(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
+/** Live bridges pulse; one that is still connecting needs attention. */
+const BRIDGE_DOT: Record<BridgeState, { state: DotState; pulse: boolean }> = {
+  off: { state: "idle", pulse: false },
+  waiting: { state: "pending", pulse: false },
+  connecting: { state: "attention", pulse: true },
+  connected: { state: "good", pulse: true },
+};
 
 /** ` (3m)` once it has been up for a minute, so the time reads at a glance. */
-function ago(ms: number): string {
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 1) return "";
-  if (minutes < 60) return ` (${minutes}m)`;
-  const hours = Math.floor(minutes / 60);
-  return hours < 24 ? ` (${hours}h ${minutes % 60}m)` : ` (${Math.floor(hours / 24)}d ${hours % 24}h)`;
-}
-
-export function useNow(everyMs: number): number {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), everyMs);
-    return () => window.clearInterval(timer);
-  }, [everyMs]);
-  return now;
+function upFor(ms: number): string {
+  return ms < 60_000 ? "" : ` (${span(ms)})`;
 }

@@ -1,6 +1,6 @@
-/** A thin bar for load or memory: green under 60 percent, amber to 85, red above. */
+/** A thin bar for load or memory: the accent colour up to 60 percent, amber to 85, red above. */
 export function Meter({ label, value, text, size = "sm" }: { label: string; value: number; text: string; size?: "sm" | "md" }) {
-  const tone = value > 85 ? "var(--critical)" : value > 60 ? "var(--warning)" : "var(--accent)";
+  const tone = meterColour(value);
   const height = size === "md" ? "h-2" : "h-1.5";
   const font = size === "md" ? "text-[12px]" : "text-[11px]";
   const percent = Math.round(Math.min(100, Math.max(0, value)));
@@ -23,14 +23,16 @@ export function Meter({ label, value, text, size = "sm" }: { label: string; valu
   );
 }
 
+function meterColour(percent: number): string {
+  if (percent > 85) return "var(--critical)";
+  if (percent > 60) return "var(--warning)";
+  return "var(--accent)";
+}
+
 export function loadPercent(load1: number, cpus: number): number {
   return cpus > 0 ? Math.min(100, (load1 / cpus) * 100) : 0;
 }
 
 export function memoryPercent(usedMb: number, totalMb: number): number {
   return totalMb > 0 ? (usedMb / totalMb) * 100 : 0;
-}
-
-export function gigabytes(mb: number): string {
-  return (mb / 1024).toFixed(1);
 }

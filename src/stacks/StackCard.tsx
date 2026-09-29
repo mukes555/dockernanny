@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 
-import { api, errorMessage } from "../lib/ipc";
-import type { Phase, ServiceState, Stack } from "../lib/types";
+import { ago } from "../lib/format";
+import { api } from "../lib/ipc";
+import type { CopyProgress, Phase, ServiceState, Stack } from "../lib/types";
 import { localPort } from "../lib/types";
 import { isBusy, isUp, useStore } from "../state/store";
+import type { DotState } from "../ui/Badges";
+import { StatusDot } from "../ui/Badges";
 import { ExternalIcon, LogsIcon, PlayIcon, SpinnerIcon, StopIcon } from "../ui/icons";
 import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
-import { Button, Chip, cx } from "../ui/primitives";
+import { Button, Chip, cx, ErrorLine } from "../ui/primitives";
 import type { ChipTone } from "../ui/primitives";
+import { useAction } from "../ui/useAction";
+import { useNow } from "../ui/useNow";
 import { BridgeControl } from "./Bridge";
 
 /** Cards as wide as there is room for: one stack fills the width, and a
@@ -26,6 +31,10 @@ const PHASE_LABEL: Record<Phase, { text: string; tone: ChipTone }> = {
   stopping: { text: "stopping", tone: "accent" },
 };
 
+/** How many output lines the card shows folded and unfolded. */
+const OUTPUT_FOLDED = 8;
+const OUTPUT_UNFOLDED = 200;
+
 export function StackCard({ stack }: { stack: Stack }) {
   const status = useStore((state) => state.statuses[stack.id]);
   const forward = useStore((state) => state.forwards[stack.id]);
@@ -37,12 +46,12 @@ export function StackCard({ stack }: { stack: Stack }) {
   const logsOpen = useStore((state) => state.logsFor === stack.id);
   const copy = useStore((state) => state.copies[stack.id]);
   const openProgress = useStore((state) => state.openProgress);
-  const [expanded, setExpanded] = useState(false);
-  const [removing, setRemoving] = useState<"ask" | "working" | null>(null);
-  const [withVolumes, setWithVolumes] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
   const machineStats = useStore((state) => state.stats[stack.machine_id]);
+  const [expanded, setExpanded] = useState(false);
+  const [askingRemove, setAskingRemove] = useState(false);
+  const [withVolumes, setWithVolumes] = useState(false);
+  // Every button of the card reports here; a new click clears the last failure.
+  const action = useAction("inline");
   const removeStrip = useRef<HTMLDivElement>(null);
 
   const phase = status?.phase ?? "idle";
@@ -54,30 +63,23 @@ export function StackCard({ stack }: { stack: Stack }) {
   const canStop = (busy || running) && !copyRunning;
   const spinning = busy || phase === "waiting";
   const ports = openablePorts(stack, status?.services ?? [], forward?.up ?? false);
+  const canOpen = running && ports.length > 0;
   const hasContainers = (status?.services.length ?? 0) > 0;
   // Only a poll that came back without an answer means offline; no poll yet means not known.
   const machineOffline = machine !== undefined && machineStats !== undefined && !machineStats.online;
   const chip = machineOffline ? { text: "machine offline", tone: "neutral" as ChipTone } : PHASE_LABEL[phase];
+  const showOutput = lines.length > 0 && (busy || Boolean(status?.error) || expanded);
+  const shownLines = lines.slice(-(expanded ? OUTPUT_UNFOLDED : OUTPUT_FOLDED));
+  const firstShown = lines.length - shownLines.length;
 
   // The strip sits at the bottom of the card, which may be out of view when Remove is chosen.
   useEffect(() => {
-    if (removing === "ask") removeStrip.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [removing]);
+    if (askingRemove) removeStrip.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [askingRemove]);
 
-  // A new action clears the last one's error, so a failure does not outlive the next success.
-  const call = (action: Promise<unknown>) => {
-    setError(null);
-    return action.catch((err) => setError(errorMessage(err)));
-  };
-  const toggleBridge = () => void call(api.setForwardPorts(stack.id, !stack.forward_ports).then(setStacks));
   const remove = async () => {
-    setRemoving("working");
-    try {
-      setStacks(await api.removeStack(stack.id, withVolumes));
-    } catch (err) {
-      setError(errorMessage(err));
-      setRemoving(null);
-    }
+    const removed = await action.run(async () => setStacks(await api.removeStack(stack.id, withVolumes)));
+    if (!removed) setAskingRemove(false);
   };
 
   return (
@@ -103,12 +105,13 @@ export function StackCard({ stack }: { stack: Stack }) {
               size="sm"
               tone="primary"
               disabled={busy || !machine}
-              onClick={() => void call(api.upStack(stack.id, false))}
+              onClick={() => void action.run(() => api.upStack(stack.id, false))}
               title="Sync the folder and start the stack on the machine; images are built only if missing"
             >
               <PlayIcon size={11} /> Start
             </Button>
-          ) : ports.length > 0 ? (
+          ) : null}
+          {canOpen ? (
             <Button size="sm" tone="primary" onClick={() => void api.openLocal(ports[0])} title={`Open http://localhost:${ports[0]} in the browser`}>
               <ExternalIcon size={11} /> Open
             </Button>
@@ -116,7 +119,7 @@ export function StackCard({ stack }: { stack: Stack }) {
           <Button
             size="sm"
             disabled={!canStop}
-            onClick={() => void call(api.stopStack(stack.id))}
+            onClick={() => void action.run(() => api.stopStack(stack.id))}
             title="Stop the containers; they stay, so Start brings them back quickly"
           >
             <StopIcon size={11} /> Stop
@@ -130,29 +133,26 @@ export function StackCard({ stack }: { stack: Stack }) {
           >
             <LogsIcon size={11} /> Logs
           </Button>
-          {/* Always the same items, so none moves under the cursor when the state changes. */}
+          {/* Always the same items, so none moves under the cursor when the state changes. The bridge has its own switch under the card. */}
           <Menu label={`More actions for ${stack.name}`} width="w-56">
-            <MenuItem onClick={() => void call(api.syncStack(stack.id))} disabled={busy || !machine}>
+            <MenuItem onClick={() => void action.run(() => api.syncStack(stack.id))} disabled={busy || !machine}>
               Sync the folder now
             </MenuItem>
-            <MenuItem onClick={() => void call(api.upStack(stack.id, true))} disabled={busy || !machine}>
+            <MenuItem onClick={() => void action.run(() => api.upStack(stack.id, true))} disabled={busy || !machine}>
               Rebuild images and restart
             </MenuItem>
-            <MenuItem onClick={() => void call(api.restartStack(stack.id))} disabled={!running}>
+            <MenuItem onClick={() => void action.run(() => api.restartStack(stack.id))} disabled={!running}>
               Restart containers
             </MenuItem>
             <MenuSeparator />
             <MenuItem onClick={() => setCopyOpen({ open: true, sourceStackId: stack.id })} disabled={busy || !machine}>
               Copy to…
             </MenuItem>
-            <MenuItem onClick={toggleBridge} disabled={!machine && !stack.forward_ports}>
-              {stack.forward_ports ? "Turn the bridge off" : "Turn the bridge on"}
-            </MenuItem>
-            <MenuItem onClick={() => void call(api.downStack(stack.id))} disabled={busy || !machine || !hasContainers}>
+            <MenuItem onClick={() => void action.run(() => api.downStack(stack.id))} disabled={busy || !machine || !hasContainers}>
               Remove containers (keep data)
             </MenuItem>
             <MenuSeparator />
-            <MenuItem onClick={() => setRemoving("ask")} danger>
+            <MenuItem onClick={() => setAskingRemove(true)} danger>
               Remove stack…
             </MenuItem>
           </Menu>
@@ -168,11 +168,11 @@ export function StackCard({ stack }: { stack: Stack }) {
         ))}
       </div>
 
-      {lines.length > 0 && (busy || status?.error || expanded) ? (
+      {showOutput ? (
         <div className="mt-3">
           <pre className="mono selectable max-h-64 overflow-auto rounded-lg bg-plane/60 px-3 py-2 text-[11px] leading-[1.5] text-ink-2">
-            {(expanded ? lines.slice(-200) : lines.slice(-8)).map((line, index) => (
-              <div key={index} className={cx("whitespace-pre-wrap break-all", line.stream === "stderr" && "text-ink")}>
+            {shownLines.map((line, index) => (
+              <div key={firstShown + index} className={cx("whitespace-pre-wrap break-all", line.stream === "stderr" && "text-ink")}>
                 {line.text}
               </div>
             ))}
@@ -184,17 +184,7 @@ export function StackCard({ stack }: { stack: Stack }) {
         <div className="flex items-center gap-3">
           <SyncLine syncedAt={status?.synced_at_ms ?? null} files={status?.synced_files ?? 0} />
           {stack.live_sync ? <span className="text-accent">live</span> : null}
-          {copy ? (
-            <button
-              type="button"
-              className={cx("inline-flex items-center gap-1", copy.finished_ms ? (copy.failed ? "text-critical" : "hover:text-ink") : "text-accent")}
-              onClick={() => openProgress(stack.id)}
-              title="Show the copy's steps, bytes and result"
-            >
-              {!copy.finished_ms ? <SpinnerIcon size={10} /> : null}
-              {copy.finished_ms ? (copy.failed ? "copy failed" : "last copy") : `copying from ${copy.from}`}
-            </button>
-          ) : null}
+          {copy ? <CopyLink copy={copy} onOpen={() => openProgress(stack.id)} /> : null}
         </div>
         {lines.length > 0 ? (
           <button type="button" className="hover:text-ink" onClick={() => setExpanded((open) => !open)}>
@@ -208,14 +198,14 @@ export function StackCard({ stack }: { stack: Stack }) {
           <BridgeControl stack={stack} />
         </div>
       ) : null}
-      {status?.error ? <div className="mt-2 text-[12px] text-critical">{status.error}</div> : null}
+      <ErrorLine error={status?.error} />
       {status?.sync_warning ? <div className="mt-2 text-[12px] text-warning">{status.sync_warning}</div> : null}
       {status?.folder_missing ? (
         <div className="mt-2 text-[12px] text-warning">The project folder is gone from the machine. Start copies it there again.</div>
       ) : null}
-      {error ? <div className="mt-2 text-[12px] text-critical">{error}</div> : null}
+      <ErrorLine error={action.error} />
 
-      {removing ? (
+      {askingRemove ? (
         <div
           ref={removeStrip}
           className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-critical/40 bg-surface-2 px-3 py-2 text-[12px]"
@@ -232,10 +222,10 @@ export function StackCard({ stack }: { stack: Stack }) {
             <div className="text-ink">Remove {stack.name}? Its machine is gone, so only this computer forgets it; nothing else is touched.</div>
           )}
           <div className="flex gap-2">
-            <Button size="sm" tone="ghost" onClick={() => setRemoving(null)} disabled={removing === "working"}>
+            <Button size="sm" tone="ghost" onClick={() => setAskingRemove(false)} disabled={action.busy}>
               Keep
             </Button>
-            <Button size="sm" tone="danger" onClick={() => void remove()} busy={removing === "working"}>
+            <Button size="sm" tone="danger" onClick={() => void remove()} busy={action.busy}>
               Remove
             </Button>
           </div>
@@ -243,6 +233,23 @@ export function StackCard({ stack }: { stack: Stack }) {
       ) : null}
     </section>
   );
+}
+
+/** The footer's link to the last copy of this stack, while one is remembered. */
+function CopyLink({ copy, onOpen }: { copy: CopyProgress; onOpen: () => void }) {
+  const look = copyLook(copy);
+  return (
+    <button type="button" className={cx("inline-flex items-center gap-1", look.className)} onClick={onOpen} title="Show the copy's steps, bytes and result">
+      {!copy.finished_ms ? <SpinnerIcon size={10} /> : null}
+      {look.text}
+    </button>
+  );
+}
+
+function copyLook(copy: CopyProgress): { text: string; className: string } {
+  if (!copy.finished_ms) return { text: `copying from ${copy.from}`, className: "text-accent" };
+  if (copy.failed) return { text: "copy failed", className: "text-critical" };
+  return { text: "last copy", className: "hover:text-ink" };
 }
 
 /** The ports that open in a browser right now: TCP, of a running service,
@@ -256,22 +263,32 @@ function openablePorts(stack: Stack, services: ServiceState[], forwardUp: boolea
 
 /** A service's dot and words, from Compose's own readiness (compose/ps.rs),
  * so the card and `docker compose up --wait` agree on what "ready" means. */
-function serviceLook(service: ServiceState): { dot: string; detail: string; hint: string } {
+function serviceLook(service: ServiceState): { dot: DotState; detail: string; hint: string } {
   switch (service.readiness) {
     case "ready":
-      return { dot: "bg-good", detail: service.health || service.state, hint: "Running, and ready" };
+      return { dot: "good", detail: service.health || service.state, hint: "Running, and ready" };
     case "starting":
-      return { dot: "bg-accent", detail: service.state === "restarting" ? "restarting" : "starting", hint: "Running; its health check has not passed yet" };
+      return { dot: "busy", detail: service.state === "restarting" ? "restarting" : "starting", hint: "Running; its health check has not passed yet" };
     case "done":
-      return { dot: "bg-hairline", detail: "job finished", hint: "A one-shot job other services waited for; it finished without an error" };
+      return { dot: "idle", detail: "job finished", hint: "A one-shot job other services waited for; it finished without an error" };
     case "unhealthy":
-      return { dot: "bg-critical", detail: "unhealthy", hint: "Running, but its health check fails; its logs say why" };
+      return { dot: "failed", detail: "unhealthy", hint: "Running, but its health check fails; its logs say why" };
     case "stopped": {
       const failed = service.state === "dead" || (service.state === "exited" && service.exit_code !== 0);
       const detail = service.state === "exited" ? `exited (${service.exit_code})` : service.state;
-      return { dot: failed ? "bg-critical" : "bg-hairline", detail, hint: failed ? "Stopped with an error; its logs say why" : "Not running" };
+      if (failed) return { dot: "failed", detail, hint: "Stopped with an error; its logs say why" };
+      return { dot: "idle", detail, hint: "Not running" };
     }
   }
+}
+
+/** Why a port button is, or is not, clickable. */
+function portHint(stack: Stack, running: boolean, forwardUp: boolean, udp: boolean, local: number, target: number): string {
+  if (udp) return "UDP does not go through the bridge";
+  if (!stack.forward_ports) return "The bridge is off for this stack";
+  if (!running) return "The service is not running";
+  if (!forwardUp) return "The bridge is connecting…";
+  return `Open http://localhost:${local} (container port ${target})`;
 }
 
 function ServiceRow({ stack, service, forwardUp }: { stack: Stack; service: ServiceState; forwardUp: boolean }) {
@@ -279,7 +296,7 @@ function ServiceRow({ stack, service, forwardUp }: { stack: Stack; service: Serv
   const look = serviceLook(service);
   return (
     <div className="flex items-center gap-2.5 rounded-lg px-2 py-1 text-[12px] hover:bg-surface-2/60">
-      <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", look.dot)} />
+      <StatusDot state={look.dot} label={look.hint} size="sm" />
       <span className="w-28 truncate font-medium text-ink">{service.service}</span>
       <span className="w-24 truncate text-ink-3" title={look.hint}>
         {look.detail}
@@ -289,29 +306,21 @@ function ServiceRow({ stack, service, forwardUp }: { stack: Stack; service: Serv
           const local = localPort(stack, port.published);
           const udp = port.protocol === "udp";
           const reachable = running && stack.forward_ports && forwardUp && !udp;
-          const hint = udp
-            ? "UDP does not go through the bridge"
-            : !stack.forward_ports
-              ? "The bridge is off for this stack"
-              : !running
-                ? "The service is not running"
-                : !forwardUp
-                  ? "The bridge is connecting…"
-                  : `Open http://localhost:${local} (container port ${port.target})`;
+          const renumbered = !udp && local !== port.published;
           return (
             <button
               key={`${port.published}-${port.protocol}`}
               type="button"
               disabled={!reachable}
               onClick={() => void api.openLocal(local)}
-              title={hint}
+              title={portHint(stack, running, forwardUp, udp, local, port.target)}
               className={cx(
                 "mono inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition",
                 reachable ? "border-good/40 text-good hover:bg-good/10" : "border-line text-ink-3",
               )}
             >
               {udp ? `${port.published}/udp` : `localhost:${local}`}
-              {!udp && local !== port.published ? <span className="text-ink-3">({port.published})</span> : null}
+              {renumbered ? <span className="text-ink-3">({port.published})</span> : null}
               {reachable ? <ExternalIcon size={10} /> : null}
             </button>
           );
@@ -326,24 +335,7 @@ function SyncLine({ syncedAt, files }: { syncedAt: number | null; files: number 
   if (!syncedAt) return <span title="Sync times are kept while the app runs">not synced since the app started</span>;
   return (
     <span className="tabular">
-      synced {relative(now - syncedAt)} · {files} files
+      synced {ago(now - syncedAt)} · {files} files
     </span>
   );
-}
-
-function relative(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  return `${Math.round(minutes / 60)}h ago`;
-}
-
-function useNow(everyMs: number): number {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), everyMs);
-    return () => window.clearInterval(timer);
-  }, [everyMs]);
-  return now;
 }

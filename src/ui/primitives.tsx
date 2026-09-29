@@ -155,6 +155,13 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
   );
 }
 
+/** Why something failed, under the control that tried it. Selectable, so it
+ * can be pasted into a search or a bug report. Nothing when there is no error. */
+export function ErrorLine({ error, className }: { error: string | null | undefined; className?: string }) {
+  if (!error) return null;
+  return <div className={cx("selectable mt-2 text-[12px] text-critical", className)}>{error}</div>;
+}
+
 /** A small dashed note, for a narrow column or inside a card. */
 export function EmptyState({ children, className }: { children: ReactNode; className?: string }) {
   return <p className={cx("rounded-xl border border-dashed border-hairline p-4 text-[13px] text-ink-2", className)}>{children}</p>;
@@ -192,30 +199,39 @@ export function Eyebrow({ children, className }: { children: ReactNode; classNam
 /** A command the user is meant to paste into a terminal, with a copy button
  * that shows on hover and on keyboard focus, and says whether it worked. */
 export function CodeBlock({ code }: { code: string }) {
-  const [copied, setCopied] = useState<"yes" | "failed" | null>(null);
+  const [copied, setCopied] = useState<CopyResult>("not yet");
   const copy = () => {
     api
       .copyText(code)
-      .then(() => setCopied("yes"))
+      .then(() => setCopied("copied"))
       .catch(() => setCopied("failed"))
-      .finally(() => window.setTimeout(() => setCopied(null), 1500));
+      .finally(() => window.setTimeout(() => setCopied("not yet"), 1500));
   };
-  const label = copied === "yes" ? "copied" : copied === "failed" ? "select and copy by hand" : "copy";
+  const shown = COPY_BUTTON[copied];
+  const justTried = copied !== "not yet";
   return (
     <div className="group relative rounded-lg border border-line bg-plane/60">
       <pre className="mono selectable overflow-x-auto px-3 py-2 text-[12px] leading-[1.6] text-ink-2">{code}</pre>
       <button
         type="button"
         onClick={copy}
-        aria-label={copied ? label : "Copy the command"}
+        aria-label={justTried ? shown.label : "Copy the command"}
         className={cx(
           "absolute top-1.5 right-1.5 rounded-md border border-line bg-surface px-2 py-0.5 text-[11px] transition hover:text-ink focus-visible:opacity-100 group-hover:opacity-100",
-          copied ? "opacity-100" : "opacity-0",
-          copied === "yes" ? "text-good" : copied === "failed" ? "text-critical" : "text-ink-3",
+          justTried ? "opacity-100" : "opacity-0",
+          shown.colour,
         )}
       >
-        {label}
+        {shown.label}
       </button>
     </div>
   );
 }
+
+type CopyResult = "not yet" | "copied" | "failed";
+
+const COPY_BUTTON: Record<CopyResult, { label: string; colour: string }> = {
+  "not yet": { label: "copy", colour: "text-ink-3" },
+  copied: { label: "copied", colour: "text-good" },
+  failed: { label: "select and copy by hand", colour: "text-critical" },
+};

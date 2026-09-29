@@ -1,14 +1,17 @@
 import { useState } from "react";
 
-import { api, errorMessage } from "../lib/ipc";
+import { plural } from "../lib/format";
+import { api } from "../lib/ipc";
 import type { Machine, Stack } from "../lib/types";
 import { useStore } from "../state/store";
 import { ExternalIcon, RefreshIcon } from "../ui/icons";
 import { Page } from "../ui/Page";
 import { Button, Chip, cx, EmptyPanel } from "../ui/primitives";
 import { Term } from "../ui/Term";
+import { useAction } from "../ui/useAction";
+import { useNow } from "../ui/useNow";
 import type { Bridge, BridgeState } from "./Bridge";
-import { bridgeOf, useNow } from "./Bridge";
+import { bridgeOf } from "./Bridge";
 
 /** One word per row; the chip's tooltip has the whole sentence with the time. */
 const BRIDGE_WORD: Record<BridgeState, string> = { connected: "connected", connecting: "connecting", waiting: "waiting", off: "off" };
@@ -31,8 +34,10 @@ export function PortsPage() {
   const forwards = useStore((state) => state.forwards);
   const setStacks = useStore((state) => state.setStacks);
   const now = useNow(1000);
-  const [working, setWorking] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // One action at a time on this page; `target` says whose button spins: a stack's id, or "all".
+  const action = useAction("notice");
+  const [target, setTarget] = useState<string | null>(null);
+  const busyWith = (id: string) => action.busy && target === id;
 
   const rows: MappedPort[] = [];
   for (const stack of stacks) {
@@ -73,49 +78,32 @@ export function PortsPage() {
     rowsWithSwitch.add(index);
   });
 
-  const flip = async (stack: Stack) => {
-    setWorking(stack.id);
-    setError(null);
-    try {
-      setStacks(await api.setForwardPorts(stack.id, !stack.forward_ports));
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setWorking(null);
-    }
+  const flip = (stack: Stack) => {
+    setTarget(stack.id);
+    void action.run(async () => setStacks(await api.setForwardPorts(stack.id, !stack.forward_ports)));
   };
-  const restartAll = async () => {
-    setWorking("all");
-    setError(null);
-    try {
-      await api.resetForwards();
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setWorking(null);
-    }
+  const restartAll = () => {
+    setTarget("all");
+    void action.run(api.resetForwards);
   };
+  const summary =
+    rows.length === 0 ? "What localhost points at on this computer" : `${connectedCount} of ${plural(rows.length, "port")} connected to their machines`;
 
   return (
     <Page
       title="Ports"
-      summary={
-        rows.length === 0
-          ? "What localhost points at on this computer"
-          : `${connectedCount} of ${rows.length} ${rows.length === 1 ? "port" : "ports"} connected to their machines`
-      }
+      summary={summary}
       actions={
         <Button
-          onClick={() => void restartAll()}
-          busy={working === "all"}
-          disabled={working !== null || rows.length === 0}
+          onClick={restartAll}
+          busy={busyWith("all")}
+          disabled={action.busy || rows.length === 0}
           title="Drop every bridge and let the running stacks bring theirs back"
         >
           <RefreshIcon /> Restart all bridges
         </Button>
       }
     >
-      {error ? <div className="text-[12px] text-critical">{error}</div> : null}
       {rows.length === 0 ? (
         <EmptyPanel title="No ports yet">Start or copy a stack, and each port it publishes shows up here as a localhost address on this computer.</EmptyPanel>
       ) : (
@@ -167,9 +155,9 @@ export function PortsPage() {
                         <Button
                           size="sm"
                           tone="ghost"
-                          onClick={() => void flip(row.stack)}
-                          busy={working === row.stack.id}
-                          disabled={working !== null}
+                          onClick={() => flip(row.stack)}
+                          busy={busyWith(row.stack.id)}
+                          disabled={action.busy}
                           title={
                             row.stack.forward_ports
                               ? `All of ${row.stack.name}'s ports close here; the stack keeps running`

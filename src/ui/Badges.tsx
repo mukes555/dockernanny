@@ -1,18 +1,41 @@
 import type { Battery } from "../lib/types";
 import { cx } from "./primitives";
 
-/** `up 9d 8h`, the way a person says it. */
-export function uptimeText(seconds: number): string {
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `up ${days}d ${hours}h`;
-  if (hours > 0) return `up ${hours}h ${minutes}m`;
-  return `up ${minutes}m`;
-}
+/** What a status dot says. Each has one colour everywhere in the app:
+ * "attention" is something the user can fix or set up (amber), "failed"
+ * something that broke (red). */
+export type DotState = "good" | "busy" | "attention" | "failed" | "idle" | "pending";
 
-export function gigabytesOf(bytes: number): string {
-  return `${(bytes / 1e9).toFixed(bytes >= 100e9 ? 0 : 1)} GB`;
+// The text colour matches, so a pulsing dot's ring (currentColor) is its own colour.
+const DOT_COLOUR: Record<DotState, string> = {
+  good: "bg-good text-good",
+  busy: "bg-accent text-accent",
+  attention: "bg-warning text-warning",
+  failed: "bg-critical text-critical",
+  idle: "bg-hairline text-hairline",
+  pending: "border border-ink-3 text-ink-3",
+};
+
+const DOT_SIZE = { sm: "h-1.5 w-1.5", md: "h-2 w-2", lg: "h-2.5 w-2.5" };
+
+/** A coloured dot with its meaning for screen readers and on hover. `pulse`
+ * for something live: a bridge carrying traffic, a computer connected now. */
+export function StatusDot({
+  state,
+  label,
+  pulse = false,
+  size = "md",
+  className,
+}: {
+  state: DotState;
+  label: string;
+  pulse?: boolean;
+  size?: keyof typeof DOT_SIZE;
+  className?: string;
+}) {
+  return (
+    <span role="img" aria-label={label} title={label} className={cx("shrink-0 rounded-full", DOT_SIZE[size], DOT_COLOUR[state], pulse && "pulse", className)} />
+  );
 }
 
 /** Which family a probe's OS text belongs to, for the glyph. */

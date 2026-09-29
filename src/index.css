@@ -143,7 +143,7 @@ body::before {
 @keyframes pulse-dot {
   0%,
   100% {
-    box-shadow: 0 0 0 0 color-mix(in oklab, var(--good) 55%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in oklab, currentColor 55%, transparent);
   }
   70% {
     box-shadow: 0 0 0 6px transparent;

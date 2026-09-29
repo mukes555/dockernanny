@@ -1,12 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { useEffect, useState } from "react";
 
 import { api, errorMessage } from "../lib/ipc";
 import { useStore } from "../state/store";
-import { XIcon } from "../ui/icons";
+import { Drawer } from "../ui/Drawer";
 import { LogRow } from "../ui/LogRow";
-import { Button } from "../ui/primitives";
-import { useEscape } from "../ui/useEscape";
+import { Button, ErrorLine } from "../ui/primitives";
+import { useFollowTail } from "../ui/useFollowTail";
 
 /** `docker logs -f` for one container on a machine, streamed over the same
  * ssh connection its Docker context uses, for exactly as long as this is open. */
@@ -16,60 +15,48 @@ export function ContainerLogsDrawer() {
   const openContainerLogs = useStore((state) => state.openContainerLogs);
   const [paused, setPaused] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
-  const scroller = useRef<HTMLDivElement>(null);
-  const pinned = useRef(true);
-  useEscape(Boolean(target), () => openContainerLogs(null));
+  const { scroller, onScroll } = useFollowTail(lines.length, paused);
 
-  useEffect(() => {
-    if (!target) return;
+  // Another container starts afresh: following, no old error. Adjusted while
+  // rendering, React's way for state that follows a prop, not in an effect.
+  const [shownFor, setShownFor] = useState(target);
+  if (shownFor !== target) {
+    setShownFor(target);
     setPaused(false);
     setStartError(null);
-    void api.startContainerLogs(target.machineId, target.id).catch((err) => setStartError(errorMessage(err)));
-    return () => void api.stopContainerLogs(target.id).catch(console.warn);
+  }
+
+  // The stream lives exactly as long as the drawer shows this container.
+  useEffect(() => {
+    if (!target) return;
+    let current = true;
+    api.startContainerLogs(target.machineId, target.id).catch((err) => current && setStartError(errorMessage(err)));
+    return () => {
+      current = false;
+      void api.stopContainerLogs(target.id).catch(console.warn);
+    };
   }, [target]);
 
-  useEffect(() => {
-    const el = scroller.current;
-    if (el && pinned.current && !paused) el.scrollTop = el.scrollHeight;
-  }, [lines.length, paused]);
-
-  const onScroll = () => {
-    const el = scroller.current;
-    if (!el) return;
-    pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-  };
-
   return (
-    <AnimatePresence>
-      {target ? (
-        <motion.aside
-          className="fixed top-0 bottom-0 right-0 z-20 flex w-[560px] max-w-[80vw] flex-col border-l border-line bg-surface shadow-2xl"
-          initial={{ x: 40, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          exit={{ x: 40, opacity: 0 }}
-          transition={{ type: "spring", stiffness: 380, damping: 34 }}
-        >
-          <header className="flex items-center gap-2 border-b border-line px-4 py-3">
-            <div className="min-w-0 flex-1">
-              <div className="text-[11px] uppercase tracking-[0.14em] text-ink-3">Container logs</div>
-              <div className="truncate text-[14px] font-semibold text-ink">{target.name}</div>
-            </div>
-            <Button size="sm" onClick={() => setPaused((p) => !p)}>
-              {paused ? "Follow" : "Pause"}
-            </Button>
-            <Button size="sm" tone="ghost" onClick={() => openContainerLogs(null)} aria-label="Close container logs">
-              <XIcon />
-            </Button>
-          </header>
-          <div ref={scroller} onScroll={onScroll} className="mono selectable min-h-0 flex-1 overflow-auto px-4 py-3 text-[12px] leading-[1.55]">
-            {startError ? <div className="selectable text-critical">The logs could not start: {startError}</div> : null}
-            {lines.length === 0 && !startError ? <div className="text-ink-3">waiting for output…</div> : null}
-            {lines.map((line) => (
-              <LogRow key={line.seq} entry={line} />
-            ))}
-          </div>
-        </motion.aside>
-      ) : null}
-    </AnimatePresence>
+    <Drawer
+      open={Boolean(target)}
+      onClose={() => openContainerLogs(null)}
+      eyebrow="Container logs"
+      title={target?.name}
+      closeLabel="Close container logs"
+      controls={
+        <Button size="sm" onClick={() => setPaused((p) => !p)}>
+          {paused ? "Follow" : "Pause"}
+        </Button>
+      }
+    >
+      <div ref={scroller} onScroll={onScroll} className="mono selectable min-h-0 flex-1 overflow-auto px-4 py-3 text-[12px] leading-[1.55]">
+        <ErrorLine error={startError ? `The logs could not start: ${startError}` : null} className="mt-0" />
+        {lines.length === 0 && !startError ? <div className="text-ink-3">waiting for output…</div> : null}
+        {lines.map((line) => (
+          <LogRow key={line.seq} entry={line} />
+        ))}
+      </div>
+    </Drawer>
   );
 }

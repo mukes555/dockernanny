@@ -9,6 +9,9 @@ const CloseMenu = createContext<() => void>(() => {});
 /** Below this much room under the button, the list opens upwards. */
 const ROOM_FOR_LIST = 280;
 
+/** How far an arrow key moves the focus through the items. */
+const ARROW_STEP: Record<string, number | undefined> = { ArrowDown: 1, ArrowUp: -1 };
+
 /** A "…" button with a short list of actions under it. It opens on click and
  * closes on Escape, a click outside, a scroll, or a chosen item; the keyboard
  * moves through the items with the arrow keys and lands back on the button.
@@ -82,8 +85,8 @@ export function Menu({
         close(false);
         return;
       }
-      const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
-      if (step === 0) return;
+      const step = ARROW_STEP[event.key];
+      if (step === undefined) return;
       event.preventDefault();
       const all = items();
       const at = all.indexOf(document.activeElement as HTMLElement);
