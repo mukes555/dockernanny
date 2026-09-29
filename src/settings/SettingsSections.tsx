@@ -169,14 +169,14 @@ export function AdvancedSection({ draft, commit, onError }: SectionProps) {
 function LoopbackMachines({ onError }: { onError: (message: string) => void }) {
   const machines = useStore((state) => state.machines);
   const computerInfo = useStore((state) => state.computerInfo);
-  const setMachines = useStore((state) => state.setMachines);
+  const removeMachine = useStore((state) => state.removeMachine);
+  // The same two clicks as removing any other machine.
+  const [asking, setAsking] = useState<string | null>(null);
   const hidden = hiddenMachines(machines, computerInfo);
   if (hidden.length === 0) return null;
   const remove = (id: string) => {
-    api
-      .removeMachine(id)
-      .then(setMachines)
-      .catch((err) => onError(errorMessage(err)));
+    setAsking(null);
+    removeMachine(id).catch((err) => onError(errorMessage(err)));
   };
   return (
     <div className="space-y-2">
@@ -187,9 +187,22 @@ function LoopbackMachines({ onError }: { onError: (message: string) => void }) {
             <span className="mono text-ink-3">
               ({machine.user}@{machine.host})
             </span>{" "}
-            points at this computer, so it is not listed as a machine.
+            {asking === machine.id
+              ? "and its stacks are forgotten here; nothing on disk changes."
+              : "points at this computer, so it is not listed as a machine."}
           </span>
-          <Button onClick={() => remove(machine.id)}>Remove</Button>
+          {asking === machine.id ? (
+            <span className="flex shrink-0 gap-2">
+              <Button tone="ghost" onClick={() => setAsking(null)}>
+                Keep
+              </Button>
+              <Button tone="danger" onClick={() => remove(machine.id)}>
+                Remove
+              </Button>
+            </span>
+          ) : (
+            <Button onClick={() => setAsking(machine.id)}>Remove…</Button>
+          )}
         </div>
       ))}
     </div>

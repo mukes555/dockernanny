@@ -30,8 +30,7 @@ export function MachinePage({ machine }: { machine: Machine }) {
   const stacks = allStacks.filter((s) => s.machine_id === machine.id);
   const doctorRows = useStore((state) => state.doctor[machine.id] ?? NO_ROWS);
   const resetDoctor = useStore((state) => state.resetDoctor);
-  const setMachines = useStore((state) => state.setMachines);
-  const selectMachine = useStore((state) => state.selectMachine);
+  const removeMachine = useStore((state) => state.removeMachine);
   const setCopyOpen = useStore((state) => state.setCopyOpen);
   const [tab, setTab] = useState<MachineTab>("stacks");
   const [checking, setChecking] = useState(false);
@@ -72,10 +71,7 @@ export function MachinePage({ machine }: { machine: Machine }) {
 
   const remove = async () => {
     try {
-      setMachines(await api.removeMachine(machine.id));
-      // Its stacks went with it.
-      useStore.getState().setStacks(await api.listStacks());
-      selectMachine(null);
+      await removeMachine(machine.id);
     } catch (err) {
       setError(errorMessage(err));
       setRemoving(false);

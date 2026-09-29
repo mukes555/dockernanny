@@ -62,8 +62,15 @@ export function Menu({
       const outside = !root.current?.contains(target) && !list.current?.contains(target);
       if (outside) close(false);
     };
-    // The list stays where it was drawn, so anything that moves the button closes it.
-    const onMove = () => close(false);
+    // The list stays where it was drawn, so a scroll that moves the button
+    // closes it. Only that one: a log drawer following its output scrolls
+    // several times a second and must not close a menu elsewhere.
+    const onScroll = (event: Event) => {
+      const scrolled = event.target;
+      const movesTheButton = scrolled === document || (scrolled instanceof Node && scrolled.contains(button.current));
+      if (movesTheButton) close(false);
+    };
+    const onResize = () => close(false);
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -84,13 +91,13 @@ export function Menu({
     };
     document.addEventListener("pointerdown", onPointer);
     document.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", onMove, true);
-    window.addEventListener("resize", onMove);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
     return () => {
       document.removeEventListener("pointerdown", onPointer);
       document.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", onMove, true);
-      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
     };
   }, [open]);
 

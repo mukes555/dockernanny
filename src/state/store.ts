@@ -156,6 +156,8 @@ interface State {
   showSharing: () => void;
   load: () => Promise<void>;
   setMachines: (machines: Machine[]) => void;
+  /** The backend removes a machine's stacks with it, so both lists are read back. */
+  removeMachine: (id: string) => Promise<void>;
   setStats: (machineId: string, stats: MachineStats) => void;
   pushDoctorRow: (machineId: string, row: DoctorRow) => void;
   resetDoctor: (machineId: string) => void;
@@ -312,6 +314,11 @@ export const useStore = create<State>((set, get) => ({
     set({ machines, stats, appHome, stacks, statuses, forwards, computerName, copies });
   },
   setMachines: (machines) => set({ machines }),
+  removeMachine: async (id) => {
+    const machines = await api.removeMachine(id);
+    const stacks = await api.listStacks();
+    set((state) => ({ machines, stacks, selectedMachineId: state.selectedMachineId === id ? null : state.selectedMachineId }));
+  },
   setStats: (machineId, stats) => set((state) => ({ stats: { ...state.stats, [machineId]: stats } })),
   pushDoctorRow: (machineId, row) =>
     set((state) => {
