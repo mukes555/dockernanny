@@ -78,7 +78,6 @@ export function Menu({ label, onClose, className, width = "w-44", icon, children
       window.removeEventListener("scroll", onMove, true);
       window.removeEventListener("resize", onMove);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   return (
