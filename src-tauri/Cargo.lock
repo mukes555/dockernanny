@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "dockernanny"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "fix-path-env",
