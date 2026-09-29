@@ -4,7 +4,7 @@
 //! see `elevated_batch`.
 
 use super::elevate;
-use super::platform::{run, Outcome, Output, Say, SetupOptions};
+use super::platform::{run, Outcome, Output, Say, SetupOptions, CHECK_LIMIT};
 use super::windows::Windows;
 use super::MIN_WINDOWS_BUILD;
 
@@ -229,6 +229,7 @@ pub fn elevated_batch(
                 &["advfirewall", "firewall", "set", "rule", &format!("name={name}"), "new", &format!("localport={port}")],
                 None,
                 &[],
+                CHECK_LIMIT,
             )
         } else {
             run(
@@ -247,6 +248,7 @@ pub fn elevated_batch(
                 ],
                 None,
                 &[],
+                CHECK_LIMIT,
             )
         };
         report.record(&format!("firewall rule {name} on {port}"), out);
@@ -268,6 +270,7 @@ pub fn elevated_batch(
             &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
             None,
             &[("DOCKERNANNY_NETWORK", name)],
+            CHECK_LIMIT,
         );
         report.record(&format!("network {name} marked Private"), out);
     }
@@ -275,10 +278,10 @@ pub fn elevated_batch(
     if keep_awake {
         report.record(
             "lid closed does nothing (plugged in)",
-            run("powercfg", &["/setacvalueindex", "SCHEME_CURRENT", "SUB_BUTTONS", "LIDACTION", "0"], None, &[]),
+            run("powercfg", &["/setacvalueindex", "SCHEME_CURRENT", "SUB_BUTTONS", "LIDACTION", "0"], None, &[], CHECK_LIMIT),
         );
-        report.record("apply power scheme", run("powercfg", &["/setactive", "SCHEME_CURRENT"], None, &[]));
-        report.record("no sleep while plugged in", run("powercfg", &["/change", "standby-timeout-ac", "0"], None, &[]));
+        report.record("apply power scheme", run("powercfg", &["/setactive", "SCHEME_CURRENT"], None, &[], CHECK_LIMIT));
+        report.record("no sleep while plugged in", run("powercfg", &["/change", "standby-timeout-ac", "0"], None, &[], CHECK_LIMIT));
     } else {
         report.lines.push("power settings: left as they are".into());
     }

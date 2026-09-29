@@ -199,11 +199,15 @@ fn handle(
         Ok(key) => key,
         Err(err) => return refuse(&err),
     };
+    // A right code is spent at once, and the lock let go before the key is
+    // installed: that takes seconds on Windows (wsl.exe), and the page's
+    // countdown and "turn pairing off" must not wait on it. The user opens
+    // pairing again for the next computer, or after an install that failed.
+    current.disarm();
+    current.rotate();
+    drop(current);
     match install(&key) {
         Ok(installed) => {
-            // One success closes the window; the user opens it again for the next computer.
-            current.disarm();
-            current.rotate();
             let _ = events.send(Event::Paired {
                 name: request.from.clone(),
                 from: from.into(),

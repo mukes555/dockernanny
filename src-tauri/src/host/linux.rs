@@ -7,7 +7,9 @@
 use std::process::Child;
 
 use super::linux_setup::{docker_action_for_user, docker_row, RootPlan};
-use super::platform::{host_key_from_pub, parse_ifconfig, row, run, Installed, Outcome, Output, Picture, Platform, Say, SetupOptions};
+use super::platform::{
+    host_key_from_pub, parse_ifconfig, row, run, Installed, Outcome, Output, Picture, Platform, Say, SetupOptions, CHECK_LIMIT, SETUP_LIMIT,
+};
 use crate::docker_access;
 
 const SSH_PORT: u16 = 22;
@@ -16,7 +18,7 @@ pub struct Linux;
 
 impl Linux {
     fn sh(&self, script: &str) -> Output {
-        run("/bin/sh", &["-c", script], None, &[])
+        run("/bin/sh", &["-c", script], None, &[], CHECK_LIMIT)
     }
 
     fn user(&self) -> String {
@@ -82,7 +84,7 @@ impl Platform for Linux {
             Outcome::Done("nothing to install or start".into())
         } else if self.can_prompt_for_root() {
             say("    the system asks for your password (pkexec)");
-            let out = run("pkexec", &["sh", "-c", &plan.script()], None, &[]);
+            let out = run("pkexec", &["sh", "-c", &plan.script()], None, &[], SETUP_LIMIT);
             for line in out.stdout.lines().chain(out.stderr.lines()).filter(|l| !l.trim().is_empty()).take(40) {
                 say(&format!("    | {line}"));
             }
@@ -120,8 +122,8 @@ impl Platform for Linux {
     }
 
     fn install_key(&self, key: &str) -> Result<Installed, String> {
-        let user = self.user();
-        let out = run("/bin/sh", &[], Some(&super::platform::authorized_keys_script(&user, key)), &[]);
+        let user = super::platform::checked_user(self.user())?;
+        let out = run("/bin/sh", &[], Some(&super::platform::authorized_keys_script(&user, key)), &[], CHECK_LIMIT);
         if !out.ok || !out.stdout.contains("dockernanny-key-ok") {
             return Err(format!("could not write authorized_keys: {}", out.stderr.trim()));
         }

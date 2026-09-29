@@ -4,7 +4,9 @@
 
 use std::process::Child;
 
-use super::platform::{host_key_from_pub, parse_ifconfig, row, run, Installed, Outcome, Output, Picture, Platform, Say, SetupOptions};
+use super::platform::{
+    host_key_from_pub, parse_ifconfig, row, run, Installed, Outcome, Output, Picture, Platform, Say, SetupOptions, CHECK_LIMIT, SETUP_LIMIT,
+};
 
 const SSH_PORT: u16 = 22;
 /// Docker Desktop and OrbStack put their CLI here; a GUI app's PATH does not include it.
@@ -14,7 +16,7 @@ pub struct MacOs;
 
 impl MacOs {
     fn sh(&self, script: &str) -> Output {
-        run("/bin/sh", &["-c", script], None, &[("PATH", PATH)])
+        run("/bin/sh", &["-c", script], None, &[("PATH", PATH)], CHECK_LIMIT)
     }
 
     fn user(&self) -> String {
@@ -82,7 +84,9 @@ impl Platform for MacOs {
             Outcome::Done("already on".into())
         } else {
             say("    macOS asks for your password to turn Remote Login on");
-            let out = self.sh("osascript -e 'do shell script \"systemsetup -setremotelogin on\" with administrator privileges' 2>&1");
+            // The password prompt waits for the user, so the long limit.
+            let turn_on = "osascript -e 'do shell script \"systemsetup -setremotelogin on\" with administrator privileges' 2>&1";
+            let out = run("/bin/sh", &["-c", turn_on], None, &[("PATH", PATH)], SETUP_LIMIT);
             std::thread::sleep(std::time::Duration::from_secs(2));
             if self.sshd_listening() {
                 Outcome::Changed("Remote Login is on".into())
@@ -106,8 +110,8 @@ impl Platform for MacOs {
     }
 
     fn install_key(&self, key: &str) -> Result<Installed, String> {
-        let user = self.user();
-        let out = run("/bin/sh", &[], Some(&super::platform::authorized_keys_script(&user, key)), &[("PATH", PATH)]);
+        let user = super::platform::checked_user(self.user())?;
+        let out = run("/bin/sh", &[], Some(&super::platform::authorized_keys_script(&user, key)), &[("PATH", PATH)], CHECK_LIMIT);
         if !out.ok || !out.stdout.contains("dockernanny-key-ok") {
             return Err(format!("could not write authorized_keys: {}", out.stderr.trim()));
         }

@@ -62,11 +62,14 @@ pub async fn pair(address: &str, port: u16, code: &str, pubkey: &str, from: &str
     serde_json::from_str(reply.trim()).context("unreadable answer from the machine")
 }
 
-/// A Unix account name: what sshd accepts as `User`, nothing else.
+/// An account name from the POSIX portable set (letters, digits, `.`, `_`,
+/// `-`), not starting with `-` or `.`: every name `useradd` makes, and the
+/// `john.doe` and `John` of directory logins, but nothing that could change
+/// the meaning of the ssh config line it is written into.
 pub fn valid_user(user: &str) -> bool {
-    let mut chars = user.chars();
-    let first_ok = chars.next().map(|c| c.is_ascii_lowercase() || c == '_').unwrap_or(false);
-    first_ok && user.len() <= 32 && user.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    let first_ok = user.chars().next().map(|c| c.is_ascii_alphanumeric() || c == '_').unwrap_or(false);
+    let rest_ok = user.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    first_ok && rest_ok && user.len() <= 64
 }
 
 /// A host name or address: letters, digits, dots, dashes, colons for IPv6.
@@ -146,10 +149,14 @@ mod tests {
     fn users_are_plain_unix_names() {
         assert!(valid_user("alex"));
         assert!(valid_user("_svc-1"));
-        assert!(!valid_user("Alex"));
+        assert!(valid_user("john.doe"), "directory logins have dots");
+        assert!(valid_user("Alex"), "and capitals");
+        assert!(!valid_user("-oProxyCommand=x"), "never an option");
+        assert!(!valid_user(".hidden"));
         assert!(!valid_user("alex\nPermitLocalCommand yes"));
         assert!(!valid_user(""));
         assert!(!valid_user("root user"));
+        assert!(!valid_user("alex@corp"));
     }
 
     #[test]
