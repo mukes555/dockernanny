@@ -206,22 +206,39 @@ fn restrict_to_owner(_path: &Path, _mode: u32) {}
 #[cfg(not(windows))]
 static CHILDREN: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
 
-pub fn track(child: &tokio::process::Child) {
-    #[cfg(windows)]
-    job::adopt(child);
+/// A child the app ends if it quits while the child still runs. Keep it next
+/// to the child: dropping it forgets the pid, because once a child is gone
+/// the system may give its pid to someone else's program, and quitting must
+/// never send that program a signal.
+#[must_use = "the child is forgotten as soon as this is dropped"]
+pub struct Tracked {
     #[cfg(not(windows))]
-    if let Some(pid) = child.id() {
-        CHILDREN.lock().expect("children lock").push(pid);
+    pid: Option<u32>,
+}
+
+pub fn track(child: &tokio::process::Child) -> Tracked {
+    #[cfg(windows)]
+    {
+        job::adopt(child);
+        Tracked {}
+    }
+    #[cfg(not(windows))]
+    {
+        let pid = child.id();
+        if let Some(pid) = pid {
+            CHILDREN.lock().expect("children lock").push(pid);
+        }
+        Tracked { pid }
     }
 }
 
-pub fn untrack(pid: Option<u32>) {
-    #[cfg(not(windows))]
-    if let Some(pid) = pid {
-        CHILDREN.lock().expect("children lock").retain(|p| *p != pid);
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        #[cfg(not(windows))]
+        if let Some(pid) = self.pid {
+            CHILDREN.lock().expect("children lock").retain(|p| *p != pid);
+        }
     }
-    #[cfg(windows)]
-    let _ = pid;
 }
 
 /// Ends every tracked child. Called once, at exit. On Windows the job
@@ -409,5 +426,17 @@ mod tests {
         assert_eq!(home(Path::new("/home/alex/.dockernanny")), "/home/alex/.dockernanny");
         assert_eq!(path(Path::new("/home/alex/shop")), "/home/alex/shop");
         assert_eq!(key_for_tools(Path::new("/h"), "m1", "/home/alex/.ssh/id_ed25519").unwrap(), "/home/alex/.ssh/id_ed25519");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn a_child_is_forgotten_when_its_guard_drops() {
+        let mut child = tokio::process::Command::new("sleep").arg("5").kill_on_drop(true).spawn().unwrap();
+        let pid = child.id().unwrap();
+        let tracked = track(&child);
+        assert!(CHILDREN.lock().unwrap().contains(&pid));
+        let _ = child.kill().await;
+        drop(tracked);
+        assert!(!CHILDREN.lock().unwrap().contains(&pid), "a dead child's pid must not be killed at quit");
     }
 }
