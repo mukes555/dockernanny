@@ -22,6 +22,41 @@ pub fn configure(distro: &str) -> bool {
     }
 }
 
+/// A Mac app started from Finder has a bare PATH, and the user's shell
+/// (whose PATH `fix_path_env` loads at start) may not list every place
+/// Docker's installers use. The missing ones are added at the end, so what
+/// the user set up still comes first. Once, at start, before any thread.
+pub fn add_docker_to_path() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let places = [
+        // Docker Desktop for all users, and Homebrew on Intel and Apple silicon.
+        "/usr/local/bin".to_string(),
+        "/opt/homebrew/bin".to_string(),
+        // Docker Desktop for one user, OrbStack, Rancher Desktop.
+        format!("{home}/.docker/bin"),
+        format!("{home}/.orbstack/bin"),
+        format!("{home}/.rd/bin"),
+        // Where Docker Desktop keeps the CLI itself, linked from the places above.
+        "/Applications/Docker.app/Contents/Resources/bin".to_string(),
+    ];
+    let current = std::env::var("PATH").unwrap_or_default();
+    std::env::set_var("PATH", path_with(&current, &places));
+}
+
+/// `current` with each of `places` it lacks appended, in order.
+fn path_with(current: &str, places: &[String]) -> String {
+    let mut parts: Vec<&str> = current.split(':').filter(|part| !part.is_empty()).collect();
+    for place in places {
+        if !parts.contains(&place.as_str()) {
+            parts.push(place);
+        }
+    }
+    parts.join(":")
+}
+
 /// The WSL distribution the tools run in; None off Windows.
 pub fn wsl_distro() -> Option<String> {
     #[cfg(windows)]
@@ -437,6 +472,13 @@ mod job {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn docker_places_are_added_after_the_user_s_own() {
+        let places = ["/usr/local/bin".to_string(), "/Users/alex/.docker/bin".to_string()];
+        assert_eq!(path_with("/Users/alex/bin:/usr/local/bin", &places), "/Users/alex/bin:/usr/local/bin:/Users/alex/.docker/bin");
+        assert_eq!(path_with("", &places), "/usr/local/bin:/Users/alex/.docker/bin", "a bare PATH gets them all");
+    }
 
     #[test]
     fn windows_paths_become_wsl_paths() {

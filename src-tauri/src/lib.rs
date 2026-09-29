@@ -68,6 +68,7 @@ pub fn run() {
     // GUI apps on macOS start with a bare PATH; without this, Homebrew's
     // docker, ssh and rsync are invisible when launched from Finder.
     let _ = fix_path_env::fix();
+    tools::add_docker_to_path();
     let state = boot().expect("dockerNanny could not prepare its home folder");
     let start_hidden = std::env::args().any(|a| a == "--minimized");
 
