@@ -356,7 +356,11 @@ mod wsl {
     /// Writes bytes to a path inside the distribution, owner-only, creating the folder.
     pub fn put_file(path: &str, contents: &[u8]) -> anyhow::Result<()> {
         // Beside, then renamed into place, so ssh never reads half a file.
-        sh("umask 077 && mkdir -p \"$(dirname \"$1\")\" && cat > \"$1.tmp\" && mv -f \"$1.tmp\" \"$1\"", &[path.to_string()], Some(contents))
+        sh(
+            "umask 077 && mkdir -p \"$(dirname \"$1\")\" && cat > \"$1.tmp\" && mv -f \"$1.tmp\" \"$1\"",
+            &[path.to_string()],
+            Some(contents),
+        )
     }
 }
 

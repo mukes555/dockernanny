@@ -286,7 +286,10 @@ mod tests {
     fn pinned_machines_trust_only_the_pinned_key() {
         let pinned = host_block(&machine(2222, true), "/k", &places());
         assert!(pinned.contains("StrictHostKeyChecking yes"));
-        assert!(pinned.contains("UserKnownHostsFile /h/known_hosts /h/pinned_hosts"), "ssh adds to the first file, the app writes the second");
+        assert!(
+            pinned.contains("UserKnownHostsFile /h/known_hosts /h/pinned_hosts"),
+            "ssh adds to the first file, the app writes the second"
+        );
         assert!(pinned.contains("IdentityFile \"/k\""));
         let loose = host_block(&machine(2222, false), "/k", &places());
         assert!(loose.contains("StrictHostKeyChecking accept-new"));

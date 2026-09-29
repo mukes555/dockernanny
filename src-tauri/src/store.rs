@@ -109,7 +109,11 @@ pub(crate) fn read_json<T: DeserializeOwned + Default>(path: &Path) -> T {
             let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
             let aside = path.with_extension(format!("json.corrupt-{seconds}"));
             match fs::rename(path, &aside) {
-                Ok(()) => tracing::warn!("{} could not be read ({err}); it was kept as {} and an empty one is used", path.display(), aside.display()),
+                Ok(()) => tracing::warn!(
+                    "{} could not be read ({err}); it was kept as {} and an empty one is used",
+                    path.display(),
+                    aside.display()
+                ),
                 Err(move_err) => tracing::warn!("{} could not be read ({err}) nor moved aside ({move_err})", path.display()),
             }
             T::default()
@@ -142,7 +146,8 @@ mod tests {
         let machines: Vec<Machine> = read_json(&path);
         assert!(machines.is_empty());
         assert!(!path.exists(), "the damaged file must not stay where the next save writes");
-        let kept: Vec<_> = fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        let kept: Vec<_> =
+            fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert!(kept.iter().any(|name| name.starts_with("machines.json.corrupt-")), "{kept:?}");
 
         let missing: Vec<Machine> = read_json(&dir.join("nothing.json"));
