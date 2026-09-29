@@ -109,7 +109,8 @@ pub struct Installed {
 /// What the user chose before Set up ran.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct SetupOptions {
-    /// Memory Docker may use; 0 means half of what the computer has.
+    /// Memory Docker may use, when the user chose it. 0 keeps the memory line
+    /// already in .wslconfig, and writes half of the computer's only when there is none.
     #[serde(default)]
     pub memory_gb: u32,
     /// Mark this connected Public network as Private (Windows only, with consent).

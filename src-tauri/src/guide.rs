@@ -29,10 +29,13 @@ pub struct ScriptOptions {
 
 pub fn build_script(options: &ScriptOptions) -> String {
     let powershell_bool = |on: bool| if on { "true" } else { "false" };
+    // 0: not chosen, so the machine's own memory line stays and half is written only when there is none.
+    let memory_chosen = if options.memory_gb > 0 { format!("{}GB", options.memory_gb) } else { String::new() };
     TEMPLATE
+        .replace("__LINUX_SCRIPT__", &crate::host::wsl_script::shared_body())
         .replace("__PUBKEY__", options.public_key.trim())
         .replace("__PORT__", &options.port.to_string())
-        .replace("__MEMORY__", &options.memory_gb.to_string())
+        .replace("__MEMORY_CHOSEN__", &memory_chosen)
         .replace("__DISTRO__", options.distro.trim())
         .replace("__KEEP_AWAKE__", powershell_bool(options.keep_awake))
         .replace("__MAKE_PRIVATE__", powershell_bool(options.make_private))
@@ -164,6 +167,19 @@ pub fn key_exists(key_path: &str) -> bool {
 mod tests {
     use super::*;
 
+    impl ScriptOptions {
+        fn sample() -> Self {
+            ScriptOptions {
+                public_key: "k".into(),
+                port: 2222,
+                memory_gb: 8,
+                distro: "Ubuntu".into(),
+                keep_awake: false,
+                make_private: false,
+            }
+        }
+    }
+
     #[test]
     fn script_carries_the_options_and_no_placeholders() {
         let script = build_script(&ScriptOptions {
@@ -176,11 +192,14 @@ mod tests {
         });
         assert!(script.contains("$pubkey = 'ssh-ed25519 AAAAC3 alex@studio'"));
         assert!(script.contains("$port = 2222"));
-        assert!(script.contains("$memory = '8GB'"));
+        assert!(script.contains("$memoryChosen = '8GB'"));
         assert!(script.contains("$distro = 'Ubuntu'"));
         assert!(script.contains("$keepAwake = $true"));
         assert!(script.contains("$makePrivate = $false"), "the network is left alone unless asked");
+        assert!(script.contains("set_ini()") && script.contains("echo dockernanny-linux-ok"), "the Linux part is the shared script");
         assert!(!script.contains("__"));
+        let not_chosen = build_script(&ScriptOptions { memory_gb: 0, ..ScriptOptions::sample() });
+        assert!(not_chosen.contains("$memoryChosen = ''"), "the machine's own memory line is kept");
     }
 
     #[test]

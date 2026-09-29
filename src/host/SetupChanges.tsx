@@ -3,16 +3,17 @@ import type { ReactNode } from "react";
 import type { HostOs } from "../lib/types";
 
 /** Everything Set up may change on this computer, in the order it happens.
- * It must match the steps in the backend (`host/windows_steps.rs`,
- * `host/macos.rs`, `host/linux.rs`); steps that find their part done change nothing. */
+ * It must match the steps in the backend (`host/windows_steps.rs` with
+ * `host/wsl_setup.sh`, `host/macos.rs`, `host/linux.rs`). Every step looks
+ * first and changes only what is missing, so running Set up again changes nothing. */
 const CHANGES: Record<HostOs, string[]> = {
   windows: [
-    "Turns on WSL 2 and installs the Linux distribution chosen in Settings if it is missing. Windows asks for administrator permission.",
+    "Turns on WSL 2 (or updates a WSL older than 2.0) and installs the Linux distribution chosen in Settings if it is missing. Windows asks for administrator permission.",
     "Creates a Linux user named nanny when the distribution has none, and makes it the default.",
-    "Inside the distribution, as root: installs openssh-server, rsync and Docker Engine, lets that user run Docker, sets the SSH port, and turns systemd on in /etc/wsl.conf.",
-    "Writes .wslconfig in your user folder: mirrored networking, no idle shutdown, the memory above. An existing file is kept as .wslconfig.before-dockernanny.",
+    "Inside the distribution, as root and only where missing: installs openssh-server, rsync and Docker Engine (with Docker's own script, never over an existing Docker), lets that user run Docker, and sets the SSH port. In /etc/wsl.conf it sets systemd on and the default user, keeping your other lines.",
+    "In .wslconfig in your user folder, adds only the lines it needs (mirrored networking, no idle shutdown) and keeps yours. Memory is set only when you chose it above, or when the file has no memory line yet. Before the first change your file is kept as .wslconfig.before-dockernanny.",
     "Adds two firewall rules, for the SSH port and the pairing port, on private and domain networks only. Administrator permission again.",
-    "Restarts WSL once.",
+    "Restarts WSL only when a setting needs it: the whole of WSL when .wslconfig changed (which also stops other WSL distributions, such as Docker Desktop's, for a moment), just the distribution when /etc/wsl.conf changed, otherwise nothing.",
   ],
   macos: ["Turns on Remote Login (the SSH server). macOS asks for your password.", "Creates ~/.ssh/authorized_keys if it is missing."],
   linux: [

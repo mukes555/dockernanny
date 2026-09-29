@@ -48,12 +48,16 @@ pub struct Engine {
     pub snapshot: Arc<Mutex<HostSnapshot>>,
     pub log: Arc<Mutex<Vec<String>>>,
     stop_listener: Arc<AtomicBool>,
+    keepalive: Arc<Mutex<KeepAlive>>,
 }
 
 impl Engine {
     pub fn quit(&self) {
         let _ = self.to_engine.send(ToEngine::Quit);
         self.stop_listener.store(true, Ordering::SeqCst);
+        // Stopped here as well: the thread may be deep in a slow probe while
+        // the app exits, and the keep-alive must not outlive a deliberate quit.
+        self.keepalive.lock().expect("keepalive lock").stop();
     }
 }
 
@@ -62,7 +66,14 @@ pub fn start(app: AppHandle, platform: Arc<dyn Platform>, pairing_port: u16) -> 
     let snapshot = Arc::new(Mutex::new(HostSnapshot { os: platform.os_name().to_string(), ..Default::default() }));
     let log = Arc::new(Mutex::new(Vec::new()));
     let stop_listener = Arc::new(AtomicBool::new(false));
-    let engine = Engine { to_engine, snapshot: snapshot.clone(), log: log.clone(), stop_listener: stop_listener.clone() };
+    let keepalive = Arc::new(Mutex::new(KeepAlive::new()));
+    let engine = Engine {
+        to_engine,
+        snapshot: snapshot.clone(),
+        log: log.clone(),
+        stop_listener: stop_listener.clone(),
+        keepalive: keepalive.clone(),
+    };
     std::thread::Builder::new()
         .name("dockernanny-host".into())
         .spawn(move || {
@@ -74,7 +85,7 @@ pub fn start(app: AppHandle, platform: Arc<dyn Platform>, pairing_port: u16) -> 
                 log,
                 code: Arc::new(Mutex::new(Code::new())),
                 setup_running: Arc::new(AtomicBool::new(false)),
-                keepalive: KeepAlive::new(),
+                keepalive,
                 picture: Picture::default(),
                 probed: false,
                 addresses: Vec::new(),
@@ -105,7 +116,8 @@ struct Loop {
     log: Arc<Mutex<Vec<String>>>,
     code: Arc<Mutex<Code>>,
     setup_running: Arc<AtomicBool>,
-    keepalive: KeepAlive,
+    /// Shared with `Engine`, which stops it on quit even while this thread is busy.
+    keepalive: Arc<Mutex<KeepAlive>>,
     picture: Picture,
     probed: bool,
     addresses: Vec<String>,
@@ -136,7 +148,7 @@ impl Loop {
                 Ok(ToEngine::ArmPairing) => self.arm_pairing(),
                 Ok(ToEngine::DisarmPairing) => self.disarm_pairing(),
                 Ok(ToEngine::Quit) | Err(RecvTimeoutError::Disconnected) => {
-                    self.keepalive.stop();
+                    self.keepalive.lock().expect("keepalive lock").stop();
                     self.say("sharing stopped");
                     return;
                 }
@@ -291,7 +303,8 @@ impl Loop {
             }
         }
         if self.picture.sshd_listening {
-            if let Some(line) = self.keepalive.tick(self.platform.as_ref()) {
+            let note = self.keepalive.lock().expect("keepalive lock").tick(self.platform.as_ref());
+            if let Some(line) = note {
                 self.say(&line);
             }
         }

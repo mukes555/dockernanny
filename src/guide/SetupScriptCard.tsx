@@ -20,8 +20,8 @@ export function SetupScriptCard() {
   const fetched = useStore((state) => state.scriptFetched);
   const setScriptFetched = useStore((state) => state.setScriptFetched);
   const [keyPath, setKeyPath] = useState("");
-  // The machine's memory is not known from here; 8 GB suits a 16 GB machine and is easy to change.
-  const [memory, setMemory] = useState("8");
+  // Empty: the machine keeps its own memory setting, or gets half its memory when it has none.
+  const [memory, setMemory] = useState("");
   const [distro, setDistro] = useState("Ubuntu");
   const [port, setPort] = useState("2222");
   const [keepAwake, setKeepAwake] = useState(true);
@@ -41,7 +41,7 @@ export function SetupScriptCard() {
   const request = (): ScriptRequest => ({
     key_path: keyPath.trim(),
     port: Number(port) || 2222,
-    memory_gb: Number(memory) || 8,
+    memory_gb: Number(memory) || 0,
     distro: distro.trim() || "Ubuntu",
     keep_awake: keepAwake,
     make_private: makePrivate,
@@ -96,8 +96,14 @@ export function SetupScriptCard() {
         <Field label="WSL distro" hint="Installed on the machine in step 1">
           <TextInput value={distro} onChange={(e) => setDistro(e.target.value)} disabled={serving !== null} />
         </Field>
-        <Field label="RAM for Docker (GB)" hint="About half of the machine's memory">
-          <TextInput value={memory} onChange={(e) => setMemory(e.target.value.replace(/\D/g, ""))} inputMode="numeric" disabled={serving !== null} />
+        <Field label="RAM for Docker (GB)" hint="Empty keeps the machine's own setting, or half its memory when it has none">
+          <TextInput
+            value={memory}
+            onChange={(e) => setMemory(e.target.value.replace(/\D/g, ""))}
+            inputMode="numeric"
+            placeholder="half"
+            disabled={serving !== null}
+          />
         </Field>
         <Field label="SSH port" hint="Away from a Windows SSH server on 22">
           <TextInput value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" disabled={serving !== null} />

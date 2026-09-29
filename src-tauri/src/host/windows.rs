@@ -11,7 +11,7 @@ use super::platform::{
     host_key_from_pub, parse_ipconfig, parse_rule, row, run, FirewallRules, Installed, NetworkProfile, Outcome, Output, Picture, Platform,
     Row, Rule, Say, SetupOptions, State, CHECK_LIMIT, SETUP_LIMIT,
 };
-use super::{windows_steps, MIN_WINDOWS_BUILD};
+use super::{windows_steps, wsl_script, MIN_WINDOWS_BUILD};
 
 /// PowerShell and wsl.exe are the dearest things this app starts, and the
 /// sharing page probes every ten seconds. What rarely changes is kept this
@@ -103,11 +103,15 @@ impl Windows {
             if build == 0 { "version unknown".into() } else { format!("build {build}") },
         ));
 
-        let wsl = self.wsl(&["--version"]);
-        let version =
-            wsl.stdout.lines().find(|l| l.starts_with("WSL version")).and_then(|l| l.split(':').nth(1)).map(|v| v.trim().to_string());
-        let wsl_ok = version.as_deref().map(|v| !v.starts_with("1.") && !v.starts_with("0.")).unwrap_or(false);
-        steady.rows.push(row("WSL 2", wsl_ok, version.unwrap_or_else(|| "not installed (Set up installs it)".into())));
+        // Read by its number, not its label: `wsl --version` is translated.
+        let version = wsl_script::wsl_version(&self.wsl(&["--version"]).stdout);
+        let wsl_ok = version.as_deref().is_some_and(wsl_script::is_wsl_two);
+        let wsl_detail = match &version {
+            Some(version) if wsl_ok => version.clone(),
+            Some(version) => format!("{version} is older than 2.0 (Set up updates it)"),
+            None => "not installed (Set up installs it)".into(),
+        };
+        steady.rows.push(row("WSL 2", wsl_ok, wsl_detail));
         if !wsl_ok {
             return steady;
         }
@@ -209,7 +213,7 @@ impl Windows {
         rules.ssh.opens(self.ssh_port) && rules.pairing.opens(pairing_port)
     }
 
-    fn total_memory_gb(&self) -> u32 {
+    pub(super) fn total_memory_gb(&self) -> u32 {
         let bytes: u64 = self.powershell("(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory").text().parse().unwrap_or(0);
         (bytes / (1024 * 1024 * 1024)) as u32
     }
@@ -243,11 +247,15 @@ impl Platform for Windows {
         }
         let port = self.ssh_port;
 
-        let docker = self.in_distro("docker version --format '{{.Server.Version}}' 2>/dev/null");
-        let docker_ok = docker.ok && !docker.text().is_empty();
-        picture.rows.push(row("Docker Engine", docker_ok, if docker_ok { docker.text() } else { "not running or not installed".into() }));
+        // One wsl.exe start for both answers: the Docker version on the first
+        // line, then the listening sockets (-H: without the header line).
+        let answer = self.in_distro("docker version --format '{{.Server.Version}}' 2>/dev/null | head -1; echo; ss -Hltn 2>/dev/null");
+        let mut lines = answer.stdout.lines();
+        let docker_version = lines.next().unwrap_or_default().trim().to_string();
+        let docker_ok = !docker_version.is_empty();
+        picture.rows.push(row("Docker Engine", docker_ok, if docker_ok { docker_version } else { "not running or not installed".into() }));
 
-        let listening = self.in_distro("ss -ltn 2>/dev/null").stdout.contains(&format!(":{port} "));
+        let listening = lines.any(|line| line.contains(&format!(":{port} ")));
         picture.sshd_listening = listening;
         picture.rows.push(row(
             "SSH server",
@@ -278,7 +286,10 @@ impl Platform for Windows {
         }
 
         let wslconfig = std::fs::read_to_string(self.user_profile().join(".wslconfig")).unwrap_or_default();
-        let keeps_running = wslconfig.contains("instanceIdleTimeout=-1") && wslconfig.contains("networkingMode=mirrored");
+        let setting = |section: &str, key: &str| wsl_script::ini_value(&wslconfig, section, key).unwrap_or_default().to_ascii_lowercase();
+        let keeps_running = setting("general", "instanceIdleTimeout") == "-1"
+            && setting("wsl2", "vmIdleTimeout") == "-1"
+            && setting("wsl2", "networkingMode") == "mirrored";
         picture.rows.push(Row {
             name: "WSL stays up",
             state: if keeps_running { State::Ok } else { State::Unknown },
