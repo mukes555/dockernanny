@@ -28,20 +28,20 @@ pub struct Connected {
     pub since_ms: u64,
 }
 
+/// Read and written like the app's other lists (`store`): a damaged file is
+/// kept aside instead of being overwritten by the next pairing.
 pub fn load(home: &Path) -> Vec<PairedComputer> {
-    let text = std::fs::read_to_string(home.join(FILE)).unwrap_or_default();
-    serde_json::from_str(&text).unwrap_or_default()
+    crate::store::read_json(&home.join(FILE))
 }
 
 /// Adds or replaces the entry for that address, so pairing again from the
 /// same computer (a new key, a new name) keeps one line.
-pub fn remember(home: &Path, computer: PairedComputer) -> std::io::Result<Vec<PairedComputer>> {
+pub fn remember(home: &Path, computer: PairedComputer) -> anyhow::Result<Vec<PairedComputer>> {
     let mut all = load(home);
     all.retain(|c| c.address != computer.address);
     all.push(computer);
-    let text = serde_json::to_string_pretty(&all).unwrap_or_else(|_| "[]".into());
     std::fs::create_dir_all(home)?;
-    std::fs::write(home.join(FILE), text)?;
+    crate::store::write_json(&home.join(FILE), &all)?;
     Ok(all)
 }
 
