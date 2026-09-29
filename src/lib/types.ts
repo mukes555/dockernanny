@@ -373,7 +373,7 @@ export interface Settings {
   wsl_distro: string;
   /** Windows only: the sshd port inside WSL when shared. */
   wsl_ssh_port: number;
-  /** Look for a newer release at start and twice a day. */
+  /** Look for a newer release at start and every hour. */
   check_updates: boolean;
 }
 

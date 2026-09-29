@@ -9,7 +9,13 @@ use crate::diagnostics::{self, Facts, Replacement};
 use crate::doctor::DoctorRow;
 use crate::{computer, machine, pairing, store, tools, AppState};
 
-type CmdResult<T> = Result<T, String>;
+use super::CmdResult;
+
+/// The folder where everything the app keeps lives.
+#[tauri::command]
+pub fn app_home(state: State<'_, AppState>) -> String {
+    state.store.home().display().to_string()
+}
 
 /// The name this computer shows to a machine when pairing, and in its own rail.
 #[tauri::command]

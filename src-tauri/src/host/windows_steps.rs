@@ -21,23 +21,36 @@ struct Found {
     restart: Restart,
 }
 
-type Step = fn(&Windows, &SetupOptions, &mut Found, &mut Say) -> Outcome;
+/// One step on a computer; the tests run steps on `()` instead of Windows.
+type Step<Computer> = fn(&Computer, &SetupOptions, &mut Found, &mut Say) -> Outcome;
+
+const STEPS: [(&str, Step<Windows>); 7] = [
+    ("Windows version", windows_version),
+    ("WSL 2", wsl_present),
+    ("Linux distribution", distro_present),
+    ("Linux user", linux_user),
+    ("Inside WSL: packages, Docker, sshd, settings", inside_distro),
+    ("Firewall and power (administrator)", admin_batch),
+    ("Restart WSL if a setting needs it", restart_wsl),
+];
 
 pub fn run_all(win: &Windows, options: &SetupOptions, say: &mut Say) -> Vec<(&'static str, Outcome)> {
-    let steps: [(&'static str, Step); 7] = [
-        ("Windows version", windows_version),
-        ("WSL 2", wsl_present),
-        ("Linux distribution", distro_present),
-        ("Linux user", linux_user),
-        ("Inside WSL: packages, Docker, sshd, settings", inside_distro),
-        ("Firewall and power (administrator)", admin_batch),
-        ("Restart WSL if a setting needs it", restart_wsl),
-    ];
+    run_in_order(&STEPS, win, options, say)
+}
+
+/// Each step in turn, saying how it went. The first that fails or needs
+/// the user ends the run: the steps after it build on it.
+fn run_in_order<Computer>(
+    steps: &[(&'static str, Step<Computer>)],
+    computer: &Computer,
+    options: &SetupOptions,
+    say: &mut Say,
+) -> Vec<(&'static str, Outcome)> {
     let mut found = Found::default();
     let mut results = Vec::new();
-    for (name, step) in steps {
+    for &(name, step) in steps {
         say(&format!("==> {name}"));
-        let outcome = step(win, options, &mut found, say);
+        let outcome = step(computer, options, &mut found, say);
         match &outcome {
             Outcome::Done(text) => say(&format!("    already done: {text}")),
             Outcome::Changed(text) => say(&format!("    done: {text}")),
@@ -337,4 +350,85 @@ fn restart_wsl(win: &Windows, _options: &SetupOptions, found: &mut Found, say: &
         std::thread::sleep(std::time::Duration::from_secs(3));
     }
     Outcome::Failed("unreachable".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    fn already_there(_: &(), _: &SetupOptions, _: &mut Found, _: &mut Say) -> Outcome {
+        Outcome::Done("there".into())
+    }
+    fn changes_wsl_conf(_: &(), _: &SetupOptions, found: &mut Found, _: &mut Say) -> Outcome {
+        found.restart = found.restart.max(Restart::Distro);
+        Outcome::Changed("wsl.conf".into())
+    }
+    fn changes_wslconfig(_: &(), _: &SetupOptions, found: &mut Found, _: &mut Say) -> Outcome {
+        found.restart = found.restart.max(Restart::Wsl);
+        Outcome::Changed(".wslconfig".into())
+    }
+    fn reads_the_restart(_: &(), _: &SetupOptions, found: &mut Found, _: &mut Say) -> Outcome {
+        Outcome::Done(format!("{:?}", found.restart))
+    }
+    fn needs_a_reboot(_: &(), _: &SetupOptions, _: &mut Found, _: &mut Say) -> Outcome {
+        Outcome::NeedsUser("reboot".into())
+    }
+    fn fails(_: &(), _: &SetupOptions, _: &mut Found, _: &mut Say) -> Outcome {
+        Outcome::Failed("no network".into())
+    }
+    fn must_not_run(_: &(), _: &SetupOptions, _: &mut Found, _: &mut Say) -> Outcome {
+        panic!("a step after one that stopped the run");
+    }
+
+    fn run(steps: &[(&'static str, Step<()>)]) -> (Vec<&'static str>, Vec<String>) {
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let kept = lines.clone();
+        let mut say = move |line: &str| kept.lock().unwrap().push(line.to_string());
+        let results = run_in_order(steps, &(), &SetupOptions::default(), &mut say);
+        let names = results.iter().map(|(name, _)| *name).collect();
+        let said = lines.lock().unwrap().clone();
+        (names, said)
+    }
+
+    #[test]
+    fn each_step_says_how_it_went_and_later_steps_see_the_biggest_restart() {
+        let (names, said) = run(&[("a", already_there), ("b", changes_wslconfig), ("c", changes_wsl_conf), ("d", reads_the_restart)]);
+        assert_eq!(names, vec!["a", "b", "c", "d"]);
+        assert_eq!(
+            said,
+            vec![
+                "==> a",
+                "    already done: there",
+                "==> b",
+                "    done: .wslconfig",
+                "==> c",
+                "    done: wsl.conf",
+                "==> d",
+                "    already done: Wsl"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_step_that_needs_the_user_or_fails_ends_the_run() {
+        let (names, said) = run(&[("a", already_there), ("b", needs_a_reboot), ("c", must_not_run)]);
+        assert_eq!(names, vec!["a", "b"]);
+        assert_eq!(said.last().unwrap(), "    ACTION NEEDED: reboot");
+
+        let (names, said) = run(&[("a", fails), ("b", must_not_run)]);
+        assert_eq!(names, vec!["a"]);
+        assert_eq!(said.last().unwrap(), "    FAILED: no network");
+    }
+
+    #[test]
+    fn the_administrator_step_fails_when_any_of_its_commands_did() {
+        let mut report = Report::default();
+        report.record("firewall rule dockerNanny SSH on 2222", Output { ok: true, ..Output::default() });
+        assert!(!report.failed);
+        report.record("apply power scheme", Output { ok: false, stderr: "Access denied.\n".into(), ..Output::default() });
+        assert!(report.failed);
+        assert_eq!(report.lines, vec!["firewall rule dockerNanny SSH on 2222: ok ", "apply power scheme: failed Access denied."]);
+    }
 }

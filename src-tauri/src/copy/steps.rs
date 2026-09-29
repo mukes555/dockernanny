@@ -3,7 +3,8 @@
 //! planned list and the steps as they run are the same strings.
 
 use super::discover::Download;
-use super::{CopyRequest, Inventory, Sides};
+use super::look::Inventory;
+use super::{CopyRequest, Sides};
 
 pub mod names {
     pub fn look() -> String {
@@ -142,6 +143,7 @@ mod tests {
         let inventory = Inventory {
             volumes: vec![NamedVolume { key: "pgdata".into(), name: "shop-api_pgdata".into(), size: "412MB".into(), external: false }],
             images: vec!["shop-api-worker:local".into()],
+            sizes: Default::default(),
         };
         let downloads = [Download { image: "postgres:16".into(), platform: None }];
         let both = planned(&sides(), &request(true, true, true, false), Some(&inventory), &downloads, true, true);
