@@ -44,7 +44,7 @@ tauri-plugin-updater = "2"
 reqwest = { version = "0.13", default-features = false }
 if-addrs = "0.15"
 sha2 = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 
 [dev-dependencies]
 # A test builds its own HTTP client, which needs the crypto provider the updater installs for its own.
