@@ -55,16 +55,6 @@ impl Machine {
     pub fn address(&self) -> String {
         format!("{}@{}:{}", self.user, self.host, self.port)
     }
-
-    /// A record that points back at this computer: a test leftover, or a
-    /// stack someone runs "remotely" on their own Docker. Not a machine.
-    pub fn points_at_this_computer(&self, own_hostname: &str) -> bool {
-        let host = self.host.trim().to_ascii_lowercase();
-        let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1" | "0.0.0.0");
-        let own_lower = own_hostname.to_ascii_lowercase();
-        let own = !own_lower.is_empty() && (host == own_lower || host == format!("{own_lower}.local"));
-        loopback || own
-    }
 }
 
 /// What the card and the page show: online plus everything the probe found.
@@ -244,25 +234,6 @@ pub fn publish(app: &AppHandle, machine_id: String, stats: MachineStats) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn loopback_and_own_names_point_at_this_computer() {
-        let machine = |host: &str| Machine {
-            id: "x".into(),
-            name: "x".into(),
-            user: "alex".into(),
-            host: host.into(),
-            port: 22,
-            key_path: String::new(),
-            docker_context: false,
-            pinned: false,
-        };
-        assert!(machine("localhost").points_at_this_computer("studio"));
-        assert!(machine("127.0.0.1").points_at_this_computer(""));
-        assert!(machine("Studio.local").points_at_this_computer("studio"));
-        assert!(!machine("192.0.2.10").points_at_this_computer("studio"));
-        assert!(!machine("workshop").points_at_this_computer("studio"));
-    }
 
     #[test]
     fn stats_flatten_the_probe_on_the_wire() {

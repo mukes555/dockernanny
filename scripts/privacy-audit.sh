@@ -25,7 +25,11 @@ if [ ! -s "$denylist" ]; then
   exit 2
 fi
 # Two pattern files: terms matched anywhere, words matched whole and exact.
-work="$(mktemp -d)"
+# In the repo's own .tmp (gitignored), not the shared temp folder: they
+# hold the private terms.
+work="$repo_dir/.tmp/privacy-audit-$$"
+mkdir -p "$work"
+chmod 700 "$work"
 trap 'rm -rf "$work"' EXIT
 grep -v -e '^\s*#' -e '^\s*$' -e '^word:' "$denylist" > "$work/terms" || true
 sed -n 's/^word://p' "$denylist" > "$work/words"

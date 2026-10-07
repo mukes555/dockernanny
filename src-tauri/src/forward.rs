@@ -172,8 +172,18 @@ pub fn spawn_bridge(
     report: impl Fn(ForwardState) + Send + Sync + 'static,
 ) -> watch::Sender<Vec<ForwardPort>> {
     let (wanted, watching) = watch::channel(ports);
-    tauri::async_runtime::spawn(run(ssh, alias, name, watching, report));
+    let command = SshCommand { program: "ssh".into(), config: ssh.config_path(), sockets: ssh.forward_dir() };
+    tauri::async_runtime::spawn(run(command, alias, name, watching, report));
     wanted
+}
+
+/// How a bridge runs ssh: the program, the app's ssh config, and the folder
+/// its control sockets go in. The app runs the real ssh; the tests put a
+/// stand-in in its place.
+struct SshCommand {
+    program: String,
+    config: String,
+    sockets: String,
 }
 
 /// How one ssh process ended.
@@ -186,7 +196,7 @@ enum Ended {
     Died,
 }
 
-async fn run(ssh: Ssh, alias: String, name: String, mut wanted: watch::Receiver<Vec<ForwardPort>>, report: impl Fn(ForwardState)) {
+async fn run(ssh: SshCommand, alias: String, name: String, mut wanted: watch::Receiver<Vec<ForwardPort>>, report: impl Fn(ForwardState)) {
     let mut attempts: u32 = 0;
     loop {
         let ports = wanted.borrow_and_update().clone();
@@ -199,7 +209,7 @@ async fn run(ssh: Ssh, alias: String, name: String, mut wanted: watch::Receiver<
             continue;
         }
         attempts += 1;
-        let socket = format!("{}/{name}-{}", ssh.forward_dir(), NEXT_SOCKET.fetch_add(1, Ordering::Relaxed));
+        let socket = format!("{}/{name}-{}", ssh.sockets, NEXT_SOCKET.fetch_add(1, Ordering::Relaxed));
         let tunnel = Tunnel { ssh: &ssh, alias: &alias, socket };
         let ended = carry(&tunnel, ports, &mut wanted, &mut attempts, &report).await;
         let closed = match ended {
@@ -298,7 +308,7 @@ async fn wait_before_retry(attempts: u32, wanted: &mut watch::Receiver<Vec<Forwa
 
 /// One ssh process of a bridge and the control requests sent to it.
 struct Tunnel<'a> {
-    ssh: &'a Ssh,
+    ssh: &'a SshCommand,
     alias: &'a str,
     /// Its own control socket, as ssh sees the path.
     socket: String,
@@ -306,8 +316,8 @@ struct Tunnel<'a> {
 
 impl Tunnel<'_> {
     fn spawn(&self, ports: &[ForwardPort]) -> anyhow::Result<(Child, tools::Tracked)> {
-        let mut cmd = tools::unix("ssh");
-        cmd.arg("-F").arg(self.ssh.config_path());
+        let mut cmd = tools::unix(&self.ssh.program);
+        cmd.arg("-F").arg(&self.ssh.config);
         // -N: no remote command. -M/-S: be a control master on our own socket,
         // which the control requests below use. ExitOnForwardFailure turns a
         // taken port into a clean exit instead of a half-working session.
@@ -356,8 +366,8 @@ impl Tunnel<'_> {
     /// One control request (`check`, `forward`, `cancel`, `exit`) to this
     /// ssh's master; an error when it refuses or does not answer.
     async fn control(&self, request: &str, port: Option<&ForwardPort>) -> anyhow::Result<()> {
-        let mut cmd = tools::unix("ssh");
-        cmd.arg("-F").arg(self.ssh.config_path()).arg("-S").arg(&self.socket).args(["-O", request]);
+        let mut cmd = tools::unix(&self.ssh.program);
+        cmd.arg("-F").arg(&self.ssh.config).arg("-S").arg(&self.socket).args(["-O", request]);
         if let Some(port) = port {
             cmd.arg("-L").arg(local_forward(port));
         }
@@ -418,86 +428,4 @@ fn publish(app: &AppHandle, stack_id: &str, state: ForwardState) {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::*;
-    use crate::compose::Port;
-
-    #[test]
-    fn a_held_port_is_busy_and_a_free_one_is_not() {
-        let holder = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let port = holder.local_addr().unwrap().port();
-        assert_eq!(busy_ports(&[port]), vec![port]);
-        // Port 0 always binds (the OS picks a free one), so this checks the
-        // free branch without racing other tests for a just-released port.
-        assert!(busy_ports(&[0]).is_empty());
-    }
-
-    #[test]
-    fn only_in_use_and_not_allowed_mean_taken() {
-        let failed = |kind: ErrorKind| Err(std::io::Error::from(kind));
-        assert!(!free(failed(ErrorKind::AddrInUse)));
-        assert!(!free(failed(ErrorKind::PermissionDenied)));
-        assert!(free(failed(ErrorKind::AddrNotAvailable)), "no IPv6 on this computer says nothing about the port");
-    }
-
-    #[test]
-    fn forwards_bind_localhost_and_reach_the_machine_s_loopback() {
-        assert_eq!(local_forward(&ForwardPort { local: 6432, remote: 5432 }), "localhost:6432:127.0.0.1:5432");
-    }
-
-    #[test]
-    fn desired_ports_follow_running_tcp_services_and_overrides() {
-        let mut stack = Stack {
-            id: "s".into(),
-            name: "s".into(),
-            machine_id: "m".into(),
-            project_dir: "/p".into(),
-            compose_rel: "docker-compose.yml".into(),
-            excludes: vec![],
-            forward_ports: true,
-            live_sync: false,
-            port_overrides: HashMap::from([(5432, 6432)]),
-        };
-        let service = |state: &str, ports: Vec<(u16, &str)>| ServiceState {
-            service: "x".into(),
-            state: state.into(),
-            ports: ports.into_iter().map(|(p, proto)| Port { target: p, published: p, protocol: proto.into() }).collect(),
-            ..ServiceState::default()
-        };
-        let services = vec![service("running", vec![(3000, "tcp"), (5432, "tcp"), (9099, "udp")]), service("exited", vec![(4000, "tcp")])];
-        let bridged = vec![ForwardPort { local: 3000, remote: 3000 }, ForwardPort { local: 6432, remote: 5432 }];
-        assert_eq!(desired_ports(&stack, &services, &[]), bridged);
-        stack.forward_ports = false;
-        assert!(desired_ports(&stack, &services, &bridged).is_empty());
-    }
-
-    #[test]
-    fn a_restarting_service_keeps_its_bridge() {
-        let stack = Stack {
-            id: "s".into(),
-            name: "s".into(),
-            machine_id: "m".into(),
-            project_dir: "/p".into(),
-            compose_rel: "compose.yaml".into(),
-            excludes: vec![],
-            forward_ports: true,
-            live_sync: false,
-            port_overrides: HashMap::new(),
-        };
-        let service = |name: &str, state: &str, ports: Vec<u16>| ServiceState {
-            service: name.into(),
-            state: state.into(),
-            ports: ports.into_iter().map(|p| Port { target: p, published: p, protocol: "tcp".into() }).collect(),
-            ..ServiceState::default()
-        };
-        let bridged = vec![ForwardPort { local: 3000, remote: 3000 }, ForwardPort { local: 5432, remote: 5432 }];
-        // The database restarts: it publishes nothing for a moment, and its port stays bridged.
-        let mid_restart = vec![service("api", "running", vec![3000]), service("db", "restarting", vec![])];
-        assert_eq!(desired_ports(&stack, &mid_restart, &bridged), bridged);
-        // Stopped for real: the bridge follows.
-        let stopped = vec![service("api", "running", vec![3000]), service("db", "exited", vec![])];
-        assert_eq!(desired_ports(&stack, &stopped, &bridged), vec![ForwardPort { local: 3000, remote: 3000 }]);
-    }
-}
+mod tests;

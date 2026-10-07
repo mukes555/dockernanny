@@ -43,7 +43,8 @@ async fn main() -> anyhow::Result<()> {
     let (dir, compose_rel) = compose::locate(&project_dir)?;
     let stack = Stack {
         id: "example1".into(),
-        name: "dn-example-stack".into(),
+        // smoke-*, like everything scripts/smoke-local.sh creates, so its cleanup finds it.
+        name: "smoke-stack".into(),
         machine_id: machine.id.clone(),
         project_dir: dir.display().to_string(),
         compose_rel,

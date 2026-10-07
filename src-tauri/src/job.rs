@@ -112,10 +112,6 @@ impl JobHandle {
         let _ = self.cancel.send(true);
     }
 
-    pub fn is_cancelled(&self) -> bool {
-        *self.cancel.borrow()
-    }
-
     /// The same job, so a registry entry is removed only by its own job.
     pub fn same(&self, other: &JobHandle) -> bool {
         self.cancel.same_channel(&other.cancel)

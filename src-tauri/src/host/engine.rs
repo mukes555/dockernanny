@@ -4,6 +4,7 @@
 //! std thread; the page only shows the snapshot it publishes.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -17,7 +18,6 @@ use super::pairing_server::{self, Code, Event};
 use super::platform::{Outcome, Picture, Platform, SetupOptions};
 use super::{HostSnapshot, LogLine, Notice, PairingState, LOG_EVENT, SNAPSHOT_EVENT};
 use crate::stack::now_ms;
-use crate::store;
 
 const PROBE_EVERY: Duration = Duration::from_secs(10);
 /// While nobody can see the window: on Windows a probe starts wsl.exe and
@@ -65,60 +65,60 @@ impl Engine {
     }
 }
 
-pub fn start(app: AppHandle, platform: Arc<dyn Platform>, pairing_port: u16) -> Engine {
+/// What the engine tells the page, and whether anyone can see it. The app
+/// is one; the tests record what they are told.
+pub trait Page: Send + Sync {
+    fn in_view(&self) -> bool;
+    fn log_line(&self, line: &str);
+    fn show(&self, snapshot: &HostSnapshot);
+}
+
+impl Page for AppHandle {
+    fn in_view(&self) -> bool {
+        crate::tray::window_in_view(self)
+    }
+
+    fn log_line(&self, line: &str) {
+        let _ = self.emit(LOG_EVENT, LogLine { line: line.to_string() });
+    }
+
+    fn show(&self, snapshot: &HostSnapshot) {
+        let _ = self.emit(SNAPSHOT_EVENT, snapshot.clone());
+    }
+}
+
+/// `home` is the app folder: paired.json and host.log live there.
+pub fn start(page: Arc<dyn Page>, platform: Arc<dyn Platform>, pairing_port: u16, home: PathBuf) -> Engine {
     let (to_engine, requests) = channel::<ToEngine>();
-    let snapshot = Arc::new(Mutex::new(HostSnapshot::default()));
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let stop_listener = Arc::new(AtomicBool::new(false));
-    let keepalive = Arc::new(Mutex::new(KeepAlive::new()));
+    let mut state = Loop::new(page, platform, pairing_port, home);
     let engine = Engine {
         to_engine,
-        snapshot: snapshot.clone(),
-        log: log.clone(),
-        stop_listener: stop_listener.clone(),
-        keepalive: keepalive.clone(),
+        snapshot: state.snapshot.clone(),
+        log: state.log.clone(),
+        stop_listener: state.stop_listener.clone(),
+        keepalive: state.keepalive.clone(),
     };
-    std::thread::Builder::new()
-        .name("dockernanny-host".into())
-        .spawn(move || {
-            let mut state = Loop {
-                app,
-                platform,
-                pairing_port,
-                snapshot,
-                log,
-                code: Arc::new(Mutex::new(Code::new())),
-                setup_running: Arc::new(AtomicBool::new(false)),
-                keepalive,
-                picture: Picture::default(),
-                probed: false,
-                addresses: Vec::new(),
-                listening: false,
-                bind_failure: None,
-                last_missing: None,
-                stop_listener,
-                pairing_events: None,
-                pairing_note: None,
-                notice: None,
-                was_armed: false,
-                last_probe: None,
-                published: None,
-                paired: paired::load(&store::home_dir()),
-                host_fingerprint: None,
-                connected: Vec::new(),
-                first_seen: HashMap::new(),
-                last_peers: None,
-            };
-            state.run(requests);
-        })
-        .expect("spawn the host thread");
+    std::thread::Builder::new().name("dockernanny-host".into()).spawn(move || state.run(requests)).expect("spawn the host thread");
     engine
 }
 
+/// One append-only file, `host.log` in the app folder, for what the sharing
+/// role did while nobody was looking; kept to a few megabytes.
+fn log_to_file(home: &Path, message: &str) {
+    use std::io::Write;
+    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let path = home.join("host.log");
+    crate::store::keep_log_small(&path);
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{seconds} {message}");
+    }
+}
+
 struct Loop {
-    app: AppHandle,
+    page: Arc<dyn Page>,
     platform: Arc<dyn Platform>,
     pairing_port: u16,
+    home: PathBuf,
     snapshot: Arc<Mutex<HostSnapshot>>,
     log: Arc<Mutex<Vec<String>>>,
     code: Arc<Mutex<Code>>,
@@ -151,6 +151,39 @@ struct Loop {
 }
 
 impl Loop {
+    fn new(page: Arc<dyn Page>, platform: Arc<dyn Platform>, pairing_port: u16, home: PathBuf) -> Self {
+        let paired = paired::load(&home);
+        Self {
+            page,
+            platform,
+            pairing_port,
+            home,
+            snapshot: Arc::new(Mutex::new(HostSnapshot::default())),
+            log: Arc::new(Mutex::new(Vec::new())),
+            code: Arc::new(Mutex::new(Code::new())),
+            setup_running: Arc::new(AtomicBool::new(false)),
+            keepalive: Arc::new(Mutex::new(KeepAlive::new())),
+            picture: Picture::default(),
+            probed: false,
+            addresses: Vec::new(),
+            listening: false,
+            bind_failure: None,
+            last_missing: None,
+            stop_listener: Arc::new(AtomicBool::new(false)),
+            pairing_events: None,
+            pairing_note: None,
+            notice: None,
+            was_armed: false,
+            last_probe: None,
+            published: None,
+            paired,
+            host_fingerprint: None,
+            connected: Vec::new(),
+            first_seen: HashMap::new(),
+            last_peers: None,
+        }
+    }
+
     fn run(&mut self, requests: Receiver<ToEngine>) {
         self.say(&format!("sharing started on {}", self.platform.os_name()));
         self.every_second();
@@ -173,7 +206,7 @@ impl Loop {
     }
 
     fn say(&self, line: &str) {
-        super::log_to_file(line);
+        log_to_file(&self.home, line);
         {
             let mut log = self.log.lock().expect("host log lock");
             log.push(line.to_string());
@@ -182,7 +215,7 @@ impl Loop {
                 log.drain(..excess);
             }
         }
-        let _ = self.app.emit(LOG_EVENT, LogLine { line: line.to_string() });
+        self.page.log_line(line);
     }
 
     fn probe(&mut self) {
@@ -198,7 +231,7 @@ impl Loop {
         let changed = self.last_missing.as_deref() != Some(missing.as_str());
         let slow = started.elapsed() > SLOW_PROBE;
         if changed || slow {
-            super::log_to_file(&format!("probe took {:?}; missing: {missing}", started.elapsed()));
+            log_to_file(&self.home, &format!("probe took {:?}; missing: {missing}", started.elapsed()));
         }
         self.last_missing = Some(missing);
     }
@@ -242,9 +275,9 @@ impl Loop {
                     let key_note = format!("Its key: {fingerprint}, which the other computer shows too.");
                     let computer =
                         PairedComputer { name: name.clone(), address: from.clone(), key_type, paired_at_ms: now_ms(), mark, fingerprint };
-                    match paired::remember(&store::home_dir(), computer) {
+                    match paired::remember(&self.home, computer) {
                         Ok(all) => self.paired = all,
-                        Err(err) => super::log_to_file(&format!("paired.json could not be written: {err}")),
+                        Err(err) => log_to_file(&self.home, &format!("paired.json could not be written: {err}")),
                     }
                     format!(
                         "Paired with {} ({from}). It can use this computer now. {key_note}",
@@ -304,9 +337,9 @@ impl Loop {
                 return;
             }
         }
-        match paired::forget(&store::home_dir(), address) {
+        match paired::forget(&self.home, address) {
             Ok(all) => self.paired = all,
-            Err(err) => super::log_to_file(&format!("paired.json could not be written: {err}")),
+            Err(err) => log_to_file(&self.home, &format!("paired.json could not be written: {err}")),
         }
         let text = if has_mark {
             format!("{name} can no longer log in to this computer; its key is gone.")
@@ -327,14 +360,15 @@ impl Loop {
         self.notice = None;
         let platform = self.platform.clone();
         let flag = self.setup_running.clone();
-        let app = self.app.clone();
+        let page = self.page.clone();
+        let home = self.home.clone();
         let log = self.log.clone();
         let snapshot = self.snapshot.clone();
         std::thread::spawn(move || {
             let mut say = move |line: &str| {
-                super::log_to_file(line);
+                log_to_file(&home, line);
                 log.lock().expect("host log lock").push(line.to_string());
-                let _ = app.emit(LOG_EVENT, LogLine { line: line.to_string() });
+                page.log_line(line);
             };
             let results = platform.setup(&options, &mut say);
             let notice = results.iter().find_map(|(name, outcome)| match outcome {
@@ -351,7 +385,7 @@ impl Loop {
 
     fn every_second(&mut self) {
         let setup_running = self.setup_running.load(Ordering::SeqCst);
-        let in_view = crate::tray::window_in_view(&self.app);
+        let in_view = self.page.in_view();
         let probe_every = if in_view { PROBE_EVERY } else { PROBE_EVERY_HIDDEN };
         let probe_due = self.last_probe.map(|t| t.elapsed() >= probe_every).unwrap_or(true);
         if probe_due && !setup_running {
@@ -433,7 +467,10 @@ impl Loop {
             return;
         }
         *self.snapshot.lock().expect("host snapshot lock") = fresh.clone();
-        let _ = self.app.emit(SNAPSHOT_EVENT, fresh.clone());
+        self.page.show(&fresh);
         self.published = Some(fresh);
     }
 }
+
+#[cfg(test)]
+mod tests;

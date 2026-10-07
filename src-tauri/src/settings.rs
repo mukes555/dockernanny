@@ -45,7 +45,7 @@ pub struct Settings {
     /// Windows only: where sshd inside WSL listens when this computer is
     /// shared, away from a Windows OpenSSH server on 22.
     pub wsl_ssh_port: u16,
-    /// Ask the GitHub release for a newer version at start and twice a day.
+    /// Ask the GitHub release for a newer version at start and every hour.
     /// Only the version file is fetched; installing always waits for the user.
     pub check_updates: bool,
 }

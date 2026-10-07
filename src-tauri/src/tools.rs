@@ -127,6 +127,7 @@ const DEFAULT_MOUNT_ROOT: &str = "/mnt/";
 
 /// `C:\a\b` becomes `<root>c/a/b` (`/mnt/c/a/b` by default); a path without
 /// a drive letter only gets forward slashes. Pure, so it is tested on every OS.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn wsl_path(mount_root: &str, windows: &str) -> String {
     let bytes = windows.as_bytes();
     let has_drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
@@ -170,6 +171,7 @@ pub fn home(app_home: &Path) -> String {
 /// The tools' folder name inside WSL. A second instance or a test run with
 /// its own `DOCKERNANNY_HOME` gets its own folder there too, named after its
 /// app folder, so it never overwrites the app's ssh config or sockets.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn folder_in_wsl(custom_home: bool, app_home: &Path) -> String {
     if !custom_home {
         return ".dockernanny".into();

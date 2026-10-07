@@ -1,39 +1,40 @@
 //! Copying a stack between two endpoints, in either direction: the project
 //! folder (config) and the data (named volumes, anonymous volumes, folders a
-//! container wrote). `endpoint` says where things are, `folder` mirrors,
-//! `transfer` streams, `discover` finds the data, `check` looks at the
-//! destination before and after. `run` is the whole copy without the window,
-//! so the headless example and the app share it. Nothing on the source is
-//! ever deleted; a source stopped for a consistent copy is started again.
+//! container wrote). `endpoint` says where things are, `look` sees both ends,
+//! `carry` moves things (with `folder` mirroring and `transfer` streaming),
+//! `discover` finds the data, `check` looks at the destination before and
+//! after, `report` tells the window. `run` is the whole copy without the
+//! window, so the headless example and the app share it. Nothing on the
+//! source is ever deleted; a source stopped for a consistent copy is started
+//! again.
 
+mod carry;
 pub mod check;
 pub mod discover;
 pub mod endpoint;
 pub mod folder;
 pub mod local;
+mod look;
 pub mod progress;
 pub mod pull;
+mod report;
 pub mod steps;
 pub mod transfer;
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
-use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use check::Summary;
-use discover::{ContainerData, NamedVolume};
+use discover::ContainerData;
 use endpoint::Site;
 use folder::Mirrored;
 use local::LocalProject;
-use progress::Progress;
+pub use report::{Report, Sink};
 use steps::names;
 
 use crate::compose;
-use crate::job::{LastError, Line, Stream};
 use crate::machine::first_line;
 use crate::ssh::Ssh;
 use crate::stack::Phase;
@@ -126,137 +127,55 @@ pub struct CopyPlan {
     pub warnings: Vec<String>,
 }
 
-/// Where a line of progress goes; the app makes one per call, the example
-/// prints them.
-pub type Sink = Box<dyn FnMut(Line) + Send + 'static>;
-
-/// The three ways a copy reports: raw lines (the card's output), the card's
-/// phase and message, and the step list with bytes (the progress panel).
-pub struct Report<'a> {
-    pub make_sink: &'a (dyn Fn() -> Sink + Send + Sync),
-    pub status: &'a (dyn Fn(Phase, &str) + Send + Sync),
-    pub progress: Progress,
-}
-
-impl Report<'_> {
-    /// A sink that also feeds the panel's last lines.
-    pub fn sink(&self) -> Sink {
-        let mut inner = (self.make_sink)();
-        let progress = self.progress.clone();
-        Box::new(move |l: Line| {
-            progress.lock().expect("progress lock").line(&l.text);
-            inner(l);
-        })
-    }
-
-    /// A sink that also keeps the last line reading like an error, so a
-    /// failure can say why in Docker's own words, not only its exit code.
-    fn sink_keeping_error(&self) -> (Sink, Arc<Mutex<LastError>>) {
-        let mut inner = self.sink();
-        let reason = Arc::new(Mutex::new(LastError::default()));
-        let kept = reason.clone();
-        let sink: Sink = Box::new(move |l: Line| {
-            kept.lock().expect("reason lock").note(&l.text);
-            inner(l);
-        });
-        (sink, reason)
-    }
-
-    fn say(&self, text: &str) {
-        self.sink()(line(text));
-    }
-
-    /// One planned step begins: the card, the panel and the log all say so.
-    fn step(&self, phase: Phase, name: &str) {
-        let (from, to) = {
-            let mut progress = self.progress.lock().expect("progress lock");
-            progress.start(name);
-            let snapshot = progress.snapshot();
-            (snapshot.from, snapshot.to)
-        };
-        tracing::info!("copy {from} -> {to}: {name}");
-        (self.status)(phase, name);
-        self.say(&format!("==> {name}"));
-    }
-
-    fn transfer(&self, label: &str, total_bytes: Option<u64>) {
-        self.progress.lock().expect("progress lock").transfer(label, total_bytes);
-    }
-
-    pub fn bytes(&self, more: u64) {
-        self.progress.lock().expect("progress lock").bytes(more);
-    }
-
-    fn transferred(&self) {
-        self.progress.lock().expect("progress lock").transferred();
-    }
-}
-
 pub struct Outcome {
     pub mirrored: Option<Mirrored>,
     pub summary: Summary,
 }
 
-pub(crate) fn line(text: &str) -> Line {
-    Line { stream: Stream::Stdout, text: text.to_string() }
-}
-
-/// Why a Docker command failed: the last error line it printed, or its
-/// exit code when it printed none.
-fn why_it_failed(code: Option<i32>, reason: &Mutex<LastError>) -> String {
-    reason.lock().expect("reason lock").explain(code)
-}
-
 /// Looks at both ends without changing anything.
 pub async fn plan(ssh: &Ssh, sides: &Sides, request: &CopyRequest) -> anyhow::Result<CopyPlan> {
     let (from, to) = (&sides.from, &sides.to);
-    anyhow::ensure!(from.exists(ssh).await, "{} has no compose file for {} at {}", from.label, from.name, from.compose_file());
-    let destination_exists = to.exists(ssh).await;
+    let look = look::look(ssh, sides, request).await?;
     let mut warnings = Vec::new();
-    if request.data && !request.config && !destination_exists {
+    if request.data && !request.config && !look.destination_exists {
         warnings.push(format!("{} has no copy of the project yet, so the config must travel too.", to.label));
     }
 
-    let source_running = from.services(ssh).await?.iter().any(|s| s.state == "running");
-    let model = discover::model(ssh, from).await?;
-    let preview = compose::parse_model(&model, std::path::Path::new(&from.dir));
+    let preview = compose::parse_model(&look.model, Path::new(&from.dir));
     let mut ports: Vec<u16> =
         preview.services.iter().flat_map(|s| s.ports.iter().filter(|p| p.protocol == "tcp").map(|p| p.published)).collect();
     ports.sort_unstable();
     ports.dedup();
 
-    let (volumes, containers, images, needed) = if request.data {
-        let sizes = discover::volume_sizes(ssh, &from.endpoint).await;
-        let named = discover::named_volumes(&model, &sizes);
-        let needed: u64 = named.iter().map(|v| check::parse_human_size(&v.size)).sum();
-        let volumes = named
-            .iter()
-            .map(|v| VolumePlan {
-                key: v.key.clone(),
-                name: v.name.clone(),
-                size: v.size.clone(),
-                destination_name: transfer::volume_name_at(&to.name, v),
-                external: v.external,
-            })
-            .collect();
-        if named.iter().any(|v| v.external) {
-            warnings.push("External volumes keep their own name and are added to, not replaced.".into());
+    let (volumes, containers, images) = match &look.inventory {
+        Some(inventory) => {
+            let volumes = inventory
+                .volumes
+                .iter()
+                .map(|v| VolumePlan {
+                    key: v.key.clone(),
+                    name: v.name.clone(),
+                    size: v.size.clone(),
+                    destination_name: transfer::volume_name_at(&to.name, v),
+                    external: v.external,
+                })
+                .collect();
+            if inventory.volumes.iter().any(|v| v.external) {
+                warnings.push("External volumes keep their own name and are added to, not replaced.".into());
+            }
+            let containers = discover::container_data(ssh, from, &inventory.sizes).await?;
+            (volumes, containers, inventory.images.clone())
         }
-        let containers = discover::container_data(ssh, from, &sizes).await?;
-        let images = if from.is_local() { discover::images_to_carry(ssh, from, to, &model).await } else { Vec::new() };
-        (volumes, containers, images, needed)
-    } else {
-        (Vec::new(), Vec::new(), Vec::new(), 0)
+        None => (Vec::new(), Vec::new(), Vec::new()),
     };
-    let mut notes = check::preflight(ssh, to, needed).await?;
-    let downloads = pull::planned(ssh, sides, request, &model, &images).await;
-    notes.extend(pull::note(sides, &downloads));
+    let mut notes = look.preflight;
+    notes.extend(pull::note(sides, &look.downloads));
 
     Ok(CopyPlan {
         from: from.label.clone(),
         to: to.label.clone(),
-        destination_exists,
-        source_running,
+        destination_exists: look.destination_exists,
+        source_running: look.source_running,
         ports,
         volumes,
         containers,
@@ -291,27 +210,18 @@ async fn run_steps(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest,
     let (from, to) = (&sides.from, &sides.to);
     report.progress.lock().expect("progress lock").set_steps(vec![names::look()]);
     report.step(Phase::Migrating, &names::look());
-    anyhow::ensure!(from.exists(ssh).await, "{} has no compose file for {}", from.label, from.name);
-    let destination_exists = to.exists(ssh).await;
-    anyhow::ensure!(request.config || destination_exists, "{} has no copy of the project yet; copy the config too", to.label);
-
-    let model = discover::model(ssh, from).await?;
-    let inventory = if request.data { Some(Inventory::at(ssh, from, to, &model).await) } else { None };
-    let needed = inventory.as_ref().map(|i| i.volumes.iter().map(|v| check::parse_human_size(&v.size)).sum()).unwrap_or(0);
-    for note in check::preflight(ssh, to, needed).await? {
+    let look = look::look(ssh, sides, request).await?;
+    anyhow::ensure!(request.config || look.destination_exists, "{} has no copy of the project yet; copy the config too", to.label);
+    for note in &look.preflight {
         report.say(&format!("    {note}"));
     }
-    let carried = inventory.as_ref().map(|i| i.images.as_slice()).unwrap_or(&[]);
-    let downloads = pull::planned(ssh, sides, request, &model, carried).await;
 
-    // Checked: a failed ps must not read as "not running" and skip the stop a consistent copy needs.
-    let source_services = from.services(ssh).await?;
-    let source_running = source_services.iter().any(|s| s.state == "running");
-    let steps = steps::planned(sides, request, inventory.as_ref(), &downloads, destination_exists, source_running);
+    let inventory = look.inventory.as_ref();
+    let steps = steps::planned(sides, request, inventory, &look.downloads, look.destination_exists, look.source_running);
     report.progress.lock().expect("progress lock").set_steps(steps);
-    pull::run(ssh, sides, &downloads, report).await?;
+    pull::run(ssh, sides, &look.downloads, report).await?;
 
-    if request.data && destination_exists {
+    if request.data && look.destination_exists {
         // Its volumes are about to be replaced: never under a running database.
         report.step(Phase::Migrating, &names::stop(&to.name, &to.label));
         let stopped = to.compose_output(ssh, "stop").await?;
@@ -323,7 +233,7 @@ async fn run_steps(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest,
             first_line(&stopped.stderr)
         );
     }
-    let stopped_source = (request.stop_source || request.keep_source_stopped) && source_running;
+    let stopped_source = (request.stop_source || request.keep_source_stopped) && look.source_running;
     if stopped_source {
         report.step(Phase::Migrating, &names::stop(&from.name, &from.label));
         let why = if request.keep_source_stopped { "it stays stopped" } else { "for a consistent copy" };
@@ -332,7 +242,7 @@ async fn run_steps(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest,
         anyhow::ensure!(stopped.ok(), "could not stop the copy on {}: {}", from.label, stopped.stderr);
     }
 
-    let carried = carry(ssh, home, sides, request, inventory.as_ref(), &source_services, stopped_source, report).await;
+    let carried = carry::carry(ssh, home, sides, request, inventory, &look.source_services, stopped_source, report).await;
     // The step that failed keeps the blame; starting the source again is
     // still done, and shown as its own step.
     if carried.is_err() {
@@ -364,131 +274,6 @@ async fn run_steps(ssh: &Ssh, home: &Path, sides: &Sides, request: &CopyRequest,
     let summary = check::post_copy(ssh, to).await;
     report.say(&format!("    {}", summary.text(to)));
     Ok(Outcome { mirrored, summary })
-}
-
-/// What the source has that a data copy carries.
-pub(crate) struct Inventory {
-    pub(crate) volumes: Vec<NamedVolume>,
-    pub(crate) images: Vec<String>,
-}
-
-impl Inventory {
-    async fn at(ssh: &Ssh, from: &Site, to: &Site, model: &Value) -> Self {
-        let volumes = discover::named_volumes(model, &discover::volume_sizes(ssh, &from.endpoint).await);
-        let images = if from.is_local() { discover::images_to_carry(ssh, from, to, model).await } else { Vec::new() };
-        Self { volumes, images }
-    }
-}
-
-/// Config, then data, then `up` at the destination. Split out so the caller
-/// can start the source again whether this succeeded or not.
-#[allow(clippy::too_many_arguments)]
-async fn carry(
-    ssh: &Ssh,
-    home: &Path,
-    sides: &Sides,
-    request: &CopyRequest,
-    inventory: Option<&Inventory>,
-    source_services: &[compose::ServiceState],
-    source_stopped: bool,
-    report: &Report<'_>,
-) -> anyhow::Result<Option<Mirrored>> {
-    let (from, to) = (&sides.from, &sides.to);
-
-    let mirrored = if request.config {
-        report.step(Phase::Migrating, &names::folder(&to.label));
-        let make_sink = || report.sink();
-        Some(folder::mirror(ssh, home, from, to, &sides.excludes, &make_sink).await?)
-    } else {
-        None
-    };
-
-    if let Some(inventory) = inventory {
-        for volume in &inventory.volumes {
-            report.step(Phase::Migrating, &names::volume(&volume.key, &volume.size));
-            let size = check::parse_human_size(&volume.size);
-            report.transfer(&format!("volume {}", volume.key), (size > 0).then_some(size));
-            let copied = transfer::copy_volume(ssh, from, to, volume, &sides.helper_image, report).await;
-            report.transferred();
-            copied.with_context(|| format!("volume {}", volume.name))?;
-        }
-        for image in &inventory.images {
-            report.step(Phase::Migrating, &names::image(image));
-            report.say(&format!("    it only exists on {}", from.label));
-            report.transfer(&format!("image {image}"), None);
-            let sent = transfer::copy_image(ssh, from, to, image, report).await;
-            report.transferred();
-            sent.with_context(|| format!("image {image}"))?;
-        }
-        report.step(Phase::Migrating, &names::create(&to.label));
-        let (sink, reason) = report.sink_keeping_error();
-        let code = to.compose_job(ssh, "create --build --remove-orphans", sink)?.wait().await?;
-        anyhow::ensure!(code == Some(0), "compose create on {} failed: {}", to.label, why_it_failed(code, &reason));
-
-        if !request.data_selection.is_empty() {
-            copy_container_data(ssh, sides, request, source_services, source_stopped, report).await?;
-        }
-    }
-
-    report.step(Phase::Starting, &names::start(&to.name, &to.label));
-    let (sink, reason) = report.sink_keeping_error();
-    // After a data copy, `create --build` above has built the images, so up
-    // starts what is there; a config-only copy builds here, once.
-    let built_already = inventory.is_some();
-    let code = to.compose_job(ssh, crate::stack::up_args(!built_already), sink)?.wait().await?;
-    anyhow::ensure!(code == Some(0), "compose up on {} failed: {}", to.label, why_it_failed(code, &reason));
-    Ok(mirrored)
-}
-
-/// `docker cp` streams for every ticked path. A source container that still
-/// runs is stopped for its own copy, so the files are consistent.
-async fn copy_container_data(
-    ssh: &Ssh,
-    sides: &Sides,
-    request: &CopyRequest,
-    source_services: &[compose::ServiceState],
-    source_stopped: bool,
-    report: &Report<'_>,
-) -> anyhow::Result<()> {
-    let (from, to) = (&sides.from, &sides.to);
-    let destination_services = to.services(ssh).await?;
-
-    for selection in &request.data_selection {
-        let step = names::path(&selection.path, &selection.service);
-        let Some(source) = source_services.iter().find(|s| s.service == selection.service) else {
-            report.progress.lock().expect("progress lock").skip(&step);
-            report.say(&format!("    {}: no container on {}, skipped", selection.service, from.label));
-            continue;
-        };
-        let destination = destination_services
-            .iter()
-            .find(|s| s.service == selection.service)
-            .with_context(|| format!("service {} has no container on {}", selection.service, to.label))?;
-        report.step(Phase::Migrating, &step);
-        let pause = !source_stopped && source.state == "running";
-        if pause {
-            report.say(&format!("    stopping {} for a consistent copy", source.container));
-            let stopped = from.endpoint.docker_output(ssh, &["stop", &source.container]).await?;
-            anyhow::ensure!(
-                stopped.ok(),
-                "could not stop {} on {} for a consistent copy: {}",
-                source.container,
-                from.label,
-                first_line(&stopped.stderr)
-            );
-        }
-        report.transfer(&format!("{} from {}", selection.path, selection.service), None);
-        let copied = transfer::copy_path(ssh, from, to, &source.container, &selection.path, &destination.container, report).await;
-        report.transferred();
-        if pause {
-            // Checked before the copy's own result: a service left stopped is the more urgent news.
-            let started = from.endpoint.docker_output(ssh, &["start", &source.container]).await;
-            let started_again = matches!(&started, Ok(out) if out.ok());
-            anyhow::ensure!(started_again, "{} on {} could not be started again after its copy", source.container, from.label);
-        }
-        copied.with_context(|| format!("{}:{}", selection.service, selection.path))?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
