@@ -85,7 +85,7 @@ jobs:
           releaseName: ${{ github.ref_type == 'tag' && format('dockerNanny {0}', github.ref_name) || '' }}
           releaseDraft: true
           prerelease: false
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
           args: ${{ matrix.args }}
       - name: No build machine paths are left in the binaries
         shell: bash
