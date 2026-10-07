@@ -685,6 +685,14 @@ export const mockApi: Api = {
     return [...stacks];
   },
   forwardStates: async () => forwards,
+  setStackFolder: async (id, path) => {
+    const stack = stacks.find((s) => s.id === id);
+    if (!stack) throw new Error("That stack is no longer known.");
+    const parts = path.split("/");
+    stack.compose_rel = parts.pop() ?? "docker-compose.yml";
+    stack.project_dir = parts.join("/");
+    return [...stacks];
+  },
   // Off at once; on again after a moment, the way the real forwarder connects.
   setForwardPorts: async (id, on) => {
     const stack = stacks.find((s) => s.id === id);
