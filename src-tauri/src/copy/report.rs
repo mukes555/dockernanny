@@ -38,7 +38,7 @@ impl Report<'_> {
         let reason = Arc::new(Mutex::new(LastError::default()));
         let kept = reason.clone();
         let sink: Sink = Box::new(move |l: Line| {
-            kept.lock().expect("reason lock").note(&l.text);
+            kept.lock().expect("reason lock").note(&l);
             inner(l);
         });
         (sink, reason)

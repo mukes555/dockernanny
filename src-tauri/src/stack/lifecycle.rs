@@ -193,7 +193,7 @@ async fn run_compose(app: &AppHandle, ticket: &Ticket, stack: &Stack, alias: &st
     let noted = last_error.clone();
     let mut sink = output_sink(app, &stack.id);
     let job = state.ssh.job(alias, script, move |line| {
-        noted.lock().expect("last error lock").note(&line.text);
+        noted.lock().expect("last error lock").note(&line);
         sink(line);
     })?;
     ticket.attach(job.handle());

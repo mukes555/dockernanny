@@ -138,6 +138,34 @@ pub async fn set_forward_ports(app: AppHandle, state: State<'_, AppState>, id: S
     Ok(stacks)
 }
 
+/// Points a stack at the folder its project lives in now: a project that
+/// moved, a git worktree that was removed. `path` is the compose file or its
+/// folder. The compose project name stays, so the stack keeps its volumes;
+/// the machine keeps its copy until the next Start or sync sends this one.
+#[tauri::command]
+pub async fn set_stack_folder(app: AppHandle, state: State<'_, AppState>, id: String, path: String) -> CmdResult<Vec<Stack>> {
+    if state.operations.holds(&id) {
+        return Err("Wait until the stack's current action finishes.".into());
+    }
+    let (dir, compose_rel) = compose::locate(Path::new(&path)).map_err(fail)?;
+    let mut stacks = state.store.stacks();
+    let stack = stacks.iter_mut().find(|s| s.id == id).ok_or("That stack is no longer known.")?;
+    stack.project_dir = dir.display().to_string();
+    stack.compose_rel = compose_rel;
+    let stack = stack.clone();
+    state.store.save_stacks(stacks.clone()).map_err(fail)?;
+    // The watcher watches the folder it was started on.
+    if stack.live_sync {
+        stack::start_watcher(&app, &stack);
+    }
+    // What the card said about the old folder no longer applies.
+    stack::set_status(&app, &id, |status| {
+        status.error = None;
+        status.sync_warning = None;
+    });
+    Ok(stacks)
+}
+
 #[tauri::command]
 pub fn forward_states(state: State<'_, AppState>) -> HashMap<String, forward::ForwardState> {
     state.forward_states.lock().expect("forward states lock").clone()

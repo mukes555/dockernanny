@@ -30,23 +30,39 @@ impl Output {
     }
 }
 
-/// The last line of output that read like an error, so a failure can say
-/// why in the tool's own words rather than only by its exit code.
+/// Why a command failed, in the tool's own words rather than only by its
+/// exit code: the last line that read like an error, or else the last line
+/// it printed on stderr. Not every reason has a telltale word: compose says
+/// `open docker-compose.yml: no such file or directory` and nothing more.
 #[derive(Debug, Default)]
 pub struct LastError {
-    line: Option<String>,
+    error_line: Option<String>,
+    last_stderr: Option<String>,
 }
 
 impl LastError {
-    pub fn note(&mut self, text: &str) {
+    pub fn note(&mut self, line: &Line) {
+        let text = line.text.trim();
+        if text.is_empty() {
+            return;
+        }
         if reads_like_error(text) {
-            self.line = Some(text.trim().to_string());
+            self.error_line = Some(text.to_string());
+        }
+        if line.stream == Stream::Stderr {
+            self.last_stderr = Some(text.to_string());
         }
     }
 
-    /// The line, or "exited with code N" when nothing read like an error.
     pub fn explain(&self, code: Option<i32>) -> String {
-        self.line.clone().unwrap_or_else(|| format!("exited with code {}", code.map(|c| c.to_string()).unwrap_or_else(|| "?".into())))
+        if let Some(line) = &self.error_line {
+            return line.clone();
+        }
+        let exited = format!("exited with code {}", code.map(|c| c.to_string()).unwrap_or_else(|| "?".into()));
+        match &self.last_stderr {
+            Some(last) => format!("{exited}: {last}"),
+            None => exited,
+        }
     }
 }
 
@@ -370,14 +386,29 @@ mod tests {
 
     #[test]
     fn a_failure_is_explained_in_the_tools_own_words() {
+        let out = |text: &str| Line { stream: Stream::Stdout, text: text.into() };
+        let err = |text: &str| Line { stream: Stream::Stderr, text: text.into() };
         let mut last = LastError::default();
         assert_eq!(last.explain(Some(1)), "exited with code 1");
         assert_eq!(last.explain(None), "exited with code ?");
         // The lines compose printed when a registry refused an image.
-        last.note(" Image quay.io/minio/minio:latest Pulling ");
-        last.note("Error response from daemon: unauthorized: access to the requested resource is not authorized");
-        last.note(" Container shop-db-1  Created");
+        last.note(&err(" Image quay.io/minio/minio:latest Pulling "));
+        last.note(&err("Error response from daemon: unauthorized: access to the requested resource is not authorized"));
+        last.note(&err(" Container shop-db-1  Created"));
         assert_eq!(last.explain(Some(1)), "Error response from daemon: unauthorized: access to the requested resource is not authorized");
+
+        // What compose printed when the project folder had lost its compose file.
+        let mut last = LastError::default();
+        last.note(&out("starting"));
+        last.note(&err("compose file \"/home/alex/.dockernanny/shop/docker-compose.yml\" is invalid: open /home/alex/.dockernanny/shop/docker-compose.yml: no such file or directory"));
+        last.note(&out(""));
+        assert_eq!(
+            last.explain(Some(1)),
+            "exited with code 1: compose file \"/home/alex/.dockernanny/shop/docker-compose.yml\" is invalid: open /home/alex/.dockernanny/shop/docker-compose.yml: no such file or directory"
+        );
+        let mut quiet = LastError::default();
+        quiet.note(&out("done"));
+        assert_eq!(quiet.explain(Some(2)), "exited with code 2", "stdout alone says nothing about why");
         assert!(reads_like_error("target api: failed to solve: process did not complete successfully"));
         assert!(reads_like_error("rsync error: some files/attrs were not transferred (code 23)"));
         assert!(!reads_like_error(" Container shop-db-1  Created"));
