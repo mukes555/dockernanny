@@ -141,6 +141,7 @@ pub fn run() {
             commands::stacks::remove_stack,
             commands::stacks::forward_states,
             commands::stacks::set_forward_ports,
+            commands::stacks::set_stack_folder,
             commands::machines::set_docker_context,
             commands::containers::list_containers,
             commands::containers::container_action,

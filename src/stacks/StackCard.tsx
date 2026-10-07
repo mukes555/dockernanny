@@ -82,6 +82,13 @@ export function StackCard({ stack }: { stack: Stack }) {
     if (!removed) setAskingRemove(false);
   };
 
+  // For a project that moved or a git worktree that was removed: the stack keeps its name and its data.
+  const changeFolder = () =>
+    action.run(async () => {
+      const chosen = await api.pickComposeFile();
+      if (chosen) setStacks(await api.setStackFolder(stack.id, chosen));
+    });
+
   return (
     <section className="flex flex-col rounded-2xl border border-line bg-surface p-4">
       <header className="flex items-start justify-between gap-3">
@@ -137,6 +144,9 @@ export function StackCard({ stack }: { stack: Stack }) {
           <Menu label={`More actions for ${stack.name}`} width="w-56">
             <MenuItem onClick={() => void action.run(() => api.syncStack(stack.id))} disabled={busy || !machine}>
               Sync the folder now
+            </MenuItem>
+            <MenuItem onClick={() => void changeFolder()} disabled={busy}>
+              Change folder…
             </MenuItem>
             <MenuItem onClick={() => void action.run(() => api.upStack(stack.id, true))} disabled={busy || !machine}>
               Rebuild images and restart

@@ -128,6 +128,8 @@ const tauriApi = {
   removeStack: (id: string, volumes: boolean) => invoke<Stack[]>("remove_stack", { id, volumes }),
   forwardStates: () => invoke<Record<string, ForwardState>>("forward_states"),
   setForwardPorts: (id: string, on: boolean) => invoke<Stack[]>("set_forward_ports", { id, on }),
+  /** `path` is the compose file or its folder. */
+  setStackFolder: (id: string, path: string) => invoke<Stack[]>("set_stack_folder", { id, path }),
   localProjects: () => invoke<LocalProject[]>("local_projects"),
   copyPlan: (request: CopyRequest) => invoke<CopyPlan>("copy_plan", { request }),
   copyStack: (request: CopyRequest) => invoke<CopyStarted>("copy_stack", { request }),
