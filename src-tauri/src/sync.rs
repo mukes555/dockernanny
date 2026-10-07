@@ -32,6 +32,16 @@ pub use crate::copy::folder::Mirrored as SyncResult;
 pub async fn run(ssh: &Ssh, alias: &str, stack: &Stack, on_line: impl FnMut(Line) + Send + 'static) -> anyhow::Result<SyncResult> {
     let from = Site::local(&stack.name, &stack.project_dir, &stack.compose_rel);
     let to = Site::machine(&stack.name, &stack.compose_rel, alias, "the machine");
+    // The mirror deletes on the machine what is missing here. A folder that
+    // lost its compose file (a removed git worktree, a moved project, a
+    // folder Docker recreated empty for a bind mount) would wipe the
+    // machine's working copy, so it is not sent at all.
+    anyhow::ensure!(
+        from.exists(ssh).await,
+        "{} is no longer in {}, so nothing was sent and the copy on the machine is as it was. If the project moved, choose Change folder in the stack's menu.",
+        stack.compose_rel,
+        stack.project_dir
+    );
     // One caller-supplied sink, shared by every leg the mirror may run.
     let shared = Arc::new(Mutex::new(on_line));
     let make_sink = move || -> Sink {
@@ -101,6 +111,33 @@ fn is_excluded(relative: &Path, excludes: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What happened when a git worktree was removed: Docker recreated one
+    /// bind-mounted folder in it, empty, and Start mirrored that to the
+    /// machine, deleting the machine's compose file.
+    #[tokio::test]
+    async fn a_folder_without_its_compose_file_is_never_sent() {
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(".tmp").join(format!("guard-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(folder.join("postgres/init")).unwrap();
+        let stack = Stack {
+            id: "s1".into(),
+            name: "shop".into(),
+            machine_id: "m1".into(),
+            project_dir: folder.display().to_string(),
+            compose_rel: "docker-compose.yml".into(),
+            excludes: default_excludes(),
+            forward_ports: true,
+            live_sync: false,
+            port_overrides: Default::default(),
+        };
+        // A short made-up home: the guard answers before ssh or rsync would run.
+        let ssh = Ssh::new(Path::new("/nowhere")).unwrap();
+        let Err(refused) = run(&ssh, "dn-nowhere", &stack, |_| {}).await else { panic!("the folder was sent") };
+        let said = format!("{refused:#}");
+        assert!(said.starts_with("docker-compose.yml is no longer in "), "{said}");
+        assert!(said.contains("nothing was sent"), "{said}");
+    }
 
     #[test]
     fn changes_inside_excluded_folders_are_ignored() {

@@ -111,7 +111,7 @@ async fn run_rsync(args: &[String], mut on_line: Sink) -> anyhow::Result<Mirrore
         if is_file_change(&line.text) {
             counter.fetch_add(1, Ordering::Relaxed);
         }
-        noted.lock().expect("last error lock").note(&line.text);
+        noted.lock().expect("last error lock").note(&line);
         on_line(line);
     })?;
     let code = job.wait().await?;
