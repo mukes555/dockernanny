@@ -5,6 +5,7 @@
 //! terminal otherwise.
 
 use std::process::Child;
+use std::sync::Mutex;
 
 use super::linux_setup::{docker_action_for_user, docker_row, RootPlan};
 use super::platform::{
@@ -14,9 +15,36 @@ use crate::docker_access;
 
 const SSH_PORT: u16 = 22;
 
-pub struct Linux;
+/// What does not change while the app runs, read once instead of at every
+/// probe (every ten seconds while the page is open). Set up and the page's
+/// Refresh read it again.
+#[derive(Clone)]
+struct Kept {
+    memory_gb: u32,
+    release: String,
+    rsync: bool,
+}
+
+#[derive(Default)]
+pub struct Linux {
+    kept: Mutex<Option<Kept>>,
+}
 
 impl Linux {
+    fn kept(&self) -> Kept {
+        if let Some(kept) = self.kept.lock().expect("kept lock").clone() {
+            return kept;
+        }
+        let kb: u64 = self.sh("awk '/MemTotal/ {print $2}' /proc/meminfo").text().parse().unwrap_or(0);
+        let kept = Kept {
+            memory_gb: (kb / (1024 * 1024)) as u32,
+            release: self.sh(". /etc/os-release 2>/dev/null && echo \"$PRETTY_NAME\"").text(),
+            rsync: self.rsync_present(),
+        };
+        *self.kept.lock().expect("kept lock") = Some(kept.clone());
+        kept
+    }
+
     fn sh(&self, script: &str) -> Output {
         run("/bin/sh", &["-c", script], None, &[], CHECK_LIMIT)
     }
@@ -46,15 +74,15 @@ impl Platform for Linux {
     }
 
     fn probe(&self) -> Picture {
-        let kb: u64 = self.sh("awk '/MemTotal/ {print $2}' /proc/meminfo").text().parse().unwrap_or(0);
+        let kept = self.kept();
         let mut picture = Picture {
             ssh_port: SSH_PORT,
-            total_memory_gb: (kb / (1024 * 1024)) as u32,
+            total_memory_gb: kept.memory_gb,
             user: Some(self.user()),
             ready_for_pairing: true,
             ..Default::default()
         };
-        let release = self.sh(". /etc/os-release 2>/dev/null && echo \"$PRETTY_NAME\"").text();
+        let release = kept.release;
         picture.rows.push(row("Linux", !release.is_empty(), if release.is_empty() { "unknown distribution".into() } else { release }));
 
         picture.rows.push(docker_row(&docker_access::check()));
@@ -67,12 +95,16 @@ impl Platform for Linux {
             if listening { format!("listening on {SSH_PORT}") } else { format!("not listening on {SSH_PORT}") },
         ));
 
-        let rsync = self.rsync_present();
-        picture.rows.push(row("rsync", rsync, if rsync { "installed" } else { "missing" }));
+        picture.rows.push(row("rsync", kept.rsync, if kept.rsync { "installed" } else { "missing" }));
         picture
     }
 
+    fn forget_kept(&self) {
+        *self.kept.lock().expect("kept lock") = None;
+    }
+
     fn setup(&self, _options: &SetupOptions, say: &mut Say) -> Vec<(&'static str, Outcome)> {
+        self.forget_kept();
         let mut results = Vec::new();
         let user = self.user();
         let docker = docker_access::check();

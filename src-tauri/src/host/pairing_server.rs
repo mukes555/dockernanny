@@ -142,44 +142,59 @@ fn same_code(given: &str, expected: &str) -> bool {
     diff == 0
 }
 
-/// Listens on a thread until `stop` is set; the code decides whether a
-/// request is honoured. `install` puts a validated key in place with the
-/// given mark as its comment and says which user and port to use; errors go
-/// back as text.
+/// The pairing port while it listens; `stop` frees it.
+pub struct Serving {
+    /// The port it got: port 0 asks the OS for a free one.
+    pub port: u16,
+    stop: Arc<AtomicBool>,
+}
+
+impl Serving {
+    /// Ends the listening thread. It waits in `accept`, so a connection of
+    /// our own wakes it; it sees the flag and drops that connection unanswered.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let here = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, self.port));
+        let _ = TcpStream::connect_timeout(&here, Duration::from_secs(1));
+    }
+}
+
+/// Listens on a thread until stopped; the code decides whether a request is
+/// honoured. `install` puts a validated key in place with the given mark as
+/// its comment and says which user and port to use; errors go back as text.
+/// The thread sleeps in `accept` until someone connects, so a listening port
+/// costs nothing while nobody pairs.
 pub fn serve(
     port: u16,
     code: Arc<Mutex<Code>>,
     install: impl Fn(&str, &str) -> Result<Installed, String> + Send + Sync + 'static,
     events: Sender<Event>,
-    stop: Arc<AtomicBool>,
-) -> std::io::Result<u16> {
+) -> std::io::Result<Serving> {
     let listener = TcpListener::bind(("0.0.0.0", port))?;
-    // Port 0 asks the OS for a free one; the caller learns which it got.
     let bound = listener.local_addr()?.port();
-    // Non-blocking so the thread can notice `stop` and free the port when
-    // sharing is turned off; a blocked accept would hold it forever.
-    listener.set_nonblocking(true)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
     let install = Arc::new(install);
     std::thread::spawn(move || loop {
-        if stop.load(Ordering::SeqCst) {
+        let accepted = listener.accept();
+        if stopped.load(Ordering::SeqCst) {
             return;
         }
-        // Nothing waiting, or an error such as too many open files: either
-        // way the next try comes after a pause, never in a busy loop.
-        let (stream, peer) = match listener.accept() {
+        // An error such as too many open files: the next try comes after a
+        // pause, never in a busy loop.
+        let (stream, peer) = match accepted {
             Ok(accepted) => accepted,
             Err(_) => {
                 std::thread::sleep(Duration::from_millis(200));
                 continue;
             }
         };
-        let _ = stream.set_nonblocking(false);
         let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
         let _ = stream.set_write_timeout(Some(REQUEST_TIMEOUT));
         let answer = handle(&stream, &code, install.as_ref(), &events, &peer.ip().to_string());
         let _ = write_answer(stream, &answer);
     });
-    Ok(bound)
+    Ok(Serving { port: bound, stop })
 }
 
 fn handle(
@@ -317,7 +332,7 @@ mod tests {
         let code = Arc::new(Mutex::new(Code::new()));
         let digits = code.lock().unwrap().digits.clone();
         let (tx, _rx) = std::sync::mpsc::channel();
-        let port = serve(0, code, installer, tx, Arc::new(AtomicBool::new(false))).unwrap();
+        let port = serve(0, code, installer, tx).unwrap().port;
         let answer = talk(port, &digits, KEY);
         assert_eq!(answer["ok"], false);
         assert!(answer["error"].as_str().unwrap().contains("off"));
@@ -329,7 +344,7 @@ mod tests {
         code.lock().unwrap().arm();
         let digits = code.lock().unwrap().digits.clone();
         let (tx, rx) = std::sync::mpsc::channel();
-        let port = serve(0, code.clone(), installer, tx, Arc::new(AtomicBool::new(false))).unwrap();
+        let port = serve(0, code.clone(), installer, tx).unwrap().port;
         assert_eq!(talk(port, "000000", KEY)["ok"], false);
         let bad = talk(port, &digits, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL'; echo pwned");
         assert_eq!(bad["error"], "key data is not base64");
@@ -351,7 +366,7 @@ mod tests {
     fn a_silent_client_holds_the_port_only_briefly() {
         let code = Arc::new(Mutex::new(Code::new()));
         let (tx, _rx) = std::sync::mpsc::channel();
-        let port = serve(0, code, installer, tx, Arc::new(AtomicBool::new(false))).unwrap();
+        let port = serve(0, code, installer, tx).unwrap().port;
         let _silent = TcpStream::connect(("127.0.0.1", port)).unwrap();
         std::thread::sleep(Duration::from_millis(100));
         let started = Instant::now();
@@ -369,11 +384,14 @@ mod tests {
 
     #[test]
     fn a_stopped_listener_frees_its_port() {
-        let stop = Arc::new(AtomicBool::new(false));
         let (tx, _rx) = std::sync::mpsc::channel();
-        let port = serve(0, Arc::new(Mutex::new(Code::new())), installer, tx, stop.clone()).unwrap();
-        stop.store(true, Ordering::SeqCst);
-        std::thread::sleep(Duration::from_millis(500));
-        assert!(TcpListener::bind(("0.0.0.0", port)).is_ok());
+        let serving = serve(0, Arc::new(Mutex::new(Code::new())), installer, tx).unwrap();
+        serving.stop();
+        // The thread wakes at once; give it a moment to return and close the socket.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while TcpListener::bind(("0.0.0.0", serving.port)).is_err() {
+            assert!(Instant::now() < deadline, "the port was still held 2 s after stop");
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 }

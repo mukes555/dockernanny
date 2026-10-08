@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter};
 
 use super::keepalive::KeepAlive;
 use super::paired::{self, Connected, PairedComputer};
-use super::pairing_server::{self, Code, Event};
+use super::pairing_server::{self, Code, Event, Serving};
 use super::platform::{Outcome, Picture, Platform, SetupOptions};
 use super::{HostSnapshot, LogLine, Notice, PairingState, LOG_EVENT, SNAPSHOT_EVENT};
 use crate::stack::now_ms;
@@ -51,17 +51,24 @@ pub struct Engine {
     pub to_engine: Sender<ToEngine>,
     pub snapshot: Arc<Mutex<HostSnapshot>>,
     pub log: Arc<Mutex<Vec<String>>>,
-    stop_listener: Arc<AtomicBool>,
+    listener: Arc<Mutex<Option<Serving>>>,
     keepalive: Arc<Mutex<KeepAlive>>,
 }
 
 impl Engine {
     pub fn quit(&self) {
         let _ = self.to_engine.send(ToEngine::Quit);
-        self.stop_listener.store(true, Ordering::SeqCst);
-        // Stopped here as well: the thread may be deep in a slow probe while
-        // the app exits, and the keep-alive must not outlive a deliberate quit.
+        // Both stopped here as well: the thread may be deep in a slow probe
+        // while the app exits. The pairing port must close when sharing is
+        // turned off, and the keep-alive must not outlive a deliberate quit.
+        stop_listening(&self.listener);
         self.keepalive.lock().expect("keepalive lock").stop();
+    }
+}
+
+fn stop_listening(listener: &Mutex<Option<Serving>>) {
+    if let Some(serving) = listener.lock().expect("listener lock").take() {
+        serving.stop();
     }
 }
 
@@ -95,7 +102,7 @@ pub fn start(page: Arc<dyn Page>, platform: Arc<dyn Platform>, pairing_port: u16
         to_engine,
         snapshot: state.snapshot.clone(),
         log: state.log.clone(),
-        stop_listener: state.stop_listener.clone(),
+        listener: state.listener.clone(),
         keepalive: state.keepalive.clone(),
     };
     std::thread::Builder::new().name("dockernanny-host".into()).spawn(move || state.run(requests)).expect("spawn the host thread");
@@ -133,7 +140,8 @@ struct Loop {
     bind_failure: Option<String>,
     /// What the last probe found missing, so an unchanged reading is not logged.
     last_missing: Option<String>,
-    stop_listener: Arc<AtomicBool>,
+    /// The pairing port while it listens; shared with `Engine`, which closes it on quit.
+    listener: Arc<Mutex<Option<Serving>>>,
     pairing_events: Option<Receiver<Event>>,
     pairing_note: Option<String>,
     notice: Option<Notice>,
@@ -169,7 +177,7 @@ impl Loop {
             listening: false,
             bind_failure: None,
             last_missing: None,
-            stop_listener: Arc::new(AtomicBool::new(false)),
+            listener: Arc::new(Mutex::new(None)),
             pairing_events: None,
             pairing_note: None,
             notice: None,
@@ -189,12 +197,17 @@ impl Loop {
         self.every_second();
         loop {
             match requests.recv_timeout(Duration::from_secs(1)) {
-                Ok(ToEngine::Probe) => self.last_probe = None,
+                Ok(ToEngine::Probe) => {
+                    // Asked for by the page's Refresh: read everything again, kept facts too.
+                    self.platform.forget_kept();
+                    self.last_probe = None;
+                }
                 Ok(ToEngine::Setup(options)) => self.setup(options),
                 Ok(ToEngine::ArmPairing) => self.arm_pairing(),
                 Ok(ToEngine::DisarmPairing) => self.disarm_pairing(),
                 Ok(ToEngine::Forget(address)) => self.forget(&address),
                 Ok(ToEngine::Quit) | Err(RecvTimeoutError::Disconnected) => {
+                    stop_listening(&self.listener);
                     self.keepalive.lock().expect("keepalive lock").stop();
                     self.say("sharing stopped");
                     return;
@@ -245,8 +258,9 @@ impl Loop {
         let (events_tx, events_rx) = channel::<Event>();
         let platform = self.platform.clone();
         let install = move |key: &str, mark: &str| platform.install_key(key, mark);
-        match pairing_server::serve(self.pairing_port, self.code.clone(), install, events_tx, self.stop_listener.clone()) {
-            Ok(_) => {
+        match pairing_server::serve(self.pairing_port, self.code.clone(), install, events_tx) {
+            Ok(serving) => {
+                *self.listener.lock().expect("listener lock") = Some(serving);
                 self.listening = true;
                 self.pairing_events = Some(events_rx);
                 self.say(&format!("pairing port {} open; pairing itself is off until you turn it on", self.pairing_port));

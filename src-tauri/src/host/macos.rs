@@ -3,6 +3,7 @@
 //! admin step is a single command through the system password prompt.
 
 use std::process::Child;
+use std::sync::Mutex;
 
 use super::platform::{
     host_key_from_pub, listening_here, row, run, Installed, Outcome, Output, Picture, Platform, Say, SetupOptions, CHECK_LIMIT, SETUP_LIMIT,
@@ -10,9 +11,36 @@ use super::platform::{
 
 const SSH_PORT: u16 = 22;
 
-pub struct MacOs;
+/// What does not change while the app runs, read once instead of at every
+/// probe (every ten seconds while the page is open). Set up and the page's
+/// Refresh read it again.
+#[derive(Clone)]
+struct Kept {
+    memory_gb: u32,
+    version: String,
+    rsync: bool,
+}
+
+#[derive(Default)]
+pub struct MacOs {
+    kept: Mutex<Option<Kept>>,
+}
 
 impl MacOs {
+    fn kept(&self) -> Kept {
+        if let Some(kept) = self.kept.lock().expect("kept lock").clone() {
+            return kept;
+        }
+        let bytes: u64 = self.sh("sysctl -n hw.memsize").text().parse().unwrap_or(0);
+        let kept = Kept {
+            memory_gb: (bytes / (1024 * 1024 * 1024)) as u32,
+            version: self.sh("sw_vers -productVersion").text(),
+            rsync: self.sh("command -v rsync").ok,
+        };
+        *self.kept.lock().expect("kept lock") = Some(kept.clone());
+        kept
+    }
+
     /// With the app's PATH, which finds Docker wherever its installer put it
     /// (`tools::add_docker_to_path`).
     fn sh(&self, script: &str) -> Output {
@@ -39,15 +67,15 @@ impl Platform for MacOs {
     }
 
     fn probe(&self) -> Picture {
-        let bytes: u64 = self.sh("sysctl -n hw.memsize").text().parse().unwrap_or(0);
+        let kept = self.kept();
         let mut picture = Picture {
             ssh_port: SSH_PORT,
-            total_memory_gb: (bytes / (1024 * 1024 * 1024)) as u32,
+            total_memory_gb: kept.memory_gb,
             user: Some(self.user()),
             ready_for_pairing: true,
             ..Default::default()
         };
-        let version = self.sh("sw_vers -productVersion").text();
+        let version = kept.version;
         picture.rows.push(row("macOS", !version.is_empty(), if version.is_empty() { "unknown".into() } else { version }));
 
         let docker = self.docker_version();
@@ -58,12 +86,16 @@ impl Platform for MacOs {
         picture.sshd_listening = listening;
         picture.rows.push(row("Remote Login (SSH)", listening, if listening { "on, port 22" } else { "off (Set up turns it on)" }));
 
-        let rsync = self.sh("command -v rsync");
-        picture.rows.push(row("rsync", rsync.ok, if rsync.ok { "installed" } else { "missing" }));
+        picture.rows.push(row("rsync", kept.rsync, if kept.rsync { "installed" } else { "missing" }));
         picture
     }
 
+    fn forget_kept(&self) {
+        *self.kept.lock().expect("kept lock") = None;
+    }
+
     fn setup(&self, _options: &SetupOptions, say: &mut Say) -> Vec<(&'static str, Outcome)> {
+        self.forget_kept();
         let mut results = Vec::new();
 
         say("==> Docker");

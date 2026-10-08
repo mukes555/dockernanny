@@ -161,12 +161,12 @@ fn real_platform(config: &HostConfig) -> Arc<dyn Platform> {
 
 #[cfg(target_os = "macos")]
 fn real_platform(_config: &HostConfig) -> Arc<dyn Platform> {
-    Arc::new(macos::MacOs)
+    Arc::new(macos::MacOs::default())
 }
 
 #[cfg(target_os = "linux")]
 fn real_platform(_config: &HostConfig) -> Arc<dyn Platform> {
-    Arc::new(linux::Linux)
+    Arc::new(linux::Linux::default())
 }
 
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
