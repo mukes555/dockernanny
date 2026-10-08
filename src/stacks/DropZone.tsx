@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { AnimatePresence, motion } from "motion/react";
 
 import { api, errorMessage } from "../lib/ipc";
 import { dropTarget, visibleMachines } from "../lib/machines";
@@ -7,6 +6,7 @@ import type { Machine } from "../lib/types";
 import { useStore } from "../state/store";
 import { FolderIcon, LogoMark, PlusIcon } from "../ui/icons";
 import { Button } from "../ui/primitives";
+import { usePresence } from "../ui/usePresence";
 
 /** Picks a compose file, the same as dropping it on the window: the drop
  * sheet opens on the machine whose page is open. */
@@ -86,28 +86,15 @@ export function DropErrorLine() {
 export function DropOverlay() {
   const dragging = useStore((state) => state.dragging);
   const target = useDropTarget();
+  const { mounted, state } = usePresence(dragging);
+  if (!mounted) return null;
   return (
-    <AnimatePresence>
-      {dragging ? (
-        <motion.div
-          className="pointer-events-none fixed inset-0 z-30 flex items-center justify-center bg-plane/70 backdrop-blur-sm"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.15 }}
-        >
-          <motion.div
-            className="rounded-3xl border-2 border-dashed border-accent bg-surface px-12 py-10 text-center shadow-2xl"
-            initial={{ scale: 0.96 }}
-            animate={{ scale: 1 }}
-            transition={{ type: "spring", stiffness: 380, damping: 30 }}
-          >
-            <LogoMark size={40} className="mx-auto text-accent" />
-            <div className="mt-4 text-lg font-semibold text-ink">{target ? `Drop to run on ${target.name}` : "Drop to preview"}</div>
-            <div className="mt-1 text-[13px] text-ink-2">A compose file, or a folder that has one</div>
-          </motion.div>
-        </motion.div>
-      ) : null}
-    </AnimatePresence>
+    <div data-state={state} className="drop-overlay pointer-events-none fixed inset-0 z-30 flex items-center justify-center bg-plane/70 backdrop-blur-sm">
+      <div className="drop-card rounded-3xl border-2 border-dashed border-accent bg-surface px-12 py-10 text-center shadow-2xl">
+        <LogoMark size={40} className="mx-auto text-accent" />
+        <div className="mt-4 text-lg font-semibold text-ink">{target ? `Drop to run on ${target.name}` : "Drop to preview"}</div>
+        <div className="mt-1 text-[13px] text-ink-2">A compose file, or a folder that has one</div>
+      </div>
+    </div>
   );
 }
