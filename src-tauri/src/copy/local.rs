@@ -25,6 +25,43 @@ pub struct LocalProject {
     pub warnings: Vec<String>,
 }
 
+/// Docker's own BuildKit builders (`docker buildx create`) are tools, not
+/// something a person would expect to copy.
+const BUILDKIT_IMAGE: &str = "moby/buildkit";
+
+/// The names of the containers this computer's Docker runs outside any
+/// compose project, such as one started with `docker run`: every container
+/// without the label Docker Compose puts on its own. A copy carries compose
+/// projects only, so the window names these instead of leaving them out
+/// without a word.
+pub async fn loose_containers() -> anyhow::Result<Vec<String>> {
+    let format = "{{.Names}}\t{{.Image}}\t{{.Label \"com.docker.compose.project\"}}";
+    let out = local_docker(&["ps", "--all", "--format", format]).output().await.context("run docker ps")?;
+    anyhow::ensure!(out.status.success(), "docker ps failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    Ok(parse_loose(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// One `name image project` line per container, tab-separated.
+fn parse_loose(listing: &str) -> Vec<String> {
+    let mut names: Vec<String> = listing
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let name = fields.next()?.trim();
+            let image = fields.next()?.trim();
+            let project = fields.next().unwrap_or("").trim();
+            let in_a_compose_project = !project.is_empty();
+            let is_a_builder = image.starts_with(BUILDKIT_IMAGE);
+            if name.is_empty() || in_a_compose_project || is_a_builder {
+                return None;
+            }
+            Some(name.to_string())
+        })
+        .collect();
+    names.sort();
+    names
+}
+
 pub fn project_dir_of(project: &LocalProject) -> &Path {
     Path::new(&project.project_dir)
 }
@@ -80,4 +117,19 @@ pub async fn local_projects(ssh: &Ssh) -> anyhow::Result<Vec<LocalProject>> {
     }
     projects.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(projects)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_containers_outside_compose_projects_are_loose() {
+        let listing = "shop-db-1\tpostgres:16\tshop\n\
+                       scratch\talpine:3\t\n\
+                       buildx_buildkit_builder0\tmoby/buildkit:buildx-stable-1\t\n\
+                       notes-db\tpgvector/pgvector:pg16\t\n";
+        assert_eq!(parse_loose(listing), vec!["notes-db", "scratch"], "a compose service and a buildx builder are not listed");
+        assert!(parse_loose("").is_empty());
+    }
 }

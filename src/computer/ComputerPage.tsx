@@ -5,6 +5,7 @@ import { plural } from "../lib/format";
 import { api, errorMessage } from "../lib/ipc";
 import { visibleMachines } from "../lib/machines";
 import type { LocalProject } from "../lib/types";
+import { LooseContainers } from "../stacks/LooseContainers";
 import { useStore } from "../state/store";
 import { OsGlyph } from "../ui/Badges";
 import { ExternalIcon, RefreshIcon, SpinnerIcon } from "../ui/icons";
@@ -87,17 +88,24 @@ function DockerHere() {
   const settings = useStore((state) => state.settings);
   const setCopyOpen = useStore((state) => state.setCopyOpen);
   const local = useLoaded(api.localProjects);
+  const loose = useLoaded(api.looseContainers);
   const machines = visibleMachines(allMachines, computerInfo);
   const canCopy = (settings?.use_machines ?? true) && machines.length > 0;
   // A failed read shows why; the last list stays hidden until a read works again.
   const projects = local.error ? null : local.data;
+  const looseNames = loose.data ?? [];
+
+  const refresh = () => {
+    void local.reload();
+    void loose.reload();
+  };
 
   return (
     <Card
       title="Docker on this computer"
       description="Compose projects running in the local Docker. Copy one to a machine to run it there instead."
       actions={
-        <Button size="sm" tone="ghost" onClick={() => void local.reload()} busy={local.loading} aria-label="Refresh">
+        <Button size="sm" tone="ghost" onClick={refresh} busy={local.loading} aria-label="Refresh">
           <RefreshIcon />
         </Button>
       }
@@ -110,7 +118,7 @@ function DockerHere() {
       ) : null}
       {projects?.length === 0 ? (
         <div className="flex flex-wrap items-center justify-between gap-3 text-[13px] text-ink-2">
-          <span>Nothing runs in Docker here right now. Start a compose project, or bring a stack back from a machine.</span>
+          <span>No compose projects in Docker here right now. Start one, or bring a stack back from a machine.</span>
           <Button onClick={() => setCopyOpen({ open: true, toThisComputer: true })} disabled={!canCopy}>
             Copy a stack here
           </Button>
@@ -121,6 +129,11 @@ function DockerHere() {
           {projects.map((project) => (
             <ProjectRow key={project.name} project={project} canCopy={canCopy} onCopy={() => setCopyOpen({ open: true, sourceProject: project.name })} />
           ))}
+        </div>
+      ) : null}
+      {projects && looseNames.length > 0 ? (
+        <div className="mt-3">
+          <LooseContainers names={looseNames} />
         </div>
       ) : null}
     </Card>

@@ -4,6 +4,7 @@ import { plural } from "../lib/format";
 import type { EndpointRef, LocalProject, Stack } from "../lib/types";
 import { SpinnerIcon } from "../ui/icons";
 import { Chip, cx } from "../ui/primitives";
+import { LooseContainers } from "./LooseContainers";
 
 /** What happens to the source while its data is copied. */
 export type SourceMode = "keep" | "stop" | "leave";
@@ -80,6 +81,7 @@ export function EndpointPills({
 export function SourcePicker({
   source,
   projects,
+  looseNames,
   stacks,
   project,
   stackId,
@@ -89,6 +91,8 @@ export function SourcePicker({
   source: EndpointRef;
   /** null while this computer's Docker is being read. */
   projects: LocalProject[] | null;
+  /** This computer's containers outside any compose project, named so their absence is explained. */
+  looseNames: string[];
   stacks: Stack[];
   project: LocalProject | null;
   stackId: string | null;
@@ -113,9 +117,9 @@ export function SourcePicker({
       </div>
     );
   }
-  if (projects.length === 0) return <div className="mt-2 text-[12px] text-ink-3">Docker on this computer has no compose projects right now.</div>;
   return (
     <div className="mt-2 space-y-1.5">
+      {projects.length === 0 ? <div className="text-[12px] text-ink-3">Docker on this computer has no compose projects right now.</div> : null}
       {projects.map((p) => (
         <PickRow
           key={p.name}
@@ -128,6 +132,7 @@ export function SourcePicker({
           extra={`${plural(p.volumes.length, "volume")} · ${plural(p.ports.length, "port")}`}
         />
       ))}
+      <LooseContainers names={looseNames} />
     </div>
   );
 }

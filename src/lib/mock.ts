@@ -714,6 +714,7 @@ export const mockApi: Api = {
     }
     return [...stacks];
   },
+  looseContainers: async () => ["notes-db"],
   localProjects: async () => [
     {
       name: "shop-api",

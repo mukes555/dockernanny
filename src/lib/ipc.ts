@@ -131,6 +131,8 @@ const tauriApi = {
   /** `path` is the compose file or its folder. */
   setStackFolder: (id: string, path: string) => invoke<Stack[]>("set_stack_folder", { id, path }),
   localProjects: () => invoke<LocalProject[]>("local_projects"),
+  /** The names of this computer's containers outside any compose project, which a copy cannot carry. */
+  looseContainers: () => invoke<string[]>("loose_containers"),
   copyPlan: (request: CopyRequest) => invoke<CopyPlan>("copy_plan", { request }),
   copyStack: (request: CopyRequest) => invoke<CopyStarted>("copy_stack", { request }),
   copyProgress: () => invoke<CopyProgress[]>("copy_progress"),

@@ -87,6 +87,7 @@ function CopyForm({ intent, onClose }: { intent: CopyIntent; onClose: () => void
   const [data, setData] = useState(true);
   const [mode, setMode] = useState<SourceMode>("stop");
   const local = useLoaded(api.localProjects);
+  const loose = useLoaded(api.looseContainers);
   const copying = useAction("inline");
 
   // Opened from one of this computer's projects: pick it once the list is read.
@@ -187,7 +188,16 @@ function CopyForm({ intent, onClose }: { intent: CopyIntent; onClose: () => void
 
       <Section step="1" title="From">
         <EndpointPills chosen={source} machines={machines} online={isOnline} exclude={null} onPick={pickSource} />
-        <SourcePicker source={source} projects={local.data} stacks={stacks} project={project} stackId={stackId} onProject={pickProject} onStack={pickStack} />
+        <SourcePicker
+          source={source}
+          projects={local.data}
+          looseNames={loose.data ?? []}
+          stacks={stacks}
+          project={project}
+          stackId={stackId}
+          onProject={pickProject}
+          onStack={pickStack}
+        />
       </Section>
 
       <Section step="2" title="To">
