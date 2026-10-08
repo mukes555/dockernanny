@@ -25,6 +25,8 @@ pub const COPY_RUNNING: &str = "a copy of this stack is running; wait for it to 
 pub struct Operations {
     next_id: AtomicU64,
     running: Mutex<HashMap<String, Running>>,
+    /// When each stack's last operation ended, in ms since the epoch.
+    ended_ms: Mutex<HashMap<String, u64>>,
 }
 
 struct Running {
@@ -42,6 +44,14 @@ impl Operations {
 
     pub fn copying(&self, stack_id: &str) -> bool {
         self.running.lock().expect("operations lock").get(stack_id).is_some_and(|r| r.copy)
+    }
+
+    /// A `ps` that started before the stack's last operation ended may show
+    /// it mid-change; arriving after the fresh reading taken at the end, it
+    /// must not replace it.
+    pub fn ended_since(&self, stack_id: &str, started_ms: u64) -> bool {
+        let ended = self.ended_ms.lock().expect("ended lock").get(stack_id).copied().unwrap_or(0);
+        started_ms < ended
     }
 
     /// Takes the stack for a new operation and ends the one before, unless that is a copy.
@@ -76,6 +86,7 @@ impl Operations {
         let still_mine = running.get(stack_id).is_some_and(|r| r.id == id);
         if still_mine {
             running.remove(stack_id);
+            self.ended_ms.lock().expect("ended lock").insert(stack_id.to_string(), super::now_ms());
         }
     }
 }
@@ -150,5 +161,17 @@ mod tests {
         assert_eq!(refused.to_string(), COPY_RUNNING);
         assert!(operations.copying("s1") && operations.is_current("s1", copy));
         assert!(operations.start("s2", false).is_ok(), "other stacks are not affected");
+    }
+
+    #[test]
+    fn a_reading_from_before_an_operation_ended_is_stale() {
+        let operations = Operations::default();
+        assert!(!operations.ended_since("s1", 0), "no operation yet: every reading counts");
+        let reading_started = super::super::now_ms() - 1;
+        let id = operations.start("s1", false).unwrap();
+        operations.release("s1", id);
+        assert!(operations.ended_since("s1", reading_started), "started before the end: stale");
+        assert!(!operations.ended_since("s1", super::super::now_ms()), "started after the end: fresh");
+        assert!(!operations.ended_since("s2", reading_started), "other stacks are not affected");
     }
 }

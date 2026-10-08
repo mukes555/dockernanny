@@ -6,11 +6,16 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use std::time::Duration;
+
 use crate::containers::{self, Action, Container};
 use crate::job::Line;
 use crate::AppState;
 
 use super::CmdResult;
+
+/// The list is asked for every few seconds; a machine that takes longer is reported as not answering.
+const LIST_LIMIT: Duration = Duration::from_secs(15);
 
 pub const LOG_EVENT: &str = "container:log";
 
@@ -25,12 +30,13 @@ fn alias_of(state: &AppState, machine_id: &str) -> CmdResult<String> {
     Ok(machine.alias())
 }
 
-/// Every container on the machine, running or not, freshly read.
+/// Every container on the machine, running or not, freshly read. The
+/// machine page asks every few seconds, so this is a poll (`Ssh::run_poll`).
 #[tauri::command]
 pub async fn list_containers(state: State<'_, AppState>, machine_id: String) -> CmdResult<Vec<Container>> {
     let alias = alias_of(&state, &machine_id)?;
-    let out =
-        state.ssh.run(&alias, containers::LIST_SCRIPT).await.map_err(|err| format!("Could not reach the machine's Docker: {err:#}"))?;
+    let listed = state.ssh.run_poll(&alias, containers::LIST_SCRIPT, LIST_LIMIT).await;
+    let out = listed.map_err(|err| format!("Could not reach the machine's Docker: {err:#}"))?;
     if !out.ok() {
         // A machine that answers ssh but has no docker, or a docker that is down.
         return Err(if out.stderr.is_empty() { "The machine did not answer docker ps.".into() } else { out.stderr });
