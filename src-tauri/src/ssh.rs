@@ -3,9 +3,11 @@
 //! in the app spawns ssh directly. The processes themselves are started
 //! through `tools` (inside WSL on Windows) and run as a `Job` or to an `Output`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tokio::process::Command;
 
@@ -25,11 +27,29 @@ static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Long enough for `compose stop` of a big stack; streamed work (rsync,
 /// compose up, logs, copies) runs as a `Job` and has no such limit.
 const RUN_LIMIT: Duration = Duration::from_secs(120);
+/// What a machine's login shell sets that the polls need: PATH, and what
+/// Docker and Compose read (a DOCKER_HOST a profile exports for rootless
+/// Docker, for example).
+const LEARN_ENVIRONMENT: &str = "env | grep -E '^(PATH|DOCKER_[A-Z0-9_]*|COMPOSE_[A-Z0-9_]*)='";
+/// Learned again after this long, so a changed profile is picked up.
+const ENVIRONMENT_FOR: Duration = Duration::from_secs(30 * 60);
+/// What a shell answers when a command is not on its PATH.
+const NOT_FOUND: i32 = 127;
 
 #[derive(Clone)]
 pub struct Ssh {
     /// The app folder on this computer; the tools may see it elsewhere (`tools::home`).
     home: PathBuf,
+    /// Each machine's login environment by alias, for `run_poll`.
+    environments: Arc<Mutex<HashMap<String, LoginEnvironment>>>,
+}
+
+/// A machine's login environment as `export` lines that go in front of a
+/// script, and when it was learned.
+#[derive(Clone)]
+struct LoginEnvironment {
+    exports: String,
+    learned: Instant,
 }
 
 impl Ssh {
@@ -45,7 +65,7 @@ impl Ssh {
             longest_socket < 104,
             "home folder path is too long for ssh control sockets: {tools_home} (set DOCKERNANNY_HOME to a shorter path)"
         );
-        Ok(Self { home: home.to_path_buf() })
+        Ok(Self { home: home.to_path_buf(), environments: Arc::default() })
     }
 
     /// Makes the tools' folders and writes the config. At start and after
@@ -143,6 +163,56 @@ impl Ssh {
         }
     }
 
+    /// A poll: a short command sent every few seconds. It runs in a plain
+    /// shell with the machine's login environment set at the top, learned
+    /// with one login shell and kept for half an hour. A login shell for
+    /// every poll ran all of the machine's profile scripts each time (on
+    /// Ubuntu one of them writes to the system journal), dozens of times a
+    /// minute. A command the learned PATH does not find makes the next poll
+    /// learn again.
+    pub async fn run_poll(&self, alias: &str, script: &str, limit: Duration) -> anyhow::Result<Output> {
+        let Some(exports) = self.login_environment(alias, limit).await else {
+            return self.run_within(alias, script, limit).await;
+        };
+        let script = ends_with_the_connection(&format!("{exports}{script}"));
+        let out = match tokio::time::timeout(limit, job::run_with_stdin(self.plain_command(alias), &script)).await {
+            Ok(result) => result?,
+            Err(_) => return Err(TimedOut(limit).into()),
+        };
+        if out.code == Some(NOT_FOUND) {
+            self.forget_login_environment(alias);
+        }
+        Ok(out)
+    }
+
+    /// The `export` lines for `alias`, learned again when older than half
+    /// an hour. None when the machine does not answer.
+    async fn login_environment(&self, alias: &str, limit: Duration) -> Option<String> {
+        let kept = self.environments.lock().expect("environments lock").get(alias).cloned();
+        if let Some(kept) = kept.filter(|kept| kept.learned.elapsed() < ENVIRONMENT_FOR) {
+            return Some(kept.exports);
+        }
+        let out = self.run_within(alias, LEARN_ENVIRONMENT, limit).await.ok().filter(Output::ok)?;
+        let exports = exports_from_env(&out.stdout);
+        let learned = LoginEnvironment { exports: exports.clone(), learned: Instant::now() };
+        self.environments.lock().expect("environments lock").insert(alias.to_string(), learned);
+        Some(exports)
+    }
+
+    /// The next poll learns the machine's environment afresh, as after
+    /// Check connection, which may follow a change on the machine.
+    pub fn forget_login_environment(&self, alias: &str) {
+        self.environments.lock().expect("environments lock").remove(alias);
+    }
+
+    /// `ssh -F <config> <alias> sh`: a plain shell, for `run_poll`.
+    fn plain_command(&self, alias: &str) -> Command {
+        tracing::debug!(target: "dockernanny::remote", "ssh {alias} (poll)");
+        let mut cmd = tools::unix("ssh");
+        cmd.arg("-F").arg(self.config_path()).arg(alias).arg("sh");
+        cmd
+    }
+
     /// Like `run`, but streams output lines as they arrive and can be
     /// cancelled; cancelling ends the command on the machine too.
     pub fn job(&self, alias: &str, script: &str, on_line: impl FnMut(Line) + Send + 'static) -> anyhow::Result<Job> {
@@ -202,6 +272,20 @@ pub fn ends_with_the_connection(script: &str) -> String {
     format!("exec 3<&0\n(\n{script}\n) </dev/null & w=$!; ( cat <&3 >/dev/null; kill 0 ) >/dev/null 2>&1 & wait $w; c=$?; exit $c\n")
 }
 
+/// `NAME=value` lines from `env` as `export NAME='value'` lines. A line
+/// whose name is not a plain shell name is left out rather than trusted.
+fn exports_from_env(env: &str) -> String {
+    let mut exports = String::new();
+    for line in env.lines() {
+        let Some((name, value)) = line.split_once('=') else { continue };
+        let plain_name = !name.is_empty() && name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+        if plain_name {
+            exports.push_str(&format!("export {name}={}\n", crate::stack::shell_quote(value)));
+        }
+    }
+    exports
+}
+
 /// The known_hosts text with one line for `marker`, replacing any older one.
 fn merge_known_hosts(existing: &str, marker: &str, key_type: &str, blob: &str) -> String {
     let mut lines: Vec<&str> = existing.lines().filter(|line| line.split_whitespace().next() != Some(marker)).collect();
@@ -233,6 +317,9 @@ fn host_block(machine: &Machine, key: &str, places: &Places) -> String {
     // user's own.
     let checking = if machine.pinned { "yes" } else { "accept-new" };
     let trust = format!("UserKnownHostsFile {} {}\n  StrictHostKeyChecking {checking}", places.known_hosts, places.pinned_hosts);
+    // The shared connection outlives the slowest poll (once a minute while
+    // the window is hidden): at 60 s it expired just before each one, which
+    // then logged in afresh. The app closes the masters when it quits.
     format!(
         "\nHost {alias}\n  \
            HostName {host}\n  \
@@ -245,7 +332,7 @@ fn host_block(machine: &Machine, key: &str, places: &Places) -> String {
            ConnectTimeout 5\n  \
            ControlMaster auto\n  \
            ControlPath {control}\n  \
-           ControlPersist 60s\n  \
+           ControlPersist 10m\n  \
            ServerAliveInterval 15\n  \
            ServerAliveCountMax 2\n  \
            LogLevel ERROR\n",
@@ -260,6 +347,31 @@ fn host_block(machine: &Machine, key: &str, places: &Places) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_login_environment_becomes_quoted_exports() {
+        let env = "PATH=/usr/local/bin:/usr/bin:/bin\n\
+                   DOCKER_HOST=unix:///run/user/1000/docker.sock\n\
+                   COMPOSE_PROFILES=it's,dev\n\
+                   lower=ignored\n\
+                   not a line\n";
+        assert_eq!(
+            exports_from_env(env),
+            "export PATH='/usr/local/bin:/usr/bin:/bin'\n\
+             export DOCKER_HOST='unix:///run/user/1000/docker.sock'\n\
+             export COMPOSE_PROFILES='it'\\''s,dev'\n"
+        );
+        assert_eq!(exports_from_env(""), "");
+    }
+
+    /// The learned exports run in a real `sh`, the way a poll's script does.
+    #[cfg(unix)]
+    #[test]
+    fn learned_exports_set_the_environment_of_a_plain_shell() {
+        let exports = exports_from_env("PATH=/usr/bin:/bin\nDOCKER_HOST=tcp://box:2375\n");
+        let out = std::process::Command::new("sh").arg("-c").arg(format!("{exports}echo \"$PATH|$DOCKER_HOST\"")).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "/usr/bin:/bin|tcp://box:2375");
+    }
 
     fn machine(port: u16, pinned: bool) -> Machine {
         Machine {

@@ -51,7 +51,10 @@ pub async fn computer_readiness(state: State<'_, AppState>) -> CmdResult<Vec<Doc
     // no ssh config yet; the check that finds it working writes one.
     let wsl_answers = rows.iter().any(|row| row.key == "wsl" && row.ok);
     if wsl_answers {
-        if let Err(err) = state.ssh.prepare(&state.store.machines()) {
+        // Off the async threads: on Windows this starts several wsl.exe.
+        let (ssh, machines) = (state.ssh.clone(), state.store.machines());
+        let prepared = tauri::async_runtime::spawn_blocking(move || ssh.prepare(&machines)).await;
+        if let Ok(Err(err)) = prepared {
             tracing::warn!("the tools could not be prepared in WSL: {err:#}");
         }
     }

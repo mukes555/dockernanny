@@ -62,21 +62,41 @@ pub async fn doctor(ssh: &Ssh, machine: &Machine, mut report: impl FnMut(&Doctor
         return rows;
     }
     let script = TOOLS_SCRIPT.replace("DOCKER_LIMIT_S", &DOCKER_LIMIT_S.to_string());
-    let answers = match ssh.run_within(&machine.alias(), &script, CHECK_TIMEOUT).await {
-        Ok(out) => parse_answers(&out.stdout),
+    let mut fail_all = |why: String| {
+        for (key, label) in TOOLS {
+            add(row(key, label, false, why.clone(), None));
+        }
+    };
+    let out = match ssh.run_within(&machine.alias(), &script, CHECK_TIMEOUT).await {
+        Ok(out) => out,
         Err(err) => {
-            let why = format!("{err:#}");
-            for (key, label) in TOOLS {
-                add(row(key, label, false, why.clone(), None));
-            }
+            fail_all(format!("{err:#}"));
             return rows;
         }
     };
+    let answers = parse_answers(&out.stdout);
+    // Not one answer: the checks never ran (the connection dropped, a
+    // profile script exited). Every row then says why, instead of "no answer".
+    if answers.is_empty() {
+        fail_all(why_unanswered(&out));
+        return rows;
+    }
     add(docker_row(answers.get("docker")));
     add(compose_row(answers.get("compose")));
     add(rsync_row(answers.get("rsync")));
     add(host_row(answers.get("host")));
     rows
+}
+
+/// Why the tools check gave no answers: the last thing ssh or the shell
+/// printed, or else how it ended.
+fn why_unanswered(out: &Output) -> String {
+    let last_said = out.stderr.lines().map(str::trim).rfind(|line| !line.is_empty());
+    match (last_said, out.code) {
+        (Some(said), _) => said.to_string(),
+        (None, Some(code)) => format!("the check ended with code {code} before it answered"),
+        (None, None) => "the check was cut off before it answered".into(),
+    }
 }
 
 /// The rows after SSH, in the order the window lists them.
@@ -247,6 +267,15 @@ fn host_row(answer: Option<&Answer>) -> DoctorRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_check_that_never_answered_says_why() {
+        let dropped = failed("Warning: something\nConnection to 192.0.2.10 closed by remote host.\n\n");
+        assert_eq!(why_unanswered(&dropped), "Connection to 192.0.2.10 closed by remote host.");
+        assert_eq!(why_unanswered(&failed("")), "the check ended with code 255 before it answered");
+        let cut_off = Output { code: None, stdout: String::new(), stderr: String::new() };
+        assert_eq!(why_unanswered(&cut_off), "the check was cut off before it answered");
+    }
 
     fn failed(stderr: &str) -> Output {
         Output { code: Some(255), stdout: String::new(), stderr: stderr.into() }

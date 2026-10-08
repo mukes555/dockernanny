@@ -17,8 +17,10 @@ use super::{windows_steps, wsl_script, MIN_WINDOWS_BUILD};
 /// sharing page probes every ten seconds. What rarely changes is kept this
 /// long once all of it is fine, and read again after Set up.
 const STEADY_FOR: Duration = Duration::from_secs(10 * 60);
-/// The firewall rules and the network's category, once both are fine.
-const NETWORK_FOR: Duration = Duration::from_secs(60);
+/// The firewall rules and the network's category, once both are fine. Ten
+/// minutes, like the rest: at 60 s a hidden window, which probes every
+/// minute, read them afresh each time with two PowerShell starts.
+const NETWORK_FOR: Duration = Duration::from_secs(10 * 60);
 
 pub struct Windows {
     /// The WSL distribution that runs Docker and sshd.
@@ -347,6 +349,10 @@ impl Platform for Windows {
     fn established_peers(&self, port: u16) -> Vec<String> {
         // sshd lives inside the distro, so its connection table is there too.
         super::paired::parse_established(&self.wsl(&["-d", &self.distro, "--", "ss", "-tn"]).stdout, port)
+    }
+
+    fn forget_kept(&self) {
+        self.forget_what_was_read();
     }
 
     fn hostname(&self) -> String {

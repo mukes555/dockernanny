@@ -9,7 +9,15 @@ use tauri::{AppHandle, Emitter, State};
 use super::{fail, CmdResult};
 use crate::doctor::{self, DoctorEvent, DoctorRow};
 use crate::machine::{self, Machine, MachineStats};
+use crate::ssh::Ssh;
 use crate::{forward, guide, pairing, stack, AppState};
+
+/// Writes the ssh config off the async threads: on Windows each write starts
+/// wsl.exe, which blocks while it runs.
+async fn write_config(ssh: &Ssh, machines: &[Machine]) -> CmdResult<()> {
+    let (ssh, machines) = (ssh.clone(), machines.to_vec());
+    tauri::async_runtime::spawn_blocking(move || ssh.write_config(&machines)).await.map_err(|err| err.to_string())?.map_err(fail)
+}
 
 #[tauri::command]
 pub fn list_machines(state: State<'_, AppState>) -> Vec<Machine> {
@@ -58,10 +66,13 @@ pub async fn doctor(app: AppHandle, state: State<'_, AppState>, machine: Machine
     let mut machines = state.store.machines();
     machines.retain(|m| m.id != machine.id);
     machines.push(machine.clone());
-    state.ssh.write_config(&machines).map_err(fail)?;
+    write_config(&state.ssh, &machines).await?;
     // A check is asked for after fixing something on the machine; the
-    // shared connection may predate the fix, so the check logs in afresh.
-    state.ssh.retire_master(&machine.alias());
+    // shared connection may predate the fix, so the check logs in afresh,
+    // and the polls learn the machine's login environment again.
+    let (ssh, alias) = (state.ssh.clone(), machine.alias());
+    ssh.forget_login_environment(&alias);
+    let _ = tauri::async_runtime::spawn_blocking(move || ssh.retire_master(&alias)).await;
 
     let machine_id = machine.id.clone();
     let rows = doctor::doctor(&state.ssh, &machine, |row| {
@@ -78,7 +89,7 @@ pub async fn add_machine(app: AppHandle, state: State<'_, AppState>, machine: Ma
     let mut machines = state.store.machines();
     machines.retain(|m| m.id != machine.id);
     machines.push(machine.clone());
-    state.ssh.write_config(&machines).map_err(fail)?;
+    write_config(&state.ssh, &machines).await?;
     state.store.save_machines(machines.clone()).map_err(fail)?;
 
     let ssh = state.ssh.clone();
@@ -107,12 +118,14 @@ pub async fn remove_machine(app: AppHandle, state: State<'_, AppState>, id: Stri
     }
     stacks.retain(|s| s.machine_id != id);
     state.store.save_stacks(stacks).map_err(fail)?;
-    state.ssh.exit_master(&machine.alias(), None);
+    let (ssh, alias) = (state.ssh.clone(), machine.alias());
+    ssh.forget_login_environment(&alias);
+    let _ = tauri::async_runtime::spawn_blocking(move || ssh.exit_master(&alias, None)).await;
     if machine.docker_context {
         let _ = machine::set_docker_context(&machine, false).await;
     }
     machines.retain(|m| m.id != id);
-    state.ssh.write_config(&machines).map_err(fail)?;
+    write_config(&state.ssh, &machines).await?;
     state.store.save_machines(machines.clone()).map_err(fail)?;
     state.stats.lock().expect("stats lock").remove(&id);
     Ok(machines)
@@ -190,7 +203,7 @@ pub async fn pair_machine(
     let mut machines = state.store.machines();
     machines.retain(|m| !(m.host == machine.host && m.port == machine.port));
     machines.push(machine.clone());
-    state.ssh.write_config(&machines).map_err(fail)?;
+    write_config(&state.ssh, &machines).await?;
     state.store.save_machines(machines).map_err(fail)?;
 
     let ssh = state.ssh.clone();

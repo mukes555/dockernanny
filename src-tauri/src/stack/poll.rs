@@ -8,7 +8,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tokio::task::JoinSet;
 
-use super::{derive_phase, set_status, Stack};
+use super::{derive_phase, now_ms, set_status, Stack};
 use crate::compose::{self, ServiceState};
 use crate::ssh::Ssh;
 use crate::{forward, AppState};
@@ -36,13 +36,14 @@ pub fn spawn_status_loop(app: AppHandle) {
                 let Some(machine) = state.store.machine(&machine_id) else { continue };
                 let ssh: Ssh = state.ssh.clone();
                 polls.spawn(async move {
-                    let out = ssh.run_within(&machine.alias(), &ps_script(&stacks), POLL_TIMEOUT).await;
-                    (stacks, out)
+                    let started_ms = now_ms();
+                    let out = ssh.run_poll(&machine.alias(), &ps_script(&stacks), POLL_TIMEOUT).await;
+                    (stacks, out, started_ms)
                 });
             }
             while let Some(joined) = polls.join_next().await {
                 // A poll task that died must not drop the other machines' answers.
-                let Ok((stacks, out)) = joined else { continue };
+                let Ok((stacks, out, started_ms)) = joined else { continue };
                 // Unreachable right now: keep the last known picture.
                 let Ok(out) = out else { continue };
                 let sections = split_by_marker(&out.stdout);
@@ -53,7 +54,7 @@ pub fn spawn_status_loop(app: AppHandle) {
                     if !missing && !ps_answered(section) {
                         continue;
                     }
-                    apply_ps(&app, &stack.id, compose::parse_ps(section), missing);
+                    apply_ps(&app, &stack.id, compose::parse_ps(section), missing, started_ms);
                 }
             }
             crate::tray::until_next_poll(&app, POLL_EVERY, POLL_EVERY_HIDDEN).await;
@@ -63,10 +64,14 @@ pub fn spawn_status_loop(app: AppHandle) {
 
 /// What one `compose ps` said about a stack, applied the same way by the
 /// poll and after an operation. A stack removed meanwhile is not brought
-/// back, and while an operation holds the stack its phase is left to it.
-pub fn apply_ps(app: &AppHandle, stack_id: &str, services: Vec<ServiceState>, folder_missing: bool) {
+/// back, while an operation holds the stack its phase is left to it, and a
+/// reading that started before the last operation ended is dropped.
+pub fn apply_ps(app: &AppHandle, stack_id: &str, services: Vec<ServiceState>, folder_missing: bool, started_ms: u64) {
     let state = app.state::<AppState>();
     let Some(stack) = state.store.stack(stack_id) else { return };
+    if state.operations.ended_since(stack_id, started_ms) {
+        return;
+    }
     forward::reconcile(app, &stack, &services);
     let held = state.operations.holds(stack_id);
     set_status(app, stack_id, |status| {

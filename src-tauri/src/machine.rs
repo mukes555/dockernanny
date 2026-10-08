@@ -119,7 +119,7 @@ pub async fn poll(ssh: &Ssh, machine: &Machine) -> MachineStats {
 async fn poll_with(ssh: &Ssh, machine: &Machine, full: Option<&Probe>) -> MachineStats {
     let offline = |error: String| MachineStats { error: Some(error), ..Default::default() };
     let script = probe::script(full.is_none());
-    match ssh.run_within(&machine.alias(), &script, POLL_TIMEOUT).await {
+    match ssh.run_poll(&machine.alias(), &script, POLL_TIMEOUT).await {
         Ok(out) if out.ok() => {
             let read = probe::parse(&out.stdout);
             let probe = match full {
@@ -169,9 +169,11 @@ pub fn spawn_stats_loop(app: AppHandle) {
         let mut tick: u32 = 0;
         loop {
             let state = app.state::<AppState>();
-            let due: Vec<Machine> = state
-                .store
-                .machines()
+            let machines = state.store.machines();
+            // A removed machine takes its counts with it.
+            failures.retain(|id, _| machines.iter().any(|m| &m.id == id));
+            full_readings.retain(|id, _| machines.iter().any(|m| &m.id == id));
+            let due: Vec<Machine> = machines
                 .into_iter()
                 .filter(|machine| {
                     let failed_before = failures.get(&machine.id).copied().unwrap_or(0) > 0;
@@ -227,6 +229,10 @@ fn remember(readings: &mut HashMap<String, FullReading>, machine_id: &str, stats
 
 pub fn publish(app: &AppHandle, machine_id: String, stats: MachineStats) {
     let state = app.state::<AppState>();
+    // A poll that was under way when its machine was removed must not bring it back.
+    if state.store.machine(&machine_id).is_none() {
+        return;
+    }
     state.stats.lock().expect("stats lock").insert(machine_id.clone(), stats.clone());
     let _ = app.emit(STATS_EVENT, StatsEvent { machine_id, stats });
 }

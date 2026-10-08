@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::AppState;
@@ -54,6 +54,9 @@ pub struct Updates {
     status: Mutex<UpdateStatus>,
     found: Mutex<Option<Update>>,
     last_answer: Mutex<Option<SystemTime>>,
+    /// When a check last started, answered or not: offline, each focus of
+    /// the window would otherwise ask again.
+    last_try: Mutex<Option<SystemTime>>,
 }
 
 impl Updates {
@@ -68,6 +71,7 @@ impl Updates {
             return false;
         }
         status.checking = true;
+        *self.last_try.lock().expect("last try lock") = Some(SystemTime::now());
         true
     }
 
@@ -105,29 +109,33 @@ pub fn start(app: &AppHandle) {
     });
 }
 
-/// The window came forward: look again if the last answer is an hour old.
-pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
-    if matches!(event, WindowEvent::Focused(true)) {
-        let app = window.app_handle().clone();
-        tauri::async_runtime::spawn(async move { check_if_due(&app).await });
-    }
+/// The window came back into view (see `tray::focused`): look again if the
+/// last answer is an hour old.
+pub fn window_came_back(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move { check_if_due(&app).await });
 }
 
 async fn check_if_due(app: &AppHandle) {
     let allowed = app.state::<AppState>().store.settings().unwrap_or_default().check_updates;
-    let last_answer = *app.state::<Updates>().last_answer.lock().expect("last answer lock");
-    if is_due(allowed, last_answer, SystemTime::now()) {
+    let updates = app.state::<Updates>();
+    let last_answer = *updates.last_answer.lock().expect("last answer lock");
+    let last_try = *updates.last_try.lock().expect("last try lock");
+    if is_due(allowed, last_answer, last_try, SystemTime::now()) {
         check_now(app).await;
     }
 }
 
-fn is_due(allowed: bool, last_answer: Option<SystemTime>, now: SystemTime) -> bool {
+/// Due an hour after the last answer, but no sooner than ten minutes after
+/// the last try, so a computer that is offline is not asked again and again.
+fn is_due(allowed: bool, last_answer: Option<SystemTime>, last_try: Option<SystemTime>, now: SystemTime) -> bool {
     if !allowed {
         return false;
     }
-    let Some(last) = last_answer else { return true };
-    // A clock set back makes the answer look new; checking then is harmless.
-    now.duration_since(last).map(|age| age >= CHECK_EVERY).unwrap_or(true)
+    // A clock set back makes a time look new; checking then is harmless.
+    let answer_is_old = last_answer.is_none_or(|last| now.duration_since(last).map(|age| age >= CHECK_EVERY).unwrap_or(true));
+    let tried_a_moment_ago = last_try.is_some_and(|last| now.duration_since(last).map(|age| age < LOOK_EVERY).unwrap_or(false));
+    answer_is_old && !tried_a_moment_ago
 }
 
 /// Asks the release feed now. The answer goes to the window, the tray and
@@ -137,7 +145,9 @@ pub async fn check_now(app: &AppHandle) -> UpdateStatus {
     if !updates.begin() {
         return updates.status();
     }
-    let previous_error = updates.status().error;
+    let before = updates.status();
+    let previous_error = before.error;
+    let previous_version = before.available.map(|a| a.version);
     let answer = match updater(app) {
         Ok(updater) => updater.check().await.map_err(|err| err.to_string()),
         Err(err) => Err(err.to_string()),
@@ -150,7 +160,11 @@ pub async fn check_now(app: &AppHandle) -> UpdateStatus {
         (None, None) => tracing::info!("update check: up to date"),
     }
     let _ = app.emit(STATUS_EVENT, &status);
-    crate::tray::show_update(app, status.available.as_ref().map(|a| a.version.as_str()));
+    // The tray menu is rebuilt only when what it offers changed.
+    let version = status.available.as_ref().map(|a| a.version.clone());
+    if version != previous_version {
+        crate::tray::show_update(app, version.as_deref());
+    }
     status
 }
 
@@ -216,13 +230,24 @@ mod tests {
     #[test]
     fn a_check_is_due_at_start_and_an_hour_after_the_last_answer() {
         let now = SystemTime::now();
-        assert!(is_due(true, None, now), "never checked: check at start");
-        assert!(!is_due(false, None, now), "the setting is off: never");
-        assert!(!is_due(true, Some(now - Duration::from_secs(59 * 60)), now));
-        assert!(is_due(true, Some(now - Duration::from_secs(61 * 60)), now));
+        let minutes_ago = |m: u64| Some(now - Duration::from_secs(m * 60));
+        assert!(is_due(true, None, None, now), "never checked: check at start");
+        assert!(!is_due(false, None, None, now), "the setting is off: never");
+        assert!(!is_due(true, minutes_ago(59), minutes_ago(59), now));
+        assert!(is_due(true, minutes_ago(61), minutes_ago(61), now));
         // Asleep all night: the first look after waking checks.
-        assert!(is_due(true, Some(now - Duration::from_secs(9 * 60 * 60)), now));
-        assert!(is_due(true, Some(now + Duration::from_secs(60)), now), "a clock set back does not block checks");
+        assert!(is_due(true, minutes_ago(9 * 60), minutes_ago(9 * 60), now));
+        assert!(is_due(true, Some(now + Duration::from_secs(60)), None, now), "a clock set back does not block checks");
+    }
+
+    #[test]
+    fn an_offline_computer_is_not_asked_again_at_every_focus() {
+        let now = SystemTime::now();
+        let minutes_ago = |m: u64| Some(now - Duration::from_secs(m * 60));
+        // The last answer is old because the last tries failed.
+        assert!(!is_due(true, minutes_ago(90), minutes_ago(2), now), "tried two minutes ago");
+        assert!(is_due(true, minutes_ago(90), minutes_ago(11), now), "ten minutes on, try again");
+        assert!(!is_due(true, None, minutes_ago(1), now), "the first try at start failed a minute ago");
     }
 
     /// What one of GitHub's download servers did from one network: the name's

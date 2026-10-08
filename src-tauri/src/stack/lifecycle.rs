@@ -230,10 +230,11 @@ pub async fn refresh_now(app: &AppHandle, stack: &Stack) -> bool {
     let state = app.state::<AppState>();
     let Some(machine) = state.store.machine(&stack.machine_id) else { return false };
     let script = stack.compose_cmd("ps --all --format json");
-    let services = match state.ssh.run_within(&machine.alias(), &script, POLL_TIMEOUT).await {
+    let started_ms = now_ms();
+    let services = match state.ssh.run_poll(&machine.alias(), &script, POLL_TIMEOUT).await {
         Ok(out) if out.ok() => compose::parse_ps(&out.stdout),
         _ => return false,
     };
-    poll::apply_ps(app, &stack.id, services, false);
+    poll::apply_ps(app, &stack.id, services, false, started_ms);
     true
 }

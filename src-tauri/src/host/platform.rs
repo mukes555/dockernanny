@@ -141,6 +141,10 @@ pub trait Platform: Send + Sync {
     fn spawn_keepalive(&self) -> Result<Option<Child>, String>;
     /// The peer addresses with an ssh session open on `port` right now.
     fn established_peers(&self, port: u16) -> Vec<String>;
+    /// Forgets the facts a platform keeps between probes, so the next probe
+    /// reads everything again: the user asked for a fresh look. Nothing is
+    /// kept unless a platform says so.
+    fn forget_kept(&self) {}
     fn lan_ipv4(&self) -> Vec<String> {
         lan_addresses()
     }
