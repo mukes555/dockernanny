@@ -29,6 +29,10 @@ pub const FORWARD_EVENT: &str = "forward:state";
 /// ConnectTimeout is 5 s; a login that has not finished well after that will not.
 const READY_TIMEOUT: Duration = Duration::from_secs(12);
 const CHECK_EVERY: Duration = Duration::from_millis(250);
+const QUICK_CHECKS_FOR: Duration = Duration::from_secs(1);
+const SLOW_CHECK_EVERY: Duration = Duration::from_secs(1);
+/// How often a bridge waiting for its machine looks at what the stats poll found.
+const ONLINE_CHECK_EVERY: Duration = Duration::from_secs(3);
 /// One control request; the master answers at once or not at all.
 const CONTROL_LIMIT: Duration = Duration::from_secs(10);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -135,7 +139,12 @@ pub fn reconcile(app: &AppHandle, stack: &Stack, services: &[ServiceState]) {
         let stack_id = stack.id.clone();
         move |forward: ForwardState| publish(&app, &stack_id, forward)
     };
-    let wanted = spawn_bridge(state.ssh.clone(), machine.alias(), stack.id.clone(), desired, report);
+    let machine_online = {
+        let app = app.clone();
+        let machine_id = machine.id.clone();
+        move || app.state::<AppState>().stats.lock().expect("stats lock").get(&machine_id).is_some_and(|stats| stats.online)
+    };
+    let wanted = spawn_bridge(state.ssh.clone(), machine.alias(), stack.id.clone(), desired, report, machine_online);
     forwarders.insert(stack.id.clone(), Forwarder { wanted });
 }
 
@@ -164,16 +173,18 @@ pub fn exit_all(ssh: &Ssh) {
 /// Starts a bridge that carries `ports` to the machine behind `alias` and
 /// tells `report` how it stands. Other ports go in through the returned
 /// sender; dropping the sender ends the bridge. `name` names its sockets.
+/// After a failed try it waits for `machine_online` before dialling again.
 pub fn spawn_bridge(
     ssh: Ssh,
     alias: String,
     name: String,
     ports: Vec<ForwardPort>,
     report: impl Fn(ForwardState) + Send + Sync + 'static,
+    machine_online: impl Fn() -> bool + Send + Sync + 'static,
 ) -> watch::Sender<Vec<ForwardPort>> {
     let (wanted, watching) = watch::channel(ports);
     let command = SshCommand { program: "ssh".into(), config: ssh.config_path(), sockets: ssh.forward_dir() };
-    tauri::async_runtime::spawn(run(command, alias, name, watching, report));
+    tauri::async_runtime::spawn(run(command, alias, name, watching, report, machine_online));
     wanted
 }
 
@@ -196,7 +207,14 @@ enum Ended {
     Died,
 }
 
-async fn run(ssh: SshCommand, alias: String, name: String, mut wanted: watch::Receiver<Vec<ForwardPort>>, report: impl Fn(ForwardState)) {
+async fn run(
+    ssh: SshCommand,
+    alias: String,
+    name: String,
+    mut wanted: watch::Receiver<Vec<ForwardPort>>,
+    report: impl Fn(ForwardState),
+    machine_online: impl Fn() -> bool,
+) {
     let mut attempts: u32 = 0;
     loop {
         let ports = wanted.borrow_and_update().clone();
@@ -215,7 +233,10 @@ async fn run(ssh: SshCommand, alias: String, name: String, mut wanted: watch::Re
         let closed = match ended {
             Ended::Closed => true,
             Ended::Changed => false,
-            Ended::Died => wait_before_retry(attempts, &mut wanted).await == Wait::Closed,
+            Ended::Died => {
+                let waited = wait_before_retry(attempts, &mut wanted).await;
+                waited == Wait::Closed || wait_until_online(&machine_online, &mut wanted).await == Wait::Closed
+            }
         };
         if closed {
             report(ForwardState::default());
@@ -306,6 +327,20 @@ async fn wait_before_retry(attempts: u32, wanted: &mut watch::Receiver<Vec<Forwa
     }
 }
 
+/// A machine that went away (asleep, unplugged, off the network) is not
+/// dialled again until the stats poll hears from it: each try costs an ssh
+/// that waits out its connect timeout and a dozen readiness checks, a
+/// wsl.exe each on Windows, for as long as the machine stays away.
+async fn wait_until_online(machine_online: &impl Fn() -> bool, wanted: &mut watch::Receiver<Vec<ForwardPort>>) -> Wait {
+    while !machine_online() {
+        tokio::select! {
+            _ = tokio::time::sleep(ONLINE_CHECK_EVERY) => {}
+            changed = wanted.changed() => if changed.is_err() { return Wait::Closed },
+        }
+    }
+    Wait::Over
+}
+
 /// One ssh process of a bridge and the control requests sent to it.
 struct Tunnel<'a> {
     ssh: &'a SshCommand,
@@ -338,7 +373,8 @@ impl Tunnel<'_> {
     /// only after it has logged in and bound every port, so no test
     /// connection has to go through to the service behind the bridge.
     async fn wait_until_ready(&self, child: &mut Child) -> bool {
-        let deadline = Instant::now() + READY_TIMEOUT;
+        let started = Instant::now();
+        let deadline = started + READY_TIMEOUT;
         while Instant::now() < deadline {
             if child.try_wait().ok().flatten().is_some() {
                 return false;
@@ -346,7 +382,10 @@ impl Tunnel<'_> {
             if self.control("check", None).await.is_ok() {
                 return true;
             }
-            tokio::time::sleep(CHECK_EVERY).await;
+            // Most bridges are up within a second. A slower login is asked
+            // once a second: each check starts an ssh (a wsl.exe on Windows).
+            let quick_start = started.elapsed() < QUICK_CHECKS_FOR;
+            tokio::time::sleep(if quick_start { CHECK_EVERY } else { SLOW_CHECK_EVERY }).await;
         }
         false
     }
@@ -385,7 +424,9 @@ impl Tunnel<'_> {
         let _ = child.start_kill();
         let _ = child.wait().await;
         let _ = self.control("exit", None).await;
-        tools::remove_file(&self.socket);
+        // Off the async threads: on Windows removing it starts wsl.exe.
+        let socket = self.socket.clone();
+        let _ = tokio::task::spawn_blocking(move || tools::remove_file(&socket)).await;
     }
 }
 
@@ -423,6 +464,12 @@ async fn what_ssh_said(reader: JoinHandle<String>, otherwise: &str) -> String {
 
 fn publish(app: &AppHandle, stack_id: &str, state: ForwardState) {
     let app_state = app.state::<AppState>();
+    // A bridge being ended (its stack removed or turned off) still says so
+    // once; that word must not bring back the state `stop` just cleared.
+    let still_bridged = app_state.forwarders.lock().expect("forwarders lock").contains_key(stack_id);
+    if !still_bridged {
+        return;
+    }
     app_state.forward_states.lock().expect("forward states lock").insert(stack_id.to_string(), state.clone());
     let _ = app.emit(FORWARD_EVENT, ForwardEvent { stack_id: stack_id.to_string(), state });
 }

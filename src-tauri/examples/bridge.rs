@@ -47,7 +47,9 @@ async fn main() -> anyhow::Result<()> {
     let report = move |state: ForwardState| {
         let _ = reports.send(state);
     };
-    let wanted = forward::spawn_bridge(ssh.clone(), alias.clone(), "example".into(), vec![to_sshd(first)], report);
+    // No stats poll runs here, so the machine counts as answering.
+    let machine_online = || true;
+    let wanted = forward::spawn_bridge(ssh.clone(), alias.clone(), "example".into(), vec![to_sshd(first)], report, machine_online);
 
     println!("== up");
     wait_for(&mut updates, |s| s.up && s.ports == [to_sshd(first)]).await?;

@@ -87,6 +87,8 @@ fn a_restarting_service_keeps_its_bridge() {
 mod bridge {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
 
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
@@ -142,12 +144,22 @@ esac
         ssh: SshCommand,
         ports: Vec<ForwardPort>,
     ) -> (watch::Sender<Vec<ForwardPort>>, UnboundedReceiver<ForwardState>, JoinHandle<()>) {
+        start_with(ssh, ports, Arc::new(AtomicBool::new(true)))
+    }
+
+    /// `online` stands for what the stats poll found about the machine.
+    fn start_with(
+        ssh: SshCommand,
+        ports: Vec<ForwardPort>,
+        online: Arc<AtomicBool>,
+    ) -> (watch::Sender<Vec<ForwardPort>>, UnboundedReceiver<ForwardState>, JoinHandle<()>) {
         let (states, said) = unbounded_channel();
         let (wanted, watching) = watch::channel(ports);
         let report = move |state| {
             let _ = states.send(state);
         };
-        let bridge = tokio::spawn(run(ssh, "box".into(), "shop".into(), watching, report));
+        let machine_online = move || online.load(Ordering::Relaxed);
+        let bridge = tokio::spawn(run(ssh, "box".into(), "shop".into(), watching, report, machine_online));
         (wanted, said, bridge)
     }
 
@@ -190,6 +202,29 @@ esac
         assert_eq!(down.attempts, 1);
 
         // Ended while it waits to try again.
+        drop(wanted);
+        assert_eq!(next(&mut said).await, ForwardState::default());
+        bridge.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_bridge_to_a_machine_that_went_away_waits_for_it_to_answer() {
+        let (dir, ssh) = stand_in_ssh("away");
+        std::fs::write(dir.join("refuse-master"), "").unwrap();
+        let online = Arc::new(AtomicBool::new(false));
+        let (wanted, mut said, bridge) = start_with(ssh, vec![port(8080, 80)], online.clone());
+        assert!(!next(&mut said).await.up, "the first try fails");
+
+        // The backoff after one failure is 2 s; while the poll says the machine
+        // is away no second try follows, though it would now succeed.
+        std::fs::remove_file(dir.join("refuse-master")).unwrap();
+        let quiet = tokio::time::timeout(Duration::from_secs(6), said.recv()).await;
+        assert!(quiet.is_err(), "the bridge dialled a machine the poll says is away");
+
+        online.store(true, Ordering::Relaxed);
+        assert!(next(&mut said).await.up, "the machine answers again: the bridge comes up");
+        assert_eq!(log(&dir), "master\n");
+
         drop(wanted);
         assert_eq!(next(&mut said).await, ForwardState::default());
         bridge.await.unwrap();
