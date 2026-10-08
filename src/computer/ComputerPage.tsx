@@ -5,6 +5,7 @@ import { plural } from "../lib/format";
 import { api, errorMessage } from "../lib/ipc";
 import { visibleMachines } from "../lib/machines";
 import type { LocalProject } from "../lib/types";
+import { LooseContainers } from "../stacks/LooseContainers";
 import { useStore } from "../state/store";
 import { OsGlyph } from "../ui/Badges";
 import { ExternalIcon, RefreshIcon, SpinnerIcon } from "../ui/icons";
@@ -121,6 +122,11 @@ function DockerHere() {
           {projects.map((project) => (
             <ProjectRow key={project.name} project={project} canCopy={canCopy} onCopy={() => setCopyOpen({ open: true, sourceProject: project.name })} />
           ))}
+        </div>
+      ) : null}
+      {projects ? (
+        <div className="mt-3">
+          <LooseContainers />
         </div>
       ) : null}
     </Card>

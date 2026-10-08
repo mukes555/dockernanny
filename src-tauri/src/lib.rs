@@ -155,6 +155,7 @@ pub fn run() {
             commands::guide::script_stop,
             commands::machines::pair_machine,
             commands::copy::local_projects,
+            commands::copy::loose_containers,
             commands::copy::copy_plan,
             commands::copy::copy_stack,
             commands::copy::copy_progress,

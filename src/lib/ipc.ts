@@ -18,6 +18,7 @@ import type {
   ForwardEvent,
   ForwardState,
   LocalProject,
+  LooseContainer,
   Machine,
   MachineStats,
   PairedMachine,
@@ -131,6 +132,7 @@ const tauriApi = {
   /** `path` is the compose file or its folder. */
   setStackFolder: (id: string, path: string) => invoke<Stack[]>("set_stack_folder", { id, path }),
   localProjects: () => invoke<LocalProject[]>("local_projects"),
+  looseContainers: () => invoke<LooseContainer[]>("loose_containers"),
   copyPlan: (request: CopyRequest) => invoke<CopyPlan>("copy_plan", { request }),
   copyStack: (request: CopyRequest) => invoke<CopyStarted>("copy_stack", { request }),
   copyProgress: () => invoke<CopyProgress[]>("copy_progress"),
