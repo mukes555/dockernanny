@@ -117,10 +117,13 @@ function UpdateReady({ update }: { update: AvailableUpdate }) {
   const working = installing.busy || progress !== null;
   const percent = progress === null ? null : Math.round(progress * 100);
 
-  const install = () => {
+  const install = async () => {
     setProgress(null);
     // The app restarts at the end, so success has nothing left to show.
-    void installing.run(api.installUpdate);
+    const installed = await installing.run(api.installUpdate);
+    // A download that failed halfway leaves its last share behind, which
+    // would keep the button spinning next to the error.
+    if (!installed) setProgress(null);
   };
 
   return (
@@ -152,7 +155,7 @@ function UpdateReady({ update }: { update: AvailableUpdate }) {
       ) : null}
       <ErrorLine error={installing.error} className="mt-3" />
       <div className="mt-4">
-        <Button tone="primary" onClick={install} busy={working}>
+        <Button tone="primary" onClick={() => void install()} busy={working}>
           Restart and update
         </Button>
       </div>
