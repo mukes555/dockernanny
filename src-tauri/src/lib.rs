@@ -63,6 +63,8 @@ pub(crate) struct AppState {
     /// The window came back into view: polls waiting out their slow beat
     /// run at once (see `tray::until_next_poll`).
     pub window_back: tokio::sync::Notify,
+    /// Whether someone is looking at the window, from its focus events.
+    pub attention: tray::Attention,
 }
 
 pub fn run() {
@@ -101,13 +103,13 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
                 }
+            } else {
+                // Shown at start: in view from the first poll, whether or not a focus event comes.
+                tray::focused(app.handle());
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            tray::on_window_event(window, event);
-            updates::on_window_event(window, event);
-        })
+        .on_window_event(tray::on_window_event)
         .invoke_handler(tauri::generate_handler![
             commands::machines::list_machines,
             commands::machines::machine_stats,
@@ -241,6 +243,7 @@ fn boot() -> anyhow::Result<AppState> {
         script_server: Mutex::new(None),
         copies: Mutex::new(HashMap::new()),
         window_back: tokio::sync::Notify::new(),
+        attention: tray::Attention::default(),
     })
 }
 

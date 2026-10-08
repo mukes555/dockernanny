@@ -2,6 +2,7 @@
 //! tray icon with Show, Pairing and Quit, and a close button that hides the
 //! window instead of ending the app while this computer is shared.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem};
@@ -9,10 +10,57 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
 use crate::host::engine::ToEngine;
+use crate::stack::now_ms;
 use crate::AppState;
 
 const MAIN_WINDOW: &str = "main";
 const TRAY: &str = "main";
+/// How long the window still counts as looked at after it loses focus: a
+/// glance at another app should not slow the cards, a window left behind
+/// others all afternoon should.
+const STILL_IN_VIEW_FOR: Duration = Duration::from_secs(120);
+
+/// Whether someone is looking at the window, kept from its focus events.
+/// The polls ask every few seconds, and asking the window itself would be a
+/// round trip to the main thread each time.
+#[derive(Default)]
+pub struct Attention {
+    focused: AtomicBool,
+    /// Hidden in the tray: out of view at once, even when the focus event
+    /// that follows the hiding arrives later.
+    hidden: AtomicBool,
+    /// When the window last lost focus, in ms since the epoch; 0 when never.
+    left_ms: AtomicU64,
+}
+
+impl Attention {
+    fn in_view_at(&self, now_ms: u64) -> bool {
+        if self.focused.load(Ordering::Relaxed) {
+            return true;
+        }
+        let left = self.left_ms.load(Ordering::Relaxed);
+        let left_a_moment_ago = left > 0 && now_ms.saturating_sub(left) < STILL_IN_VIEW_FOR.as_millis() as u64;
+        left_a_moment_ago && !self.hidden.load(Ordering::Relaxed)
+    }
+
+    /// True when the window comes back into view, the moment to refresh what it shows.
+    fn focus(&self, now_ms: u64) -> bool {
+        let was_in_view = self.in_view_at(now_ms);
+        self.hidden.store(false, Ordering::Relaxed);
+        self.focused.store(true, Ordering::Relaxed);
+        !was_in_view
+    }
+
+    fn blur(&self, now_ms: u64) {
+        self.focused.store(false, Ordering::Relaxed);
+        self.left_ms.store(now_ms, Ordering::Relaxed);
+    }
+
+    fn hide(&self) {
+        self.focused.store(false, Ordering::Relaxed);
+        self.hidden.store(true, Ordering::Relaxed);
+    }
+}
 
 pub fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
@@ -20,16 +68,25 @@ pub fn show_main_window(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
-    came_into_view(app);
+    focused(app);
 }
 
-/// Whether someone can see the window: shown and not minimized. The polls
-/// slow down while nobody can, and catch up when the window comes back.
+/// Whether someone is looking at the window: it has focus, or had it within
+/// the last two minutes. The polls slow down while nobody is, and catch up
+/// when the window comes back.
 pub fn window_in_view(app: &AppHandle) -> bool {
-    let Some(window) = app.get_webview_window(MAIN_WINDOW) else { return false };
-    let shown = window.is_visible().unwrap_or(true);
-    let minimized = window.is_minimized().unwrap_or(false);
-    shown && !minimized
+    app.state::<AppState>().attention.in_view_at(now_ms())
+}
+
+/// The window is in front of someone, at start or after a focus event.
+/// Only when it comes back into view do the polls and the update check run
+/// at once; a click between two windows on the screen changes nothing.
+pub fn focused(app: &AppHandle) {
+    let came_back = app.state::<AppState>().attention.focus(now_ms());
+    if came_back {
+        came_into_view(app);
+        crate::updates::window_came_back(app);
+    }
 }
 
 /// Waits for a poll's next turn: `in_view` while the window can be seen,
@@ -95,14 +152,51 @@ fn menu(app: &AppHandle, update: Option<&str>) -> tauri::Result<Menu<tauri::Wry>
 /// Closing the window only hides it while this computer is shared: other
 /// computers depend on the sharing role staying up. Quit lives in the tray.
 pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
-    if matches!(event, WindowEvent::Focused(true)) {
-        came_into_view(window.app_handle());
-        return;
+    match event {
+        WindowEvent::Focused(true) => focused(window.app_handle()),
+        WindowEvent::Focused(false) => window.state::<AppState>().attention.blur(now_ms()),
+        WindowEvent::CloseRequested { api, .. } => {
+            let shared = window.state::<AppState>().store.settings().map(|s| s.share_this_computer).unwrap_or(false);
+            if shared {
+                api.prevent_close();
+                let _ = window.hide();
+                window.state::<AppState>().attention.hide();
+            }
+        }
+        _ => {}
     }
-    let WindowEvent::CloseRequested { api, .. } = event else { return };
-    let shared = window.state::<AppState>().store.settings().map(|s| s.share_this_computer).unwrap_or(false);
-    if shared {
-        api.prevent_close();
-        let _ = window.hide();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MINUTE_MS: u64 = 60_000;
+
+    #[test]
+    fn a_window_stays_in_view_a_little_after_it_loses_focus() {
+        let attention = Attention::default();
+        assert!(!attention.in_view_at(0), "not in view before it was ever focused");
+        assert!(attention.focus(10 * MINUTE_MS), "the first focus brings it into view");
+        assert!(!attention.focus(10 * MINUTE_MS), "focused again while in view: nothing to refresh");
+
+        attention.blur(11 * MINUTE_MS);
+        assert!(attention.in_view_at(12 * MINUTE_MS), "a glance at another app keeps it in view");
+        assert!(!attention.focus(12 * MINUTE_MS), "back within two minutes: still fresh");
+
+        attention.blur(13 * MINUTE_MS);
+        assert!(!attention.in_view_at(16 * MINUTE_MS), "left behind other windows for three minutes");
+        assert!(attention.focus(16 * MINUTE_MS), "coming back then refreshes");
+    }
+
+    #[test]
+    fn a_window_hidden_in_the_tray_is_out_of_view_at_once() {
+        let attention = Attention::default();
+        attention.focus(MINUTE_MS);
+        attention.hide();
+        // The focus loss that follows the hiding must not count as a glance away.
+        attention.blur(MINUTE_MS);
+        assert!(!attention.in_view_at(MINUTE_MS));
+        assert!(attention.focus(2 * MINUTE_MS), "shown again from the tray: refresh");
     }
 }
