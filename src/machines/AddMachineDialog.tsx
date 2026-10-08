@@ -57,8 +57,10 @@ function AddMachineForm({ onClose }: { onClose: () => void }) {
       pinned: false,
     };
 
-  // A check answers for the details it was run with; changing one of them
-  // clears the answer, so a machine is never added on an old "passed".
+  // A check answers for the details it was run with. While it runs, the
+  // fields it reads are locked, so the rows that arrive always belong to
+  // what the fields show; changing one afterwards clears the answer, so a
+  // machine is never added on an old "passed".
   const afterEdit = (setter: (value: string) => void) => (value: string) => {
     setter(value);
     if (checked || rows.length > 0) {
@@ -116,20 +118,27 @@ function AddMachineForm({ onClose }: { onClose: () => void }) {
           <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="workshop" />
         </Field>
         <Field label="Address">
-          <TextInput value={host} onChange={(e) => afterEdit(setHost)(e.target.value)} placeholder="192.0.2.15 or studio.local" />
+          <TextInput value={host} onChange={(e) => afterEdit(setHost)(e.target.value)} disabled={check.busy} placeholder="192.0.2.15 or studio.local" />
         </Field>
         <Field label="User">
-          <TextInput value={user} onChange={(e) => afterEdit(setUser)(e.target.value)} placeholder="alex" />
+          <TextInput value={user} onChange={(e) => afterEdit(setUser)(e.target.value)} disabled={check.busy} placeholder="alex" />
         </Field>
         <Field label="Port" hint="2222 for a Windows machine set up with the guide">
-          <TextInput value={port} onChange={(e) => afterEdit(setPort)(e.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" />
+          <TextInput
+            value={port}
+            onChange={(e) => afterEdit(setPort)(e.target.value.replace(/\D/g, "").slice(0, 5))}
+            disabled={check.busy}
+            inputMode="numeric"
+          />
         </Field>
       </div>
       <div className={paired ? "hidden" : "mt-3"}>
         <Field label="Private key" hint="Pairing sends its .pub to the machine. For a manual add it must already be on the machine (ssh-copy-id).">
           <div className="flex gap-2">
-            <TextInput value={keyPath} onChange={(e) => afterEdit(setKeyPath)(e.target.value)} className="mono" />
-            <Button onClick={() => void browseKey()}>Browse</Button>
+            <TextInput value={keyPath} onChange={(e) => afterEdit(setKeyPath)(e.target.value)} disabled={check.busy} className="mono" />
+            <Button onClick={() => void browseKey()} disabled={check.busy}>
+              Browse
+            </Button>
           </div>
         </Field>
       </div>

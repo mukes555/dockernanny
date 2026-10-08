@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
-import { AnimatePresence, motion } from "motion/react";
+
+import { HoldWhileClosing, usePresence } from "./usePresence";
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -40,6 +41,7 @@ export function Dialog({
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
   const pressedBackdrop = useRef(false);
+  const { mounted, state } = usePresence(open);
   // Callers pass a fresh arrow each render; keeping it in a ref stops the
   // focus handling below from re-running (and stealing focus) on every keystroke.
   const close = useRef(onClose);
@@ -84,46 +86,40 @@ export function Dialog({
     };
   }, [open]);
 
+  if (!mounted) return null;
   return (
-    <AnimatePresence>
-      {open ? (
-        <motion.div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          // Only a click that also started on the backdrop closes: selecting a
-          // command and letting go outside the panel is not a request to close.
-          onMouseDown={(event) => {
-            pressedBackdrop.current = event.target === event.currentTarget;
-          }}
-          onClick={(event) => {
-            const onBackdrop = event.target === event.currentTarget && pressedBackdrop.current;
-            if (closeOnBackdrop && onBackdrop) onClose();
-          }}
-        >
-          <motion.div
-            ref={panel}
-            role="dialog"
-            aria-modal
-            aria-labelledby={titleId}
-            tabIndex={-1}
-            className="max-h-[85vh] overflow-auto rounded-2xl border border-line bg-surface p-6 shadow-2xl outline-none"
-            style={{ width }}
-            initial={{ y: 14, scale: 0.97, opacity: 0 }}
-            animate={{ y: 0, scale: 1, opacity: 1 }}
-            exit={{ y: 8, scale: 0.98, opacity: 0 }}
-            transition={{ type: "spring", stiffness: 380, damping: 30 }}
-            onClick={(event) => event.stopPropagation()}
-          >
-            {eyebrow ? <div className="text-[11px] uppercase tracking-[0.14em] text-accent">{eyebrow}</div> : null}
-            <h2 id={titleId} className="mt-1 text-lg font-semibold text-ink">
-              {title}
-            </h2>
-            {children}
-          </motion.div>
-        </motion.div>
-      ) : null}
-    </AnimatePresence>
+    <div
+      data-state={state}
+      className="dialog-backdrop fixed inset-0 z-40 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+      // Only a click that also started on the backdrop closes: selecting a
+      // command and letting go outside the panel is not a request to close.
+      onMouseDown={(event) => {
+        pressedBackdrop.current = event.target === event.currentTarget;
+      }}
+      onClick={(event) => {
+        const onBackdrop = event.target === event.currentTarget && pressedBackdrop.current;
+        if (closeOnBackdrop && onBackdrop) onClose();
+      }}
+    >
+      <div
+        ref={panel}
+        role="dialog"
+        aria-modal
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        data-state={state}
+        className="dialog-panel max-h-[85vh] overflow-auto rounded-2xl border border-line bg-surface p-6 shadow-2xl outline-none"
+        style={{ width }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <HoldWhileClosing closing={!open}>
+          {eyebrow ? <div className="text-[11px] uppercase tracking-[0.14em] text-accent">{eyebrow}</div> : null}
+          <h2 id={titleId} className="mt-1 text-lg font-semibold text-ink">
+            {title}
+          </h2>
+          {children}
+        </HoldWhileClosing>
+      </div>
+    </div>
   );
 }

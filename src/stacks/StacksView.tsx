@@ -17,7 +17,6 @@ export function StacksView() {
   const allStacks = useStore((state) => state.stacks);
   const allMachines = useStore((state) => state.machines);
   const computerInfo = useStore((state) => state.computerInfo);
-  const statuses = useStore((state) => state.statuses);
   const selectedMachineId = useStore((state) => state.selectedMachineId);
   const setCopyOpen = useStore((state) => state.setCopyOpen);
   const settings = useStore((state) => state.settings);
@@ -29,6 +28,9 @@ export function StacksView() {
   const machines = visibleMachines(allMachines, computerInfo);
   const hiddenIds = new Set(allMachines.filter((m) => !machines.includes(m)).map((m) => m.id));
   const stacks = allStacks.filter((s) => !hiddenIds.has(s.machine_id));
+  // Counted in the selector, so a status change that leaves the count alone
+  // does not redraw the page; each card follows its own status.
+  const running = useStore((state) => stacks.filter((stack) => isUp(state.statuses[stack.id])).length);
   const selected = machines.find((m) => m.id === selectedMachineId);
   // Keyed, so a confirm strip or a check in progress never carries over to another machine.
   if (selected) return <MachinePage key={selected.id} machine={selected} />;
@@ -68,7 +70,6 @@ export function StacksView() {
       Copy a stack…
     </Button>
   );
-  const running = stacks.filter((stack) => isUp(statuses[stack.id])).length;
   const groups = machines.map((machine) => ({ machine, stacks: stacks.filter((s) => s.machine_id === machine.id) })).filter((group) => group.stacks.length > 0);
   const orphans = stacks.filter((s) => !allMachines.some((m) => m.id === s.machine_id));
   const summary =

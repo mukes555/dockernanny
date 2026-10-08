@@ -107,7 +107,7 @@ export function Card({
 }
 
 const INPUT =
-  "rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:border-accent focus:ring-2 focus:ring-accent/25";
+  "rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:border-accent focus:ring-2 focus:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-60";
 
 /** Full width unless the caller gives a width: two width classes on one
  * element do not combine, and the stylesheet's order would pick the winner. */

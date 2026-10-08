@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 import { ago } from "../lib/format";
 import { api } from "../lib/ipc";
@@ -35,7 +35,9 @@ const PHASE_LABEL: Record<Phase, { text: string; tone: ChipTone }> = {
 const OUTPUT_FOLDED = 8;
 const OUTPUT_UNFOLDED = 200;
 
-export function StackCard({ stack }: { stack: Stack }) {
+// Kept from redrawing with the page around it (a count, a machine's stats):
+// a card redraws when its own stack, status, bridge, output or copy changes.
+export const StackCard = memo(function StackCard({ stack }: { stack: Stack }) {
   const status = useStore((state) => state.statuses[stack.id]);
   const forward = useStore((state) => state.forwards[stack.id]);
   const output = useStore((state) => state.output[stack.id]);
@@ -46,7 +48,8 @@ export function StackCard({ stack }: { stack: Stack }) {
   const logsOpen = useStore((state) => state.logsFor === stack.id);
   const copy = useStore((state) => state.copies[stack.id]);
   const openProgress = useStore((state) => state.openProgress);
-  const machineStats = useStore((state) => state.stats[stack.machine_id]);
+  // Only whether it answers: the stats object is new with every poll.
+  const machineOnline = useStore((state) => state.stats[stack.machine_id]?.online);
   const [expanded, setExpanded] = useState(false);
   const [askingRemove, setAskingRemove] = useState(false);
   const [withVolumes, setWithVolumes] = useState(false);
@@ -66,7 +69,7 @@ export function StackCard({ stack }: { stack: Stack }) {
   const canOpen = running && ports.length > 0;
   const hasContainers = (status?.services.length ?? 0) > 0;
   // Only a poll that came back without an answer means offline; no poll yet means not known.
-  const machineOffline = machine !== undefined && machineStats !== undefined && !machineStats.online;
+  const machineOffline = machine !== undefined && machineOnline === false;
   const chip = machineOffline ? { text: "machine offline", tone: "neutral" as ChipTone } : PHASE_LABEL[phase];
   const showOutput = lines.length > 0 && (busy || Boolean(status?.error) || expanded);
   const shownLines = lines.slice(-(expanded ? OUTPUT_UNFOLDED : OUTPUT_FOLDED));
@@ -243,7 +246,7 @@ export function StackCard({ stack }: { stack: Stack }) {
       ) : null}
     </section>
   );
-}
+});
 
 /** The footer's link to the last copy of this stack, while one is remembered. */
 function CopyLink({ copy, onOpen }: { copy: CopyProgress; onOpen: () => void }) {

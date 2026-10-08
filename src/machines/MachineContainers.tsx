@@ -36,14 +36,21 @@ export function MachineContainers({ machine }: { machine: Machine }) {
   }, [machine.id]);
 
   // Load when the machine is reachable, and keep it fresh; an offline machine
-  // is not polled, so a machine that went to sleep is not hammered.
+  // is not polled, so a machine that went to sleep is not hammered. Nobody
+  // reads the list while the window is hidden (in the tray, minimised), so
+  // those polls are skipped and one read catches up when it shows again.
   useEffect(() => {
     if (!online) return;
-    const first = window.setTimeout(() => void refresh(), 0);
-    const timer = window.setInterval(() => void refresh(), 8000);
+    const refreshIfShown = () => {
+      if (!document.hidden) void refresh();
+    };
+    const first = window.setTimeout(refreshIfShown, 0);
+    const timer = window.setInterval(refreshIfShown, 8000);
+    document.addEventListener("visibilitychange", refreshIfShown);
     return () => {
       window.clearTimeout(first);
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshIfShown);
     };
   }, [online, refresh]);
 

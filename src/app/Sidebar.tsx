@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 import { isMac, isTauri } from "../lib/ipc";
 import { visibleMachines } from "../lib/machines";
-import type { ForwardState, HostSnapshot, Stack } from "../lib/types";
+import type { ForwardState, HostSnapshot, Settings, Stack } from "../lib/types";
 import { AddMachineDialog } from "../machines/AddMachineDialog";
 import { MachineRow } from "../machines/MachineRow";
 import { availableUpdate, isUp, onlineCount, useStore } from "../state/store";
@@ -21,25 +21,24 @@ export function Sidebar() {
   const setView = useStore((state) => state.setView);
   const selectedMachineId = useStore((state) => state.selectedMachineId);
   const selectMachine = useStore((state) => state.selectMachine);
-  const settings = useStore((state) => state.settings);
-  const computerInfo = useStore((state) => state.computerInfo);
-  const stacks = useStore((state) => state.stacks);
-  const statuses = useStore((state) => state.statuses);
-  const forwards = useStore((state) => state.forwards);
-  const copies = useStore((state) => state.copies);
-  const host = useStore((state) => state.host);
   const update = useStore(availableUpdate);
   const openSettings = useStore((state) => state.openSettings);
   const addMachineOpen = useStore((state) => state.addMachineOpen);
   const setAddMachineOpen = useStore((state) => state.setAddMachineOpen);
+  // Statuses, bridges, copies and the sharing snapshot change many times a
+  // minute (five times a second during a copy). The sidebar shows only
+  // counts and a sentence of them, so it selects those: a selector that
+  // returns the same number or text as before does not redraw anything.
+  const usesMachines = useStore((state) => state.settings?.use_machines ?? true);
+  const computerOs = useStore((state) => state.computerInfo?.probe.os);
+  const running = useStore((state) => state.stacks.filter((stack) => isUp(state.statuses[stack.id])).length);
+  const ports = useStore((state) => portsOnLocalhost(state.stacks, state.forwards));
+  const anyCopies = useStore((state) => Object.keys(state.copies).length > 0);
+  const copiesRunning = useStore((state) => Object.values(state.copies).filter((copy) => !copy.finished_ms).length);
+  const sharingDot = useStore((state) => sharingState(state.settings, state.host).dot);
+  const sharingText = useStore((state) => sharingState(state.settings, state.host).text);
 
-  const usesMachines = settings?.use_machines ?? true;
-  const running = stacks.filter((stack) => isUp(statuses[stack.id])).length;
-  const ports = portsOnLocalhost(stacks, forwards);
-  const copyList = Object.values(copies);
-  const copiesRunning = copyList.filter((copy) => !copy.finished_ms).length;
-  const showActivity = copyList.length > 0 || view === "activity";
-  const sharing = sharingState(settings?.share_this_computer ?? false, host);
+  const showActivity = anyCopies || view === "activity";
   // Room for the macOS traffic lights, which the overlay title bar draws over this corner.
   const leftPad = isTauri && isMac ? "pl-20" : "pl-4";
 
@@ -82,10 +81,10 @@ export function Sidebar() {
           />
         ) : null}
         <NavItem
-          icon={<OsGlyph os={computerInfo?.probe.os} size={16} />}
+          icon={<OsGlyph os={computerOs} size={16} />}
           label="This computer"
-          title={sharing.text}
-          trailing={sharing.dot ? <StatusDot state={sharing.dot} label={sharing.text} /> : null}
+          title={sharingText}
+          trailing={sharingDot ? <StatusDot state={sharingDot} label={sharingText} /> : null}
           active={view === "computer"}
           onClick={() => setView("computer")}
         />
@@ -116,7 +115,6 @@ export function Sidebar() {
 function MachinesSection({ usesMachines, onAdd }: { usesMachines: boolean; onAdd: () => void }) {
   const allMachines = useStore((state) => state.machines);
   const computerInfo = useStore((state) => state.computerInfo);
-  const stats = useStore((state) => state.stats);
   const stacks = useStore((state) => state.stacks);
   const view = useStore((state) => state.view);
   const setView = useStore((state) => state.setView);
@@ -124,7 +122,8 @@ function MachinesSection({ usesMachines, onAdd }: { usesMachines: boolean; onAdd
   const selectMachine = useStore((state) => state.selectMachine);
   const openSettings = useStore((state) => state.openSettings);
   const machines = visibleMachines(allMachines, computerInfo);
-  const online = onlineCount(machines, stats);
+  // Counted in the selector: every poll brings a new stats map, the count changes rarely.
+  const online = useStore((state) => onlineCount(visibleMachines(state.machines, state.computerInfo), state.stats));
 
   if (!usesMachines) {
     return (
@@ -151,7 +150,6 @@ function MachinesSection({ usesMachines, onAdd }: { usesMachines: boolean; onAdd
         <MachineRow
           key={machine.id}
           machine={machine}
-          stats={stats[machine.id]}
           stackCount={stacks.filter((stack) => stack.machine_id === machine.id).length}
           selected={view === "stacks" && selectedMachineId === machine.id}
           onSelect={() => selectMachine(machine.id)}
@@ -220,7 +218,8 @@ function portsOnLocalhost(stacks: Stack[], forwards: Record<string, ForwardState
 }
 
 /** The one thing most worth knowing about sharing, as a dot and its sentence; the first match wins. */
-function sharingState(sharing: boolean, host: HostSnapshot | null): { dot: DotState | null; text: string } {
+function sharingState(settings: Settings | null, host: HostSnapshot | null): { dot: DotState | null; text: string } {
+  const sharing = settings?.share_this_computer ?? false;
   if (!sharing) return { dot: null, text: "Sharing is off" };
   if (!host?.probed) return { dot: "pending", text: "Sharing: checking this computer" };
   if (host.pairing.armed) return { dot: "busy", text: `Pairing is on, code ${host.pairing.code}` };

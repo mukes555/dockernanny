@@ -9,19 +9,9 @@ import { cx } from "../ui/primitives";
 
 /** One machine in the sidebar: whether it answers and one line on how it is
  * doing. Clicking it opens the machine's page; its menu shows on hover. */
-export function MachineRow({
-  machine,
-  stats,
-  stackCount,
-  selected,
-  onSelect,
-}: {
-  machine: Machine;
-  stats?: MachineStats;
-  stackCount: number;
-  selected: boolean;
-  onSelect: () => void;
-}) {
+export function MachineRow({ machine, stackCount, selected, onSelect }: { machine: Machine; stackCount: number; selected: boolean; onSelect: () => void }) {
+  // Its own reading, so a poll of one machine redraws only that machine's row.
+  const stats = useStore((state) => state.stats[machine.id]);
   const online = stats?.online ?? false;
   const summary = summaryOf(stats, stackCount);
   const browse = useBrowse();

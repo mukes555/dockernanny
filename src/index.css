@@ -165,6 +165,66 @@ body::before {
   }
 }
 
+/* Panels that come and go: dialogs, drawers, notices, the drop overlay. An
+   opening one transitions from its @starting-style. A closing one is kept in
+   the page for EXIT_MS (160 ms, src/ui/usePresence.tsx) with
+   data-state="closed", so its exit below must end within that. A webview
+   without @starting-style shows panels at once; they still fade out. */
+.dialog-backdrop,
+.drop-overlay {
+  transition: opacity 160ms ease-out;
+}
+.dialog-panel,
+.drawer-panel,
+.notice-row,
+.drop-card {
+  transition:
+    opacity 160ms ease-out,
+    transform 160ms ease-out;
+}
+@starting-style {
+  .dialog-backdrop,
+  .drop-overlay {
+    opacity: 0;
+  }
+  .dialog-panel {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+  .drawer-panel {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+  .notice-row {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  .drop-card {
+    transform: scale(0.96);
+  }
+}
+/* On its way out, a panel no longer takes the clicks meant for what is
+   behind it (the dialog's panel inherits that from its backdrop). */
+.dialog-backdrop[data-state="closed"],
+.drop-overlay[data-state="closed"] {
+  opacity: 0;
+  pointer-events: none;
+}
+.dialog-panel[data-state="closed"] {
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+}
+.drawer-panel[data-state="closed"] {
+  opacity: 0;
+  transform: translateX(40px);
+  pointer-events: none;
+}
+.notice-row[data-state="closed"] {
+  opacity: 0;
+  transform: translateY(12px);
+  pointer-events: none;
+}
+
 /* Motion is decoration here; nothing depends on it. */
 @media (prefers-reduced-motion: reduce) {
   *,

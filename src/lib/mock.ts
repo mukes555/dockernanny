@@ -49,8 +49,12 @@ const MOCK_OS: HostOs = ((): HostOs => {
   return asked === "windows" || asked === "linux" ? asked : "macos";
 })();
 
+// `?update=1` pretends a newer release exists; `?update=fail` too, and its
+// download then stops halfway, the way a dropped connection ends it.
+const MOCK_UPDATE = new URLSearchParams(window.location.search).get("update");
+
 const mockUpdateStatus = (): UpdateStatus => {
-  const offered = new URLSearchParams(window.location.search).get("update") === "1";
+  const offered = MOCK_UPDATE === "1" || MOCK_UPDATE === "fail";
   const available = offered ? { version: "0.3.3", notes: "What is new in 0.3.3:\n- A made-up fix, to show the notes.\n- Another one." } : null;
   return { available, checked_ms: Date.now(), outcome: available ? "found" : "up_to_date", error: null, checking: false };
 };
@@ -559,7 +563,6 @@ export const mockApi: Api = {
     "dockerNanny 0.3.0 on macos aarch64\nroles: use other machines on, share this computer off\nmachines: 2 (1 online), stacks: 1\nssh: OpenSSH_9.8p1\nrsync: rsync  version 3.2.7\ndocker: 27.3.1\n\n--- end of app.log ---\nINFO copy <this-computer> -> machine-1: done\n",
   revealAppFile: async () => {},
   openLink: async (url) => void window.open(url, "_blank"),
-  // `?update=1` in the address pretends a newer release exists.
   updateStatus: async () => mockUpdateStatus(),
   checkForUpdate: async () => {
     await wait(600);
@@ -568,6 +571,7 @@ export const mockApi: Api = {
   installUpdate: async () => {
     for (let step = 0; step <= 10; step += 1) {
       await wait(150);
+      if (MOCK_UPDATE === "fail" && step === 5) throw "error sending request for url: connection reset";
       handlers?.onUpdateProgress(step / 10);
     }
     window.location.reload();

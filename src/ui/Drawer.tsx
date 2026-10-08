@@ -1,9 +1,9 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
-import { AnimatePresence, motion } from "motion/react";
 
 import { XIcon } from "./icons";
 import { Button, Eyebrow } from "./primitives";
 import { useEscape } from "./useEscape";
+import { HoldWhileClosing, usePresence } from "./usePresence";
 
 /** A panel along the right edge for something that keeps going while the
  * rest of the window stays usable: logs, a copy's progress. It is named for
@@ -36,6 +36,7 @@ export function Drawer({
 }) {
   const titleId = useId();
   const panel = useRef<HTMLElement>(null);
+  const { mounted, state } = usePresence(open);
   useEscape(open, onClose);
 
   useEffect(() => {
@@ -48,37 +49,33 @@ export function Drawer({
     };
   }, [open]);
 
+  if (!mounted) return null;
   return (
-    <AnimatePresence>
-      {open ? (
-        <motion.aside
-          ref={panel}
-          role="dialog"
-          aria-labelledby={titleId}
-          tabIndex={-1}
-          className="fixed top-0 bottom-0 right-0 z-20 flex max-w-[80vw] flex-col border-l border-line bg-surface shadow-2xl outline-none"
-          style={{ width }}
-          initial={{ x: 40, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          exit={{ x: 40, opacity: 0 }}
-          transition={{ type: "spring", stiffness: 380, damping: 34 }}
-        >
-          <header className="flex items-center gap-2 border-b border-line px-4 py-3">
-            <div className="min-w-0 flex-1">
-              <Eyebrow>{eyebrow}</Eyebrow>
-              <h2 id={titleId} className="truncate text-[14px] font-semibold text-ink">
-                {title}
-              </h2>
-            </div>
-            {controls}
-            <Button size="sm" tone="ghost" onClick={onClose} aria-label={closeLabel}>
-              <XIcon />
-            </Button>
-          </header>
-          {children}
-          {footer ? <footer className="flex items-center justify-between gap-3 border-t border-line px-4 py-3">{footer}</footer> : null}
-        </motion.aside>
-      ) : null}
-    </AnimatePresence>
+    <aside
+      ref={panel}
+      role="dialog"
+      aria-labelledby={titleId}
+      tabIndex={-1}
+      data-state={state}
+      className="drawer-panel fixed top-0 bottom-0 right-0 z-20 flex max-w-[80vw] flex-col border-l border-line bg-surface shadow-2xl outline-none"
+      style={{ width }}
+    >
+      <HoldWhileClosing closing={!open}>
+        <header className="flex items-center gap-2 border-b border-line px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <Eyebrow>{eyebrow}</Eyebrow>
+            <h2 id={titleId} className="truncate text-[14px] font-semibold text-ink">
+              {title}
+            </h2>
+          </div>
+          {controls}
+          <Button size="sm" tone="ghost" onClick={onClose} aria-label={closeLabel}>
+            <XIcon />
+          </Button>
+        </header>
+        {children}
+        {footer ? <footer className="flex items-center justify-between gap-3 border-t border-line px-4 py-3">{footer}</footer> : null}
+      </HoldWhileClosing>
+    </aside>
   );
 }

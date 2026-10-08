@@ -55,7 +55,8 @@ export function LogDrawer() {
     };
     return lines.filter((line) => fromService(line.container));
   }, [lines, service, stack, services]);
-  const { scroller, onScroll } = useFollowTail(shown.length, paused);
+  const lastShownSeq = shown.length > 0 ? shown[shown.length - 1].seq : 0;
+  const { scroller, onScroll } = useFollowTail(lastShownSeq, paused);
 
   return (
     <Drawer

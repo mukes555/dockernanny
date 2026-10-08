@@ -15,7 +15,8 @@ export function ContainerLogsDrawer() {
   const openContainerLogs = useStore((state) => state.openContainerLogs);
   const [paused, setPaused] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
-  const { scroller, onScroll } = useFollowTail(lines.length, paused);
+  const lastLineSeq = lines.length > 0 ? lines[lines.length - 1].seq : 0;
+  const { scroller, onScroll } = useFollowTail(lastLineSeq, paused);
 
   // Another container starts afresh: following, no old error. Adjusted while
   // rendering, React's way for state that follows a prop, not in an effect.

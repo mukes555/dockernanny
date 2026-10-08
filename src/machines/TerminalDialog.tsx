@@ -1,33 +1,64 @@
 import { useEffect, useState } from "react";
 
-import { api } from "../lib/ipc";
+import { api, errorMessage } from "../lib/ipc";
 import type { Machine, TerminalInfo } from "../lib/types";
 import { useStore } from "../state/store";
 import { Dialog } from "../ui/Dialog";
 import { Button, CodeBlock, ErrorLine } from "../ui/primitives";
 import { useAction } from "../ui/useAction";
 
+/** The backend's answer for one machine: its names, or why they could not be read. */
+interface Answer {
+  machineId: string;
+  info: TerminalInfo | null;
+  error: string | null;
+}
+
 /** The same machine from a terminal: the ssh alias, and an optional Docker
  * context. On Windows ssh runs inside WSL, so the commands do too, and the
  * Docker context is not offered yet. The names come from the backend, which
  * writes the ssh config and makes the context. */
 export function TerminalDialog({ machine, onClose }: { machine: Machine | null; onClose: () => void }) {
-  const [answer, setAnswer] = useState<{ machineId: string; info: TerminalInfo } | null>(null);
+  const [answer, setAnswer] = useState<Answer | null>(null);
 
   useEffect(() => {
     if (!machine) return;
+    const machineId = machine.id;
     api
-      .terminalInfo(machine.id)
-      .then((info) => setAnswer({ machineId: machine.id, info }))
-      .catch(console.warn);
+      .terminalInfo(machineId)
+      .then((info) => setAnswer({ machineId, info, error: null }))
+      .catch((err) => setAnswer({ machineId, info: null, error: errorMessage(err) }));
   }, [machine]);
 
   // An answer for another machine is never shown for this one.
-  const info = answer && machine && answer.machineId === machine.id ? answer.info : null;
+  const current = answer && machine && answer.machineId === machine.id ? answer : null;
   return (
     <Dialog open={machine !== null} onClose={onClose} eyebrow="Terminal" title={machine ? `Use ${machine.name} from your terminal` : ""} width={520}>
-      {machine && info ? <TerminalHowTo machine={machine} info={info} onClose={onClose} /> : null}
+      {machine && current?.info ? (
+        <TerminalHowTo machine={machine} info={current.info} onClose={onClose} />
+      ) : (
+        <NotReadYet error={current?.error ?? null} onClose={onClose} />
+      )}
     </Dialog>
+  );
+}
+
+/** While the names are read, or when they could not be: the dialog always
+ * says what it is waiting for and always has a way out. */
+function NotReadYet({ error, onClose }: { error: string | null; onClose: () => void }) {
+  return (
+    <div className="mt-3 space-y-4 text-[13px] text-ink-2">
+      {error ? (
+        <ErrorLine error={`The terminal details could not be read: ${error}`} className="mt-0" />
+      ) : (
+        <p className="text-ink-3">Reading the machine's ssh alias…</p>
+      )}
+      <div className="flex justify-end pt-1">
+        <Button tone="ghost" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+    </div>
   );
 }
 
