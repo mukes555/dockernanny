@@ -39,7 +39,9 @@ export function BridgeControl({ stack }: { stack: Stack }) {
   const status = useStore((state) => state.statuses[stack.id]);
   const forward = useStore((state) => state.forwards[stack.id]);
   const setStacks = useStore((state) => state.setStacks);
-  const now = useNow(1000);
+  // The clock only feeds "(3m)" on a connected bridge, which changes once a minute.
+  const connected = stack.forward_ports && (forward?.up ?? false);
+  const now = useNow(30_000, connected);
   const flip = useAction("inline");
   const bridge = bridgeOf(stack, status, forward, now);
   const dot = BRIDGE_DOT[bridge.state];

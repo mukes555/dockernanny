@@ -24,11 +24,9 @@ export function useBrowse() {
 
 /** The machine a drop runs on, the same one everywhere it is named. */
 function useDropTarget(): Machine | undefined {
-  const allMachines = useStore((state) => state.machines);
-  const computerInfo = useStore((state) => state.computerInfo);
-  const stats = useStore((state) => state.stats);
-  const selectedId = useStore((state) => state.selectedMachineId);
-  return dropTarget(visibleMachines(allMachines, computerInfo), stats, selectedId);
+  // Picked inside the selector, which returns one of the store's own machine
+  // records: the stats map changes with every poll, the chosen machine rarely.
+  return useStore((state) => dropTarget(visibleMachines(state.machines, state.computerInfo), state.stats, state.selectedMachineId));
 }
 
 /** The empty state: one big target for the first compose file. */

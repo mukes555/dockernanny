@@ -20,7 +20,11 @@ const NO_ROWS: never[] = [];
 /** One machine's own page: its stacks first, everything its Docker runs,
  * and its details with the result of the last connection check. */
 export function MachinePage({ machine }: { machine: Machine }) {
-  const stats = useStore((state) => state.stats[machine.id]);
+  // The page reads only these two from the machine's stats. Every poll brings
+  // a new stats object, so the parts that show more (the line under the
+  // title, the Details card) read it themselves and the tabs stay as they are.
+  const online = useStore((state) => state.stats[machine.id]?.online ?? false);
+  const os = useStore((state) => state.stats[machine.id]?.os);
   // Selectors must return stable references: a fresh array per render would
   // re-render forever, so the filtering happens outside the selector.
   const allStacks = useStore((state) => state.stacks);
@@ -38,7 +42,6 @@ export function MachinePage({ machine }: { machine: Machine }) {
   const removal = useAction("inline");
   const browse = useBrowse();
 
-  const online = stats?.online ?? false;
   const copyHere = () => setCopyOpen({ open: true, destinationMachineId: machine.id });
   const closeDialog = () => openMachineDialog(machine.id, null);
   const remove = async () => {
@@ -46,15 +49,12 @@ export function MachinePage({ machine }: { machine: Machine }) {
     if (!removed) closeDialog();
   };
 
-  const address = `${machine.user}@${stats?.hostname || machine.host}:${machine.port}`;
-  const vitals = online && stats ? ` · load ${stats.load1.toFixed(1)}/${stats.cpus}` : "";
-
   return (
     <Page
       title={
         <>
           <StatusDot state={online ? "good" : "idle"} pulse={online} label={online ? "Online" : "Offline"} size="lg" />
-          <OsGlyph os={stats?.os} size={18} className="shrink-0 text-ink-2" />
+          <OsGlyph os={os} size={18} className="shrink-0 text-ink-2" />
           <span className="truncate">{machine.name}</span>
           {machine.pinned ? (
             <Chip tone="good">
@@ -68,13 +68,7 @@ export function MachinePage({ machine }: { machine: Machine }) {
           ) : null}
         </>
       }
-      summary={
-        <>
-          <span className="mono">{address}</span>
-          {vitals}
-          {!online ? <span> · {stats?.error ?? "checking…"}</span> : null}
-        </>
-      }
+      summary={<MachineSummary machine={machine} />}
       actions={
         <>
           <Button tone="primary" onClick={() => void checkMachine(machine)} busy={checking}>
@@ -126,17 +120,7 @@ export function MachinePage({ machine }: { machine: Machine }) {
       {tab === "containers" ? <MachineContainers machine={machine} /> : null}
       {tab === "details" ? (
         <>
-          <Card title="This machine">
-            {online && stats ? (
-              <ProbeFacts probe={stats}>
-                <Fact label="From here">
-                  <BridgedPorts machine={machine} />
-                </Fact>
-              </ProbeFacts>
-            ) : (
-              <p className="text-[13px] text-ink-2">{stats?.error ?? "Waiting for the first answer…"}</p>
-            )}
-          </Card>
+          <MachineFacts machine={machine} />
           <Card title="Connection check" description="What Check connection found: ssh, Docker, compose, rsync and the system.">
             {doctorRows.length > 0 || checking ? (
               <DoctorRows rows={doctorRows} checking={checking} />
@@ -148,6 +132,40 @@ export function MachinePage({ machine }: { machine: Machine }) {
       ) : null}
       <TerminalDialog machine={dialog === "terminal" ? machine : null} onClose={closeDialog} />
     </Page>
+  );
+}
+
+/** The line under the title: the address, the load while it answers, why not otherwise. */
+function MachineSummary({ machine }: { machine: Machine }) {
+  const stats = useStore((state) => state.stats[machine.id]);
+  const online = stats?.online ?? false;
+  const address = `${machine.user}@${stats?.hostname || machine.host}:${machine.port}`;
+  const vitals = online && stats ? ` · load ${stats.load1.toFixed(1)}/${stats.cpus}` : "";
+  return (
+    <>
+      <span className="mono">{address}</span>
+      {vitals}
+      {!online ? <span> · {stats?.error ?? "checking…"}</span> : null}
+    </>
+  );
+}
+
+/** The Details tab's facts about the machine, as its last poll read them. */
+function MachineFacts({ machine }: { machine: Machine }) {
+  const stats = useStore((state) => state.stats[machine.id]);
+  const online = stats?.online ?? false;
+  return (
+    <Card title="This machine">
+      {online && stats ? (
+        <ProbeFacts probe={stats}>
+          <Fact label="From here">
+            <BridgedPorts machine={machine} />
+          </Fact>
+        </ProbeFacts>
+      ) : (
+        <p className="text-[13px] text-ink-2">{stats?.error ?? "Waiting for the first answer…"}</p>
+      )}
+    </Card>
   );
 }
 

@@ -33,7 +33,9 @@ export function PortsPage() {
   const statuses = useStore((state) => state.statuses);
   const forwards = useStore((state) => state.forwards);
   const setStacks = useStore((state) => state.setStacks);
-  const now = useNow(1000);
+  // The clock only feeds "(3m)" in a connected bridge's tooltip, which changes once a minute.
+  const anyConnected = stacks.some((stack) => stack.forward_ports && forwards[stack.id]?.up);
+  const now = useNow(30_000, anyConnected);
   // One action at a time on this page; `target` says whose button spins: a stack's id, or "all".
   const action = useAction("notice");
   const [target, setTarget] = useState<string | null>(null);
