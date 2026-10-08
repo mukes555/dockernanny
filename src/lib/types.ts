@@ -131,14 +131,6 @@ export interface LocalProject {
   warnings: string[];
 }
 
-/** A container this computer's Docker runs outside any compose project
- * (`docker run`), which a copy cannot carry. */
-export interface LooseContainer {
-  name: string;
-  image: string;
-  running: boolean;
-}
-
 /** One row of a machine's `docker ps -a`, seen through its Docker context. */
 export interface Container {
   id: string;

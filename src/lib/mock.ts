@@ -714,7 +714,7 @@ export const mockApi: Api = {
     }
     return [...stacks];
   },
-  looseContainers: async () => [{ name: "notes-db", image: "pgvector/pgvector:pg16", running: true }],
+  looseContainers: async () => ["notes-db"],
   localProjects: async () => [
     {
       name: "shop-api",

@@ -5,7 +5,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::copy::endpoint::Site;
-use crate::copy::local::{LocalProject, LooseContainer};
+use crate::copy::local::LocalProject;
 use crate::copy::progress::{CopyProgress, Publish, Tracker};
 use crate::copy::{self, CopyPlan, CopyRequest, EndpointRef, Report, Sides, Sink};
 use crate::stack::{self, Phase, Stack, Ticket};
@@ -37,9 +37,9 @@ pub async fn local_projects(state: State<'_, AppState>) -> CmdResult<Vec<LocalPr
     copy::local::local_projects(&state.ssh).await.map_err(|err| format!("{err:#}"))
 }
 
-/// The containers here that are not in a compose project, which a copy cannot carry.
+/// The names of the containers here that are not in a compose project, which a copy cannot carry.
 #[tauri::command]
-pub async fn loose_containers() -> CmdResult<Vec<LooseContainer>> {
+pub async fn loose_containers() -> CmdResult<Vec<String>> {
     copy::local::loose_containers().await.map_err(|err| format!("{err:#}"))
 }
 

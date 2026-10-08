@@ -81,6 +81,7 @@ export function EndpointPills({
 export function SourcePicker({
   source,
   projects,
+  looseNames,
   stacks,
   project,
   stackId,
@@ -90,6 +91,8 @@ export function SourcePicker({
   source: EndpointRef;
   /** null while this computer's Docker is being read. */
   projects: LocalProject[] | null;
+  /** This computer's containers outside any compose project, named so their absence is explained. */
+  looseNames: string[];
   stacks: Stack[];
   project: LocalProject | null;
   stackId: string | null;
@@ -129,7 +132,7 @@ export function SourcePicker({
           extra={`${plural(p.volumes.length, "volume")} · ${plural(p.ports.length, "port")}`}
         />
       ))}
-      <LooseContainers />
+      <LooseContainers names={looseNames} />
     </div>
   );
 }
