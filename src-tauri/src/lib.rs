@@ -178,7 +178,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
+            // Exit, not ExitRequested: macOS's own Quit (Cmd+Q, the app menu,
+            // the Dock) goes through `terminate:`, which never raises that one.
+            if let tauri::RunEvent::Exit = event {
                 shut_down(app);
             }
         });
@@ -187,6 +189,7 @@ pub fn run() {
 /// What every way out of the app does first, a restart for an update too:
 /// sharing stops, bridges and child processes end, ssh connections close.
 pub(crate) fn shut_down(app: &tauri::AppHandle) {
+    tracing::info!("quitting: ending bridges, child processes and ssh connections");
     let state = app.state::<AppState>();
     state.host.stop();
     forward::exit_all(&state.ssh);
