@@ -25,7 +25,9 @@ fail() { printf '\nSMOKE FAILED: %s\n' "$1" >&2; exit 1; }
 example() { (cd "$repo_dir/src-tauri" && cargo run -q --example "$@"); }
 row_in() { docker compose -p "$1" -f "$2/docker-compose.yml" exec -T db psql -U postgres -tAc "select note from moved" 2>/dev/null; }
 has_the_row() { [ "$(row_in "$1" "$2")" = "smoke row" ]; }
-postgres_ready() { docker compose -p smoke-anon -f "$tmp/anon/docker-compose.yml" exec -T db pg_isready -U postgres >/dev/null 2>&1; }
+# TCP on purpose: on a first start the image runs a temporary server on the
+# Unix socket only, and stops it just before the real one starts.
+postgres_ready() { docker compose -p smoke-anon -f "$tmp/anon/docker-compose.yml" exec -T db pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; }
 
 # Asks once a second until the answer is yes; after 30 tries the smoke test fails with $1.
 wait_until() {
