@@ -3,7 +3,8 @@ name: ci
 # Every pull request, and main after each merge (which also keeps the
 # caches warm for the next pull request): lint, format, build, tests and
 # clippy on all three systems, the advisories of every dependency, and on
-# Linux the whole core path end to end against a local sshd.
+# Linux the plugin versions tauri build checks and the whole core path end
+# to end against a local sshd.
 on:
   pull_request:
     branches: [main]
@@ -53,6 +54,14 @@ jobs:
           cd src-tauri && cargo fmt --check
       # tsc runs inside the build.
       - run: pnpm build
+      # tauri build refuses a plugin whose crate and npm package differ in
+      # major or minor version, and only the release runs it, so Dependabot's
+      # separate crates and npm groups can pass here and break the next
+      # release. The check comes first: with `true` in place of cargo it takes
+      # seconds and compiles nothing, so ignore the "Built application" line.
+      - name: tauri build accepts the plugin versions
+        if: matrix.os == 'ubuntu-22.04'
+        run: pnpm tauri build --no-bundle --debug --runner true
       - name: App tests and lints
         working-directory: src-tauri
         run: |
